@@ -33,7 +33,8 @@
       "Bash(done)",
       "Bash(tasklist:*)",
       "Bash(if exist .next rmdir /s /q .next)",
-      "Bash(npx next dev:*)"
+      "Bash(npx next dev:*)",
+      "Bash(del \"C:\\\\Users\\\\User\\\\OneDrive\\\\Desktop\\\\Bartawi Camp Managment\\\\client\\\\tailwind.config.ts\")"
     ]
   }
 }
