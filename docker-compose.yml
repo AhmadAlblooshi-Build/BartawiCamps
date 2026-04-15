@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: bartawi_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bartawi
+      POSTGRES_PASSWORD: bartawi_dev_password
+      POSTGRES_DB: bartawi_cms
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Mount SQL files for easy execution
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./seed_structure.sql:/docker-entrypoint-initdb.d/02_seed_structure.sql
+      - ./seed_entities.sql:/docker-entrypoint-initdb.d/03_seed_entities.sql
+      - ./seed_monthly.sql:/docker-entrypoint-initdb.d/04_seed_monthly.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bartawi -d bartawi_cms"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local

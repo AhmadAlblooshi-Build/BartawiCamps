@@ -1,0 +1,3290 @@
+# BARTAWI CAMP MANAGEMENT SYSTEM
+## Complete Database Implementation Document
+**Version:** 1.0  |  **Date:** April 2026  |  **Status:** Ready for Claude Code
+
+---
+
+## What This Document Contains
+1. Complete PostgreSQL schema — every table, index, partition
+2. Structural seed data — tenant, camps, 14 buildings, 28 blocks, **453 rooms** (274 Camp 1 + 179 Camp 2)
+3. Reference data — 79 companies, 208 individuals, expense categories, complaint categories, sensor types
+4. Historical data — **1,359 monthly records** from real Excel data (Jan, Feb, March 2026)
+5. Feature flags — all dormant features configured and ready to activate
+6. Map configuration guide — step-by-step for when layout paper arrives
+7. Sensor pipeline guide — full IoT architecture and activation instructions
+
+---
+
+## Architecture Decisions
+
+### Tech Stack Recommendation
+- **Database:** PostgreSQL 15+ (partitioned tables, JSONB, generated columns)
+- **Backend:** Node.js / Express or FastAPI
+- **ORM:** Prisma (Node) or SQLAlchemy (Python) — schema maps directly
+- **Auth:** JWT with refresh tokens, bcrypt password hashing
+- **Storage:** AWS S3 or similar for receipt/ID document uploads
+- **Deployment:** AWS App Runner (already familiar from AMB@AI)
+
+### Multi-Tenancy
+- Every table that belongs to a tenant has `tenant_id` FK
+- All queries MUST filter by `tenant_id` — enforced at ORM/middleware level
+- Bartawi is `tenant_id = 'bartawi-tenant'` (seeded)
+- Future SaaS clients: INSERT new row into `tenants`, run structural seed for their camps
+
+### Camp 1 vs Camp 2 Data Model Differences
+| Aspect | Camp 1 | Camp 2 |
+|---|---|---|
+| Tenant entity | `individuals` table | `companies` table |
+| Contract | Informal monthly | Formal (Monthly/Yearly/Ejari) |
+| Billing entity | Owner name (person/small co.) | Company name |
+| People tracking | `people_count` per room | `people_count` per room |
+| Floor column | Not in source (assumed same as Camp 2) | Ground / First |
+| Rent range | AED 2,700–4,800 | AED 0–7,800 |
+
+### Building Structure
+**Camp 1:** 6 buildings (A/AA, B/BB, C/CC, D/DD, E/EE, F/FF)
+Each building has ground floor (single letter) + first floor (double letter).
+⚠️ Floor assignment assumed from naming convention — confirm from layout paper.
+
+**Camp 2:** 8 buildings (A/AA, B/BB, C/CC, D/DD, E/EE, F/FF, S/SS, U/UU)
+Floor assignment confirmed from Excel `Floor` column (Ground/First).
+
+### Dormant Features — Status
+| Feature | Table(s) | Activation |
+|---|---|---|
+| IoT Sensor Pipeline | `sensor_devices`, `sensor_readings`, `sensor_ingestion_log` | Set `iot_sensor_pipeline=true` |
+| QR Complaint Submission | `qr_codes`, `complaints.reported_via` | Set `tenant_self_service_complaints=true` |
+| Multi-Tenant SaaS | `tenants` (already multi-tenant) | Set `multi_tenant_saas=true`, add signup flow |
+| Mobile App | Notifications + push tokens | Set `mobile_app_access=true` |
+
+### Map Configuration
+- `buildings.map_x/y/width/height` — **NULL until paper arrives**
+- `rooms.fp_x/fp_y/fp_wing` — **NULL until paper arrives**
+- `map_layouts.is_configured` — **false until paper arrives**
+- Frontend: if `is_configured=false` → show generic grid view
+- Frontend: if `is_configured=true` → render from geometry data
+
+---
+
+## Known Data Issues (from Excel analysis)
+1. **HHM Electromechanical LLC** — Camp 2 rooms C01-C06, C11, D08, UU01, UU02, UU21: ALL have balance > 0, marked "Legal" since January. Contract dispute. These rooms seeded with `status='occupied'` but `paid=0` in monthly records.
+2. **Tayas Contracting LLC** — Multiple Camp 2 contracts with `end_date='2026-03-31'`. These are EXPIRING NOW. Contract alert should fire immediately.
+3. **BB06 Casa Co. & EE06 Ramdes** — Camp 1, both AED 4,800 rent, 0 paid in March. Remarks: "Wael & Elhety to discuss". Seeded as-is.
+4. **Personal data fields** — Full Name, Mobile, Nationality, ID fields are mostly empty in both camps. Platform must require these at check-in to improve data quality.
+5. **Jubily Supermarket** — U16-U19 Camp 2: rent changed from AED 1,500 to AED 3,400 in March with 0 paid. Contract renewal issue.
+
+---
+
+
+## Schema SQL
+
+```sql
+
+-- ────────────────────────────────────────────────────────────────
+-- 1. MULTI-TENANCY
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE tenants (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            VARCHAR(255) NOT NULL,
+  slug            VARCHAR(100) UNIQUE NOT NULL,
+  plan            VARCHAR(50)  DEFAULT 'internal',
+  is_active       BOOLEAN      DEFAULT true,
+  settings        JSONB        DEFAULT '{}',
+  created_at      TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 2. USERS & RBAC
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE users (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  email           VARCHAR(255) NOT NULL,
+  password_hash   VARCHAR(255) NOT NULL,
+  full_name       VARCHAR(255) NOT NULL,
+  phone           VARCHAR(50),
+  avatar_url      TEXT,
+  is_active       BOOLEAN     DEFAULT true,
+  last_login_at   TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tenant_id, email)
+);
+
+CREATE TABLE roles (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name            VARCHAR(100) NOT NULL,
+  description     TEXT,
+  is_system       BOOLEAN     DEFAULT false,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tenant_id, name)
+);
+
+CREATE TABLE permissions (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource        VARCHAR(100) NOT NULL,
+  action          VARCHAR(50)  NOT NULL,
+  description     TEXT,
+  UNIQUE(resource, action)
+);
+
+CREATE TABLE role_permissions (
+  role_id         UUID REFERENCES roles(id)       ON DELETE CASCADE,
+  permission_id   UUID REFERENCES permissions(id) ON DELETE CASCADE,
+  PRIMARY KEY (role_id, permission_id)
+);
+
+CREATE TABLE user_roles (
+  user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+  role_id         UUID REFERENCES roles(id) ON DELETE CASCADE,
+  assigned_at     TIMESTAMPTZ DEFAULT NOW(),
+  assigned_by     UUID REFERENCES users(id),
+  PRIMARY KEY (user_id, role_id)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 3. CAMP STRUCTURE
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE camps (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name            VARCHAR(100) NOT NULL,
+  code            VARCHAR(20)  NOT NULL,
+  address         TEXT,
+  city            VARCHAR(100) DEFAULT 'Dubai',
+  country         VARCHAR(100) DEFAULT 'UAE',
+  total_rooms     INTEGER      NOT NULL DEFAULT 0,
+  leasable_rooms  INTEGER      NOT NULL DEFAULT 0,
+  -- Map canvas config (updated when layout paper is processed)
+  map_canvas_width  DECIMAL(10,2) DEFAULT 1400,
+  map_canvas_height DECIMAL(10,2) DEFAULT 900,
+  map_configured    BOOLEAN       DEFAULT false,
+  map_configured_at TIMESTAMPTZ,
+  is_active       BOOLEAN      DEFAULT true,
+  created_at      TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  DEFAULT NOW(),
+  UNIQUE(tenant_id, code)
+);
+
+-- Physical buildings (A/AA = one 2-floor building in Camp 2, one building per letter-pair)
+CREATE TABLE buildings (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  camp_id         UUID NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+  code            VARCHAR(20)  NOT NULL,
+  name            VARCHAR(100) NOT NULL,
+  floor_count     INTEGER      NOT NULL DEFAULT 2,
+  ground_block_code VARCHAR(10),
+  upper_block_code  VARCHAR(10),
+  -- Map geometry: POPULATED WHEN LAYOUT PAPER IS PROCESSED
+  map_x           DECIMAL(10,2),
+  map_y           DECIMAL(10,2),
+  map_width       DECIMAL(10,2),
+  map_height      DECIMAL(10,2),
+  map_rotation    DECIMAL(5,2) DEFAULT 0,
+  map_shape_type  VARCHAR(20)  DEFAULT 'rect',
+  map_shape_points JSONB,
+  label_offset_x  DECIMAL(10,2) DEFAULT 0,
+  label_offset_y  DECIMAL(10,2) DEFAULT -12,
+  is_active       BOOLEAN      DEFAULT true,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  DEFAULT NOW(),
+  UNIQUE(camp_id, code)
+);
+
+-- Blocks = sections of a building by floor (A=ground, AA=first floor, etc.)
+CREATE TABLE blocks (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  building_id     UUID NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+  camp_id         UUID NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+  code            VARCHAR(20) NOT NULL,
+  floor_label     VARCHAR(20) NOT NULL DEFAULT 'Ground',
+  floor_number    INTEGER     NOT NULL DEFAULT 0,
+  room_count      INTEGER     NOT NULL DEFAULT 0,
+  is_active       BOOLEAN     DEFAULT true,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(camp_id, code)
+);
+
+-- Rooms
+CREATE TABLE rooms (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  block_id        UUID NOT NULL REFERENCES blocks(id)    ON DELETE CASCADE,
+  building_id     UUID NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+  camp_id         UUID NOT NULL REFERENCES camps(id)     ON DELETE CASCADE,
+  room_number     VARCHAR(20)  NOT NULL,
+  sr_number       INTEGER,
+  old_room_number VARCHAR(20),
+  room_type       VARCHAR(30)  NOT NULL DEFAULT 'standard',
+  -- standard | bartawi | commercial | service
+  max_capacity    INTEGER      NOT NULL DEFAULT 6,
+  bed_count       INTEGER,
+  standard_rent   DECIMAL(10,2) DEFAULT 0,
+  status          VARCHAR(30)  NOT NULL DEFAULT 'occupied',
+  -- occupied | vacant | maintenance | bartawi_use
+  -- Map position within floor plan: POPULATED FROM PAPER
+  fp_x            DECIMAL(10,2),
+  fp_y            DECIMAL(10,2),
+  fp_width        DECIMAL(10,2) DEFAULT 76,
+  fp_height       DECIMAL(10,2) DEFAULT 90,
+  fp_wing         VARCHAR(20),
+  fp_row          INTEGER,
+  fp_col          INTEGER,
+  notes           TEXT,
+  is_active       BOOLEAN      DEFAULT true,
+  created_at      TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  DEFAULT NOW(),
+  UNIQUE(camp_id, room_number)
+);
+
+-- Bed spaces (Camp 1 individual tracking — auto-created when room has bed_count set)
+CREATE TABLE bed_spaces (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id         UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  bed_number      INTEGER     NOT NULL,
+  status          VARCHAR(20) NOT NULL DEFAULT 'vacant',
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(room_id, bed_number)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 4. TENANT ENTITIES (Companies & Individuals)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE companies (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name            VARCHAR(255) NOT NULL,
+  name_normalized VARCHAR(255),
+  trade_license   VARCHAR(100),
+  contact_person  VARCHAR(255),
+  contact_phone   VARCHAR(50),
+  contact_email   VARCHAR(255),
+  address         TEXT,
+  industry        VARCHAR(100),
+  is_active       BOOLEAN     DEFAULT true,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE individuals (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  full_name       VARCHAR(255),
+  owner_name      VARCHAR(255) NOT NULL,
+  mobile_number   VARCHAR(50),
+  nationality     VARCHAR(100),
+  religion        VARCHAR(100),
+  languages       VARCHAR(255),
+  company_name    VARCHAR(255),
+  profession      VARCHAR(100),
+  industry        VARCHAR(100),
+  id_type         VARCHAR(50),
+  id_number       VARCHAR(100),
+  id_copy_on_file BOOLEAN     DEFAULT false,
+  is_active       BOOLEAN     DEFAULT true,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 5. CONTRACTS (Camp 2 formal contracts)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE contracts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  room_id         UUID NOT NULL REFERENCES rooms(id),
+  company_id      UUID REFERENCES companies(id),
+  contract_type   VARCHAR(30) NOT NULL DEFAULT 'monthly',
+  -- monthly | yearly | ejari | bgc
+  monthly_rent    DECIMAL(10,2) NOT NULL DEFAULT 0,
+  start_date      DATE,
+  end_date        DATE,
+  auto_renew      BOOLEAN     DEFAULT false,
+  renewal_notice_days INTEGER DEFAULT 60,
+  status          VARCHAR(30) DEFAULT 'active',
+  -- active | expired | terminated | legal_dispute | pending_renewal
+  ejari_number    VARCHAR(100),
+  notes           TEXT,
+  created_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 6. OCCUPANCY
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE room_occupancy (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id         UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  individual_id   UUID REFERENCES individuals(id),
+  company_id      UUID REFERENCES companies(id),
+  contract_id     UUID REFERENCES contracts(id),
+  people_count    INTEGER     DEFAULT 0,
+  monthly_rent    DECIMAL(10,2) NOT NULL DEFAULT 0,
+  check_in_date   DATE,
+  check_out_date  DATE,
+  reason_for_leaving TEXT,
+  off_days        INTEGER     DEFAULT 0,
+  status          VARCHAR(30) DEFAULT 'active',
+  -- active | checked_out | legal_dispute
+  is_current      BOOLEAN     DEFAULT true,
+  created_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE bed_occupancy (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bed_space_id    UUID NOT NULL REFERENCES bed_spaces(id),
+  room_id         UUID NOT NULL REFERENCES rooms(id),
+  individual_id   UUID NOT NULL REFERENCES individuals(id),
+  check_in_date   DATE,
+  check_out_date  DATE,
+  reason_for_leaving TEXT,
+  is_current      BOOLEAN     DEFAULT true,
+  created_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 7. FINANCIAL RECORDS
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE monthly_records (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id         UUID NOT NULL REFERENCES rooms(id),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  occupancy_id    UUID REFERENCES room_occupancy(id),
+  month           SMALLINT    NOT NULL CHECK (month BETWEEN 1 AND 12),
+  year            SMALLINT    NOT NULL,
+  -- Camp 1
+  individual_id   UUID REFERENCES individuals(id),
+  owner_name      VARCHAR(255),
+  -- Camp 2
+  company_id      UUID REFERENCES companies(id),
+  company_name    VARCHAR(255),
+  contract_type   VARCHAR(30),
+  -- Both camps
+  people_count    INTEGER     DEFAULT 0,
+  rent            DECIMAL(10,2) NOT NULL DEFAULT 0,
+  paid            DECIMAL(10,2) NOT NULL DEFAULT 0,
+  balance         DECIMAL(10,2) GENERATED ALWAYS AS (rent - paid) STORED,
+  off_days        INTEGER     DEFAULT 0,
+  remarks         TEXT,
+  is_locked       BOOLEAN     DEFAULT false,
+  created_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(room_id, month, year)
+);
+
+CREATE TABLE payments (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  monthly_record_id UUID NOT NULL REFERENCES monthly_records(id),
+  room_id         UUID NOT NULL REFERENCES rooms(id),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  amount          DECIMAL(10,2) NOT NULL,
+  payment_method  VARCHAR(50)  NOT NULL DEFAULT 'cash',
+  -- cash | cheque | bank_transfer | card
+  payment_date    DATE         NOT NULL,
+  reference_number VARCHAR(255),
+  bank_name       VARCHAR(100),
+  cheque_number   VARCHAR(100),
+  notes           TEXT,
+  received_by     UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE expense_categories (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id),
+  name            VARCHAR(100) NOT NULL,
+  description     TEXT,
+  is_active       BOOLEAN     DEFAULT true
+);
+
+CREATE TABLE expenses (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  category_id     UUID NOT NULL REFERENCES expense_categories(id),
+  amount          DECIMAL(10,2) NOT NULL,
+  description     TEXT         NOT NULL,
+  expense_date    DATE         NOT NULL,
+  month           SMALLINT     NOT NULL,
+  year            SMALLINT     NOT NULL,
+  payment_method  VARCHAR(50),
+  reference_number VARCHAR(255),
+  receipt_url     TEXT,
+  approved_by     UUID REFERENCES users(id),
+  created_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 8. COMPLAINTS
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE complaint_categories (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id),
+  name            VARCHAR(100) NOT NULL,
+  priority_default VARCHAR(20) DEFAULT 'medium',
+  is_active       BOOLEAN     DEFAULT true
+);
+
+CREATE TABLE complaints (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_ref   VARCHAR(30)  UNIQUE NOT NULL,
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  room_id         UUID REFERENCES rooms(id),
+  building_id     UUID REFERENCES buildings(id),
+  category_id     UUID REFERENCES complaint_categories(id),
+  title           VARCHAR(255) NOT NULL,
+  description     TEXT,
+  status          VARCHAR(30)  NOT NULL DEFAULT 'open',
+  -- open | in_progress | resolved | closed
+  priority        VARCHAR(20)  NOT NULL DEFAULT 'medium',
+  -- low | medium | high | urgent
+  reported_by_user  UUID REFERENCES users(id),
+  reported_by_name  VARCHAR(255),
+  reported_by_room  VARCHAR(20),
+  reported_via      VARCHAR(30) DEFAULT 'staff',
+  -- staff | qr_code | mobile_app (dormant: qr_code and mobile_app)
+  assigned_to     UUID REFERENCES users(id),
+  resolved_at     TIMESTAMPTZ,
+  resolved_by     UUID REFERENCES users(id),
+  resolution_notes TEXT,
+  image_urls      JSONB        DEFAULT '[]',
+  created_at      TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  DEFAULT NOW()
+);
+
+CREATE TABLE complaint_updates (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_id    UUID NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES users(id),
+  old_status      VARCHAR(30),
+  new_status      VARCHAR(30),
+  note            TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 9. QR CODES (DORMANT — tenant self-service, activated by feature flag)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE qr_codes (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  room_id         UUID REFERENCES rooms(id),
+  building_id     UUID REFERENCES buildings(id),
+  qr_type         VARCHAR(30)  NOT NULL DEFAULT 'complaint',
+  qr_token        VARCHAR(100) UNIQUE NOT NULL,
+  qr_url          TEXT         NOT NULL,
+  qr_image_url    TEXT,
+  is_active       BOOLEAN      DEFAULT false,
+  scan_count      INTEGER      DEFAULT 0,
+  last_scanned_at TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ  DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 10. IOT SENSOR PIPELINE (DORMANT — activated when hardware connected)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE sensor_types (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            VARCHAR(100) NOT NULL UNIQUE,
+  unit            VARCHAR(50),
+  description     TEXT
+);
+
+CREATE TABLE sensor_devices (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  building_id     UUID REFERENCES buildings(id),
+  room_id         UUID REFERENCES rooms(id),
+  sensor_type_id  UUID NOT NULL REFERENCES sensor_types(id),
+  device_id       VARCHAR(100) NOT NULL UNIQUE,
+  device_name     VARCHAR(255),
+  location_desc   TEXT,
+  manufacturer    VARCHAR(100),
+  model           VARCHAR(100),
+  installation_date DATE,
+  last_reading_at TIMESTAMPTZ,
+  last_reading_value DECIMAL(15,4),
+  is_active       BOOLEAN     DEFAULT false,
+  status          VARCHAR(30) DEFAULT 'pending',
+  -- pending | active | fault | offline
+  config          JSONB       DEFAULT '{}',
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Partitioned table for high-volume sensor data
+CREATE TABLE sensor_readings (
+  id              BIGSERIAL,
+  device_id       UUID NOT NULL REFERENCES sensor_devices(id),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  building_id     UUID REFERENCES buildings(id),
+  room_id         UUID REFERENCES rooms(id),
+  sensor_type_id  UUID NOT NULL REFERENCES sensor_types(id),
+  reading_value   DECIMAL(15,4) NOT NULL,
+  reading_unit    VARCHAR(50),
+  reading_ts      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_cumulative   BOOLEAN     DEFAULT false,
+  delta_value     DECIMAL(15,4),
+  is_anomaly      BOOLEAN     DEFAULT false,
+  quality_score   DECIMAL(3,2) DEFAULT 1.0,
+  raw_payload     JSONB,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (id, reading_ts)
+) PARTITION BY RANGE (reading_ts);
+
+-- Monthly partitions (add more as needed)
+CREATE TABLE sensor_readings_2026_04 PARTITION OF sensor_readings FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+CREATE TABLE sensor_readings_2026_05 PARTITION OF sensor_readings FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+CREATE TABLE sensor_readings_2026_06 PARTITION OF sensor_readings FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+CREATE TABLE sensor_readings_2026_07 PARTITION OF sensor_readings FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE TABLE sensor_readings_2026_08 PARTITION OF sensor_readings FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE sensor_readings_2026_09 PARTITION OF sensor_readings FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
+CREATE TABLE sensor_readings_2026_10 PARTITION OF sensor_readings FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+CREATE TABLE sensor_readings_2026_11 PARTITION OF sensor_readings FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+CREATE TABLE sensor_readings_2026_12 PARTITION OF sensor_readings FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+CREATE TABLE sensor_readings_default  PARTITION OF sensor_readings DEFAULT;
+
+-- Sensor ingestion log (all inbound API calls from hardware)
+CREATE TABLE sensor_ingestion_log (
+  id              BIGSERIAL PRIMARY KEY,
+  device_hw_id    VARCHAR(100),
+  payload         JSONB       NOT NULL,
+  ip_address      INET,
+  received_at     TIMESTAMPTZ DEFAULT NOW(),
+  processed       BOOLEAN     DEFAULT false,
+  error_message   TEXT
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 11. MAP CONFIGURATION (populated from paper layout)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE map_layouts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  camp_id         UUID NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+  version         INTEGER     NOT NULL DEFAULT 1,
+  canvas_width    DECIMAL(10,2) DEFAULT 1400,
+  canvas_height   DECIMAL(10,2) DEFAULT 900,
+  background_color VARCHAR(20) DEFAULT '#07101f',
+  scale_factor    DECIMAL(6,4) DEFAULT 1.0,
+  north_direction INTEGER     DEFAULT 0,
+  is_active       BOOLEAN     DEFAULT true,
+  is_configured   BOOLEAN     DEFAULT false,
+  configured_at   TIMESTAMPTZ,
+  configured_by   UUID REFERENCES users(id),
+  notes           TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(camp_id, version)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 12. CONTRACT ALERTS & NOTIFICATIONS
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE contract_alerts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  contract_id     UUID NOT NULL REFERENCES contracts(id),
+  camp_id         UUID NOT NULL REFERENCES camps(id),
+  alert_type      VARCHAR(50) NOT NULL,
+  -- expiring_90d | expiring_60d | expiring_30d | expired | renewed
+  days_until_expiry INTEGER,
+  is_acknowledged BOOLEAN     DEFAULT false,
+  acknowledged_by UUID REFERENCES users(id),
+  acknowledged_at TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE notifications (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID NOT NULL REFERENCES tenants(id),
+  user_id         UUID REFERENCES users(id),
+  type            VARCHAR(100) NOT NULL,
+  title           VARCHAR(255) NOT NULL,
+  message         TEXT,
+  resource_type   VARCHAR(100),
+  resource_id     UUID,
+  is_read         BOOLEAN     DEFAULT false,
+  read_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 13. FEATURE FLAGS (toggle dormant features)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE feature_flags (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       UUID REFERENCES tenants(id),
+  flag_key        VARCHAR(100) NOT NULL,
+  flag_name       VARCHAR(255),
+  description     TEXT,
+  is_enabled      BOOLEAN     DEFAULT false,
+  config          JSONB       DEFAULT '{}',
+  enabled_at      TIMESTAMPTZ,
+  enabled_by      UUID REFERENCES users(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tenant_id, flag_key)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- 14. AUDIT LOG
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE audit_logs (
+  id              BIGSERIAL,
+  tenant_id       UUID REFERENCES tenants(id),
+  user_id         UUID REFERENCES users(id),
+  action          VARCHAR(100) NOT NULL,
+  resource_type   VARCHAR(100),
+  resource_id     UUID,
+  old_values      JSONB,
+  new_values      JSONB,
+  ip_address      INET,
+  user_agent      TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE audit_logs_2026 PARTITION OF audit_logs FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+CREATE TABLE audit_logs_default PARTITION OF audit_logs DEFAULT;
+
+-- ────────────────────────────────────────────────────────────────
+-- 15. INDEXES
+-- ────────────────────────────────────────────────────────────────
+CREATE INDEX idx_rooms_camp       ON rooms(camp_id);
+CREATE INDEX idx_rooms_block      ON rooms(block_id);
+CREATE INDEX idx_rooms_status     ON rooms(status);
+CREATE INDEX idx_rooms_type       ON rooms(room_type);
+CREATE INDEX idx_monthly_room     ON monthly_records(room_id);
+CREATE INDEX idx_monthly_camp     ON monthly_records(camp_id);
+CREATE INDEX idx_monthly_period   ON monthly_records(year, month);
+CREATE INDEX idx_monthly_balance  ON monthly_records(balance) WHERE balance > 0;
+CREATE INDEX idx_payments_room    ON payments(room_id);
+CREATE INDEX idx_payments_date    ON payments(payment_date);
+CREATE INDEX idx_contracts_room   ON contracts(room_id);
+CREATE INDEX idx_contracts_expiry ON contracts(end_date) WHERE status = 'active';
+CREATE INDEX idx_complaints_camp  ON complaints(camp_id);
+CREATE INDEX idx_complaints_status ON complaints(status);
+CREATE INDEX idx_occupancy_room   ON room_occupancy(room_id) WHERE is_current = true;
+CREATE INDEX idx_sensor_readings_device ON sensor_readings(device_id, reading_ts);
+CREATE INDEX idx_sensor_readings_camp   ON sensor_readings(camp_id, reading_ts);
+CREATE INDEX idx_notifications_user     ON notifications(user_id, is_read);
+CREATE INDEX idx_audit_resource         ON audit_logs(resource_type, resource_id);
+
+```
+---
+
+
+## Structural Seed Data
+
+```sql
+-- ============================================================
+-- SEED DATA — STRUCTURAL + REFERENCE
+-- ============================================================
+
+-- ── TENANT ──────────────────────────────────────────────────
+INSERT INTO tenants (id, name, slug, plan) VALUES ('a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bartawi LLC', 'bartawi', 'internal');
+
+-- ── USERS ────────────────────────────────────────────────────
+INSERT INTO users (id, tenant_id, email, password_hash, full_name) VALUES
+  ('c8b9de38-ad75-d771-3e75-7b9943dc6270', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'admin@bartawi.com', '$2b$12$PLACEHOLDER_HASH_CHANGE_ON_DEPLOY', 'System Administrator'),
+  ('ac1c6100-2836-c60a-b54a-b0bda56d54d4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'ahmad@bartawi.com', '$2b$12$PLACEHOLDER_HASH_CHANGE_ON_DEPLOY', 'Ahmad H.');
+
+-- ── ROLES ────────────────────────────────────────────────────
+INSERT INTO roles (id, tenant_id, name, description, is_system) VALUES
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Admin', 'Full system access', true),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Staff', 'Can log payments and complaints', true),
+  ('3a3f320f-cdb4-f6dc-583d-37e6213f5d53', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Viewer', 'Read-only access', true);
+
+-- ── PERMISSIONS ──────────────────────────────────────────────
+INSERT INTO permissions (id, resource, action, description) VALUES
+  ('8bb58f66-3d24-6667-1134-7bfc13af97ea', 'rooms', 'read', 'Rooms read'),
+  ('28ba359c-0b6e-c911-21f8-f3de51748c7e', 'rooms', 'write', 'Rooms write'),
+  ('b95c115b-63db-7401-4bbb-07715833fb9e', 'rooms', 'delete', 'Rooms delete'),
+  ('b9c5e03b-2e49-7e00-de3e-416d46cd8bb4', 'payments', 'read', 'Payments read'),
+  ('a0133ef2-9593-53b9-4015-7fe5398becfe', 'payments', 'write', 'Payments write'),
+  ('221d0d04-0a9a-4344-7940-4b34ba9bf1b4', 'payments', 'approve', 'Payments approve'),
+  ('28a9d946-0c0b-744a-6ca4-fb6a10d83173', 'complaints', 'read', 'Complaints read'),
+  ('4bd1a708-2b16-8a8c-ae07-35659c69129c', 'complaints', 'write', 'Complaints write'),
+  ('f9cb7bda-5be0-c502-f3b8-51a0e062290e', 'complaints', 'resolve', 'Complaints resolve'),
+  ('916e7e01-a015-afae-34c8-229365514729', 'tenants', 'read', 'Tenants read'),
+  ('94953f38-d218-d54c-ab4f-f6d31f070ec5', 'tenants', 'write', 'Tenants write'),
+  ('a69ab241-541f-8815-7e91-3a078981cd31', 'tenants', 'delete', 'Tenants delete'),
+  ('bc81b099-0cc9-7305-d8eb-c6d149ceeb92', 'contracts', 'read', 'Contracts read'),
+  ('67e5a929-1c33-02c5-4a0b-253d92a10170', 'contracts', 'write', 'Contracts write'),
+  ('5e6c1473-480f-4e1d-3bf6-37eacfe39548', 'expenses', 'read', 'Expenses read'),
+  ('bf67357a-ca8f-7f9a-a5ae-dea7371332b0', 'expenses', 'write', 'Expenses write'),
+  ('db70c267-de4d-8e5a-f2ef-717d29aa2771', 'reports', 'read', 'Reports read'),
+  ('12fb208a-f453-e366-e80b-f0f5763f96d2', 'reports', 'export', 'Reports export'),
+  ('2e10fd68-b43c-b9c7-2b15-239c8e139cc8', 'settings', 'read', 'Settings read'),
+  ('0242d8ff-2150-cfe7-82cb-49683d97ba35', 'settings', 'write', 'Settings write'),
+  ('4ad4b8c3-f313-53e6-7279-5e69bf69f44e', 'users', 'read', 'Users read'),
+  ('5b9f3197-9453-c669-4a9f-ed84ecfddc70', 'users', 'write', 'Users write'),
+  ('d7046f34-d11f-728a-90ac-faa1cfce41ad', 'users', 'delete', 'Users delete'),
+  ('ddd5a0dd-ce87-8a45-157c-d13d042567f6', 'sensors', 'read', 'Sensors read'),
+  ('72fa6891-b62e-ff02-9ab1-7a68a713c317', 'sensors', 'configure', 'Sensors configure'),
+  ('5c090a42-0a1c-d21c-fb34-2630203d34f4', 'map', 'read', 'Map read'),
+  ('05f78b50-865e-cce6-0478-3f399c4e8778', 'map', 'configure', 'Map configure');
+
+-- Admin gets all permissions
+INSERT INTO role_permissions (role_id, permission_id) VALUES
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '8bb58f66-3d24-6667-1134-7bfc13af97ea'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '28ba359c-0b6e-c911-21f8-f3de51748c7e'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'b95c115b-63db-7401-4bbb-07715833fb9e'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'b9c5e03b-2e49-7e00-de3e-416d46cd8bb4'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'a0133ef2-9593-53b9-4015-7fe5398becfe'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '221d0d04-0a9a-4344-7940-4b34ba9bf1b4'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '28a9d946-0c0b-744a-6ca4-fb6a10d83173'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '4bd1a708-2b16-8a8c-ae07-35659c69129c'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'f9cb7bda-5be0-c502-f3b8-51a0e062290e'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '916e7e01-a015-afae-34c8-229365514729'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '94953f38-d218-d54c-ab4f-f6d31f070ec5'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'a69ab241-541f-8815-7e91-3a078981cd31'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'bc81b099-0cc9-7305-d8eb-c6d149ceeb92'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '67e5a929-1c33-02c5-4a0b-253d92a10170'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '5e6c1473-480f-4e1d-3bf6-37eacfe39548'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'bf67357a-ca8f-7f9a-a5ae-dea7371332b0'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'db70c267-de4d-8e5a-f2ef-717d29aa2771'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '12fb208a-f453-e366-e80b-f0f5763f96d2'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '2e10fd68-b43c-b9c7-2b15-239c8e139cc8'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '0242d8ff-2150-cfe7-82cb-49683d97ba35'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '4ad4b8c3-f313-53e6-7279-5e69bf69f44e'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '5b9f3197-9453-c669-4a9f-ed84ecfddc70'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'd7046f34-d11f-728a-90ac-faa1cfce41ad'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', 'ddd5a0dd-ce87-8a45-157c-d13d042567f6'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '72fa6891-b62e-ff02-9ab1-7a68a713c317'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '5c090a42-0a1c-d21c-fb34-2630203d34f4'),
+  ('4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e', '05f78b50-865e-cce6-0478-3f399c4e8778');
+
+INSERT INTO role_permissions (role_id, permission_id) VALUES
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', '8bb58f66-3d24-6667-1134-7bfc13af97ea'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', 'b9c5e03b-2e49-7e00-de3e-416d46cd8bb4'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', 'a0133ef2-9593-53b9-4015-7fe5398becfe'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', '28a9d946-0c0b-744a-6ca4-fb6a10d83173'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', '4bd1a708-2b16-8a8c-ae07-35659c69129c'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', 'f9cb7bda-5be0-c502-f3b8-51a0e062290e'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', '916e7e01-a015-afae-34c8-229365514729'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', '5e6c1473-480f-4e1d-3bf6-37eacfe39548'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', 'db70c267-de4d-8e5a-f2ef-717d29aa2771'),
+  ('47e5fa3d-0db1-7fcd-69bd-edcb7ccfc22c', '5c090a42-0a1c-d21c-fb34-2630203d34f4');
+
+INSERT INTO user_roles (user_id, role_id) VALUES ('c8b9de38-ad75-d771-3e75-7b9943dc6270', '4e8d73ec-84d3-d558-c1b1-e4d6d2d8659e');
+
+-- ── CAMPS ────────────────────────────────────────────────────
+INSERT INTO camps (id, tenant_id, name, code, city, total_rooms, leasable_rooms) VALUES
+  ('4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Camp 1', 'C1', 'Dubai', 274, 268),
+  ('1af2c34d-6c38-1b45-277f-072f900acbc1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Camp 2', 'C2', 'Dubai', 179, 153);
+
+-- ── BUILDINGS ────────────────────────────────────────────────
+INSERT INTO buildings (id, camp_id, code, name, floor_count, ground_block_code, upper_block_code) VALUES
+  ('944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A', 'Building A', 2, 'A', 'AA'),
+  ('98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B', 'Building B', 2, 'B', 'BB'),
+  ('386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C', 'Building C', 2, 'C', 'CC'),
+  ('3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D', 'Building D', 2, 'D', 'DD'),
+  ('27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E', 'Building E', 2, 'E', 'EE'),
+  ('82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F', 'Building F', 2, 'F', 'FF'),
+  ('67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A', 'Building A', 2, 'A', 'AA'),
+  ('2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B', 'Building B', 2, 'B', 'BB'),
+  ('f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C', 'Building C', 2, 'C', 'CC'),
+  ('46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D', 'Building D', 2, 'D', 'DD'),
+  ('697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E', 'Building E', 2, 'E', 'EE'),
+  ('24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F', 'Building F', 2, 'F', 'FF'),
+  ('c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'S', 'Building S (Commercial)', 2, 'S', 'SS'),
+  ('666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U', 'Building U', 2, 'U', 'UU');
+
+-- ── BLOCKS ────────────────────────────────────────────────────
+INSERT INTO blocks (id, building_id, camp_id, code, floor_label, floor_number, room_count) VALUES
+  ('f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A', 'Ground', 0, 22),
+  ('947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA', 'First', 1, 22),
+  ('a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B', 'Ground', 0, 24),
+  ('947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB', 'First', 1, 24),
+  ('594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C', 'Ground', 0, 22),
+  ('a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC', 'First', 1, 22),
+  ('75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D', 'Ground', 0, 23),
+  ('801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD', 'First', 1, 23),
+  ('82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E', 'Ground', 0, 24),
+  ('afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE', 'First', 1, 24),
+  ('2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F', 'Ground', 0, 22),
+  ('c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF', 'First', 1, 22),
+  ('63623734-44ee-04df-5b8e-3a2ddc715d0a', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A', 'Ground', 0, 5),
+  ('9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA', 'First', 1, 6),
+  ('a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B', 'Ground', 0, 14),
+  ('eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB', 'First', 1, 14),
+  ('aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C', 'Ground', 0, 12),
+  ('2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC', 'First', 1, 12),
+  ('fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D', 'Ground', 0, 14),
+  ('7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD', 'First', 1, 14),
+  ('7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E', 'Ground', 0, 14),
+  ('44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE', 'First', 1, 14),
+  ('17d7db1e-64b0-684f-333f-62e264f097ee', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F', 'Ground', 0, 5),
+  ('7e8e43f1-1a0b-a288-6364-4cd1aaf08eb4', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'FF', 'First', 1, 5),
+  ('1d5c9b91-321c-1a36-39d2-23514b4f980d', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'S', 'Ground', 0, 1),
+  ('d9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS', 'First', 1, 6),
+  ('5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U', 'Ground', 0, 19),
+  ('83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU', 'First', 1, 24);
+
+-- ── ROOMS: CAMP 1 (274 rooms) ────────────────────────────────
+INSERT INTO rooms (id, block_id, building_id, camp_id, room_number, sr_number, room_type, max_capacity, standard_rent, status) VALUES
+  ('afb9295d-0f46-c9ef-526f-b7434db9edb2', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A01', 1, 'standard', 5, 3600, 'occupied'),
+  ('966c9cf3-97bc-40ee-c747-c39f0508e76f', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A02', 2, 'standard', 7, 4000, 'occupied'),
+  ('639a879a-efa8-6d4d-2b0b-5d7f49c980b6', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A03', 3, 'standard', 6, 3600, 'occupied'),
+  ('fb074ec8-0244-31d1-def4-927c1840cc95', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A04', 4, 'standard', 6, 3800, 'occupied'),
+  ('82e78c66-79c0-d935-55c1-b7806329a028', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A05', 5, 'standard', 6, 3600, 'occupied'),
+  ('daa4a283-041c-679f-c20b-a0a2e09d31d6', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A06', 6, 'standard', 5, 3600, 'occupied'),
+  ('5f97aa1c-ca90-cfa8-4584-1e811601892c', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A07', 7, 'standard', 5, 3600, 'occupied'),
+  ('bb3d6432-4b19-3f99-5c0a-0d6a045aa3c9', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A08', 8, 'standard', 7, 4000, 'occupied'),
+  ('a1be2fa1-347e-bb93-5217-ba4ba5e07cba', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A09', 9, 'standard', 8, 4400, 'occupied'),
+  ('dfbd6883-fe8c-478e-7bff-931f0df1c192', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A10', 10, 'standard', 7, 4000, 'occupied'),
+  ('63b29e7b-8105-c7b8-fd4b-04512e775fc6', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A11', 11, 'standard', 4, 3600, 'occupied'),
+  ('eddf1c6a-9f2a-8ca4-7c7d-231d0fc84b95', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A12', 12, 'standard', 6, 2700, 'occupied'),
+  ('cb5ff1ea-0f89-4709-0fa1-0eda416d7e37', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A13', 13, 'standard', 7, 4000, 'occupied'),
+  ('bfc79d9e-b8ca-b7b2-a93d-8115f58f2f20', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A14', 14, 'standard', 7, 4000, 'occupied'),
+  ('3f7ce984-49e6-c584-5996-9d140c5f732e', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A15', 15, 'standard', 6, 3600, 'occupied'),
+  ('deb1ea24-5697-2bd6-5ae9-09d1b83c0826', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A16', 16, 'standard', 6, 3600, 'occupied'),
+  ('891aa768-29d1-fd6b-bdf2-45144f1ecd4e', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A17', 17, 'bartawi', 2, 0, 'bartawi_use'),
+  ('484bad10-d73c-d15c-c784-d198171fe4fe', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A18', 18, 'bartawi', 3, 0, 'bartawi_use'),
+  ('aa1cef9f-24cd-fbba-71c1-5cdea5569466', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A19', 19, 'bartawi', 4, 0, 'bartawi_use'),
+  ('46f91a81-5fc2-d13c-105c-1e124318f8c3', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A20', 20, 'standard', 6, 3600, 'occupied'),
+  ('28cf3a19-65cf-e1fa-044c-e3405f202aa0', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A21', 21, 'standard', 7, 4000, 'occupied'),
+  ('2fdb26bb-6ac1-907e-6e77-1d85582e0e67', 'f626f827-4be2-c19c-4fff-c6831d63866d', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'A22', 22, 'standard', 7, 4000, 'occupied'),
+  ('31cc4f09-de61-d084-2a1e-33d68ff8cae7', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA01', 23, 'standard', 7, 4000, 'occupied'),
+  ('d40141b7-2612-53a7-74d5-77aba80a74a5', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA02', 24, 'standard', 7, 3600, 'occupied'),
+  ('1d607376-ce29-3e8d-77c2-7e35fb677bc0', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA03', 25, 'standard', 8, 3600, 'occupied'),
+  ('13bc7d26-73e3-cc8c-7067-53f6527e3b95', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA04', 26, 'standard', 6, 3600, 'occupied'),
+  ('33ac0947-3d5f-1fe1-45dc-3d0f8a045689', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA05', 27, 'standard', 7, 4000, 'occupied'),
+  ('e93c243b-da67-bd88-7796-c2c08b39bbd8', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA06', 28, 'standard', 7, 3600, 'occupied'),
+  ('4ae83134-9b12-b7a4-4bb9-ac228d09eb91', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA07', 29, 'standard', 6, 3600, 'occupied'),
+  ('ced50117-9886-a6a9-04c0-5ad7d7fb1651', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA08', 30, 'standard', 5, 4000, 'occupied'),
+  ('feddd0ad-f2d1-9ebb-09ec-b60554289e4a', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA09', 31, 'standard', 7, 3600, 'occupied'),
+  ('e8e55649-9eb2-0b5a-db57-ec9a33f30141', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA10', 32, 'standard', 7, 4000, 'occupied'),
+  ('b3d55cb2-c797-f403-868e-cc4abf76de56', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA11', 33, 'standard', 8, 3601, 'occupied'),
+  ('1d3d79ec-ea48-c6f7-a2e3-02cf946167e1', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA12', 34, 'standard', 6, 3600, 'occupied'),
+  ('6b7c6537-a0a0-6f14-12d3-8363d25466aa', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA13', 35, 'standard', 7, 4000, 'occupied'),
+  ('72cdf895-c03f-3fa5-9a10-e6fa36442a0e', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA14', 36, 'standard', 6, 4400, 'occupied'),
+  ('b0833955-7849-e241-c194-c284a3bcc484', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA15', 37, 'standard', 6, 4000, 'occupied'),
+  ('158f8bb1-2bc0-9fe9-0da6-eae218761043', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA16', 38, 'standard', 7, 4000, 'occupied'),
+  ('65fa4618-cb64-ea37-cea7-8efead2d311c', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA17', 39, 'standard', 6, 3600, 'occupied'),
+  ('90d126ce-1219-ee3d-bd49-ee0cfb3f4122', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA18', 40, 'standard', 8, 4000, 'occupied'),
+  ('aeb5312e-c1c9-4d26-6586-9e7aebb2c165', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA19', 41, 'standard', 7, 3600, 'occupied'),
+  ('92581ae3-c1a7-47e6-bde4-5dc27fa9971e', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA20', 42, 'standard', 6, 3600, 'occupied'),
+  ('a3955de3-b764-316a-16af-5ecb5e3d28b9', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA21', 43, 'standard', 8, 4000, 'occupied'),
+  ('6244dfa6-9b1f-8e8a-27ee-9a29c716cbc8', '947b50e3-5e8f-de0b-98fa-a1214bdb6167', '944d2331-7db9-a743-5e44-90d283ef03df', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'AA22', 44, 'standard', 6, 4400, 'occupied'),
+  ('fb3e8df1-4144-dbb1-4356-703cd2179a2f', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B01', 45, 'standard', 7, 3600, 'occupied'),
+  ('c249f47f-74c9-068e-ffd8-631df447b97f', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B02', 46, 'standard', 6, 4400, 'occupied'),
+  ('a29072b1-f48a-6a73-ef45-09a69d90a40e', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B03', 47, 'standard', 6, 3600, 'occupied'),
+  ('5f61d5f5-db02-e039-3991-06ae41581d59', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B04', 48, 'standard', 3, 3600, 'occupied'),
+  ('67ccd303-1bcd-3bd2-196c-ef3933808985', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B05', 49, 'standard', 7, 3600, 'occupied'),
+  ('8a9de750-5a18-dd8d-6073-d3bf4dd0bf67', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B06', 50, 'standard', 4, 3600, 'occupied'),
+  ('6079dfa5-150e-6545-c46e-847de464f656', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B07', 51, 'standard', 6, 3600, 'occupied'),
+  ('cb05000e-c073-a79f-a8e9-e38566730167', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B08', 52, 'standard', 7, 3600, 'occupied'),
+  ('1f938aae-1ef9-148b-0b7c-615eeda451f3', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B09', 53, 'standard', 5, 3600, 'occupied'),
+  ('22a0e4c7-1583-ce0a-1fe3-de309d46b8a7', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B10', 54, 'standard', 7, 4000, 'occupied'),
+  ('2d17d6a9-a635-de98-fa49-9a2b9906a0d7', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B11', 55, 'standard', 6, 3600, 'occupied'),
+  ('5857e5f3-1fbd-ebf5-f29f-027b96d57793', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B12', 56, 'standard', 5, 3600, 'occupied'),
+  ('e74e5ff8-dda3-a5c3-932f-8ac8632933d4', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B13', 57, 'standard', 7, 0, 'occupied'),
+  ('47b4b2ea-53c5-32c9-c7d5-d74e65503f6f', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B14', 58, 'standard', 8, 3600, 'occupied'),
+  ('87cfb3bc-7ca1-5596-903d-9f5fcd149980', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B15', 59, 'standard', 7, 3600, 'occupied'),
+  ('995aeaee-23f7-6804-48a2-2a064338555a', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B16', 60, 'standard', 7, 4300, 'occupied'),
+  ('2496c0f6-3b29-14a6-756e-79e22449fd26', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B17', 61, 'standard', 6, 3800, 'occupied'),
+  ('0ab14f64-adbe-0275-46ca-c725cad9e173', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B18', 62, 'standard', 7, 3800, 'occupied'),
+  ('319d061f-fdef-eaad-e85b-ae17699af306', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B19', 63, 'standard', 6, 3600, 'occupied'),
+  ('6b52359b-4e65-6609-2dfc-1bf9847d5f73', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B20', 64, 'standard', 6, 3600, 'occupied'),
+  ('05e1be15-0a9e-b4a6-3e94-77b85d2a19b8', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B21', 65, 'standard', 7, 3600, 'occupied'),
+  ('0eab6420-5ada-6ddc-5b1f-7a818bfaa904', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B22', 66, 'standard', 8, 0, 'occupied'),
+  ('81ada156-a7cf-3934-9c7e-7b6cc71b2c2a', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B23', 67, 'standard', 6, 4000, 'occupied'),
+  ('f64fd266-ee23-f428-2cf2-9ae9f8185981', 'a90d8d2d-dc39-2410-3d45-316eb41600f6', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'B24', 68, 'standard', 8, 3800, 'occupied'),
+  ('c5b61355-5422-5233-3fa8-bad4bc42c8d0', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB01', 69, 'standard', 6, 0, 'occupied'),
+  ('003b331e-ea4c-9c7c-e92a-dfe9cb370c36', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB02', 70, 'standard', 6, 3600, 'occupied'),
+  ('5c6d3509-55a4-638b-2120-8547461e35fb', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB03', 71, 'standard', 6, 3600, 'occupied'),
+  ('45329fb1-f7f2-d428-a843-9fb2c6cf0a97', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB04', 72, 'standard', 6, 3600, 'occupied'),
+  ('25195ea5-f406-fb3d-2c5b-67acd461f611', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB05', 73, 'standard', 6, 3600, 'occupied'),
+  ('ef12491c-ff87-46e6-7d76-88fd40a70e24', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB06', 74, 'standard', 6, 4800, 'occupied'),
+  ('a371c669-bdfb-eb7a-7079-16a68b31440c', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB07', 75, 'standard', 7, 3000, 'occupied'),
+  ('f48934de-ccdd-30b7-fd33-f9d66b377571', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB08', 76, 'standard', 6, 4000, 'occupied'),
+  ('f1e53d02-2b84-9936-2918-f54e59c6f52c', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB09', 77, 'standard', 7, 4400, 'occupied'),
+  ('728d7b19-65bc-fff2-a98c-14ba78bea52d', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB10', 78, 'standard', 6, 3600, 'occupied'),
+  ('27082b77-0512-a810-62bc-c2f95d6a1876', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB11', 79, 'standard', 6, 4000, 'occupied'),
+  ('910b2715-d5b4-e989-d517-b0687cebd9bc', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB12', 80, 'standard', 5, 4000, 'occupied'),
+  ('475d36a3-d167-9d23-87dc-0141d676b898', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB13', 81, 'standard', 6, 3800, 'occupied'),
+  ('fb0095a8-f63e-8b8c-0c3e-7c47c1f8bad9', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB14', 82, 'standard', 6, 4400, 'occupied'),
+  ('db405e2f-b3e4-0f27-db8b-5f9c383c1d8d', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB15', 83, 'standard', 5, 3600, 'occupied'),
+  ('0cd34626-d40d-0fe9-d2e4-18a9e221886a', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB16', 84, 'standard', 5, 4000, 'occupied'),
+  ('60b3e8d4-283a-40aa-d2db-292e733e3d33', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB17', 85, 'standard', 7, 4000, 'occupied'),
+  ('0bdd8fe2-ab92-1d18-64d1-6afc8df42c55', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB18', 86, 'standard', 7, 4400, 'occupied'),
+  ('687a5c33-251e-9721-018f-acda095e7c52', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB19', 87, 'standard', 8, 4400, 'occupied'),
+  ('92747442-15d5-bff9-827a-e27733f696b5', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB20', 88, 'standard', 6, 4000, 'occupied'),
+  ('1fabf440-aeb7-0f10-fc15-58e8b161e90a', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB21', 89, 'standard', 6, 3600, 'occupied'),
+  ('3b671c01-16bd-775d-d22a-8c23271f810d', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB22', 90, 'standard', 5, 4400, 'occupied'),
+  ('9fca3235-d6b6-4b0d-8f20-ec820c3adfc3', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB23', 91, 'standard', 6, 3600, 'occupied'),
+  ('3c67e7c2-1638-9868-c270-c924d843e1af', '947cb5cc-7444-8a52-8d83-3ae597491990', '98bd1b18-4052-bc96-aa32-a8bf079a88af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'BB24', 92, 'standard', 3, 3600, 'occupied'),
+  ('c86c83b7-364e-8869-c711-6a22cf6d10d6', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C01', 93, 'standard', 6, 4000, 'occupied'),
+  ('879072b2-016c-1890-7ccd-27745433d1d3', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C02', 94, 'standard', 6, 3600, 'occupied'),
+  ('90d9146c-773a-d845-5e65-cf39a644a7f2', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C03', 95, 'standard', 6, 3600, 'occupied'),
+  ('6974accc-3e8b-0070-6864-bfce9ac327fa', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C04', 96, 'standard', 6, 4000, 'occupied'),
+  ('08bea999-e737-ad47-f873-9362fd5f5002', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C05', 97, 'standard', 6, 3600, 'occupied'),
+  ('0770555e-70b8-e442-34cc-fb3e97a62455', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C06', 98, 'standard', 6, 4200, 'occupied'),
+  ('1bf13205-1a71-075f-b73c-7060d4a54a65', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C07', 99, 'standard', 6, 3600, 'occupied'),
+  ('d95c65a3-2166-7ecb-eee5-87cc84bf82c6', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C08', 100, 'standard', 7, 3600, 'occupied'),
+  ('0025c59e-0e63-ec52-c826-da977ea24e1d', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C09', 101, 'standard', 6, 4400, 'occupied'),
+  ('bd7d70da-dcbf-a59d-17ba-9c6957268700', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C10', 102, 'standard', 6, 3600, 'occupied'),
+  ('e36b42c2-ac25-58c9-da21-2010815c0900', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C11', 103, 'bartawi', 5, 3600, 'bartawi_use'),
+  ('08890c8f-fbe8-b79a-52a4-b0fcba356773', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C12', 104, 'standard', 5, 4000, 'occupied'),
+  ('c042368a-3c44-6207-365a-5049039acd1d', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C13', 105, 'standard', 5, 4000, 'occupied'),
+  ('1815fb97-9bd6-0dbc-3127-d0a39deeede4', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C14', 106, 'standard', 8, 3600, 'occupied'),
+  ('7b66d66e-3639-48c6-90e7-df7a195c0d64', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C15', 107, 'standard', 6, 3600, 'occupied'),
+  ('ac088be4-47a4-73af-aaa1-54f8c9c13e82', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C16', 108, 'standard', 6, 3600, 'occupied'),
+  ('7be371da-f089-ef95-4fa1-eaaa0b2de7ed', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C17', 109, 'standard', 6, 3600, 'occupied'),
+  ('f36b1f87-ce41-1e5f-628b-8fa8466efc02', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C18', 110, 'standard', 6, 3600, 'occupied'),
+  ('0ed0cc09-3ece-814c-97e3-8af344faa997', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C19', 111, 'standard', 4, 3600, 'occupied'),
+  ('d89eb9f5-a679-6189-8a8c-adaadf73593e', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C20', 112, 'bartawi', 4, 4400, 'bartawi_use'),
+  ('3790cd41-2b73-d45a-04ba-04165964e999', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C21', 113, 'standard', 7, 3600, 'occupied'),
+  ('10e1683b-4de8-b90a-9be9-9bde6c3cddf8', '594f35e3-83e6-8236-ed24-b429f11ee78e', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'C22', 114, 'standard', 5, 3600, 'occupied'),
+  ('120a79c7-f7fb-d1d0-7c70-36abb4e42c3f', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC01', 115, 'standard', 6, 3600, 'occupied'),
+  ('e2242355-c73e-fd9b-d81e-d53b72962aa4', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC02', 116, 'standard', 6, 3600, 'occupied'),
+  ('2d29da8d-36a8-b084-8ce5-67b3231c4285', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC03', 117, 'standard', 6, 3600, 'occupied'),
+  ('082459d7-062c-db02-f54e-b721ff352c0e', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC04', 118, 'standard', 8, 3600, 'occupied'),
+  ('6b59b050-7317-e030-421d-67429372ccbd', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC05', 119, 'standard', 6, 3600, 'occupied'),
+  ('763e532c-bb26-24c9-dbf0-48db950f9cf2', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC06', 120, 'standard', 7, 3600, 'occupied'),
+  ('42f10c55-2925-b148-d2d5-ca5c7e072d66', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC07', 121, 'standard', 8, 4400, 'occupied'),
+  ('d2b879e6-1683-15fd-9bd4-e3426c250ead', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC08', 122, 'standard', 7, 3600, 'occupied'),
+  ('e459928e-d677-f5c9-f541-99cb2e1bea8d', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC09', 123, 'standard', 7, 3600, 'occupied'),
+  ('83aa3fc7-d4e1-903d-7859-fd566bfed03c', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC10', 124, 'standard', 8, 4400, 'occupied'),
+  ('0191cda6-6218-0d8f-982d-b42d5fd831a5', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC11', 125, 'standard', 8, 3600, 'occupied'),
+  ('78d5c12f-b0be-8d92-6d83-2c0e0adb29e7', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC12', 126, 'standard', 6, 3600, 'occupied'),
+  ('6fcb3d19-4a5e-458a-f9e1-92369db8dc49', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC13', 127, 'standard', 6, 3600, 'occupied'),
+  ('4dfaa332-05ec-3fd3-0233-fee27d4579f4', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC14', 128, 'standard', 8, 3600, 'occupied'),
+  ('64f8563a-f881-957c-1e2e-0efc6bc2ad5d', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC15', 129, 'standard', 8, 3600, 'occupied'),
+  ('2eaad00b-c4ef-88e9-7fd1-aec000937fd6', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC16', 130, 'standard', 7, 3600, 'occupied'),
+  ('d1aded04-6385-c623-0cbb-978ab90b1766', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC17', 131, 'standard', 3, 4400, 'occupied'),
+  ('509a2d95-378e-373f-1af5-159297871987', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC18', 132, 'standard', 8, 3600, 'occupied'),
+  ('1665d88d-6747-fa3e-c3bc-6108cd525908', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC19', 133, 'standard', 6, 3850, 'occupied'),
+  ('70e5a169-507c-8009-418b-6dadd3a35c23', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC20', 134, 'standard', 8, 3600, 'occupied'),
+  ('fd094814-b143-edf3-d1cf-3000570f1458', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC21', 135, 'standard', 8, 3600, 'occupied'),
+  ('8c4a62a3-4442-a648-40b9-f1f1db325944', 'a4b2883b-be1c-b136-d607-84cc38ec7bdd', '386a2b71-223e-782d-1a89-5c7f140115b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'CC22', 136, 'standard', 8, 3600, 'occupied'),
+  ('38530999-d005-8917-e106-d3a41b3f8af4', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D01', 137, 'bartawi', 6, 3600, 'bartawi_use'),
+  ('352d5b11-a0fb-3036-0c84-b0220cc21836', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D02', 138, 'standard', 6, 4000, 'occupied'),
+  ('ea2727b5-57fe-28d9-dd7a-c3dd9b001b19', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D03', 139, 'standard', 6, 3800, 'occupied'),
+  ('3682ec1e-8155-30fc-3bb3-a218f4426c93', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D04', 140, 'standard', 6, 4400, 'occupied'),
+  ('ebefaf98-88de-c1eb-6c30-782213aff93b', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D05', 141, 'standard', 6, 3600, 'occupied'),
+  ('9c71e671-b7e8-6cb1-eafa-6ea92bd6df2c', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D06', 142, 'standard', 9, 4000, 'occupied'),
+  ('782e829b-3081-47fd-ae7f-6cac4f6c0c4e', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D07', 143, 'standard', 6, 3800, 'occupied'),
+  ('a1a846bf-f9a0-a10a-bd2b-5f14a722ee82', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D08', 144, 'standard', 7, 3600, 'occupied'),
+  ('cded375d-0b2d-7a7a-bb74-edb5d8cc71ab', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D09', 145, 'standard', 8, 3600, 'occupied'),
+  ('fc2f541b-b0f8-f704-43ff-9282ad5c02f2', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D10', 146, 'standard', 6, 4000, 'occupied'),
+  ('c91a0840-b503-08a1-4344-8e39b328dfb8', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D11', 147, 'standard', 7, 4000, 'occupied'),
+  ('deaadd04-de52-2859-605e-0da9b074dd5e', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D12', 148, 'standard', 7, 4400, 'occupied'),
+  ('65f55c43-9d08-404d-1940-181189b9751c', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D13', 149, 'standard', 6, 3600, 'occupied'),
+  ('047fc15d-48e1-56a2-e9df-95782085c8e6', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D14', 150, 'standard', 8, 4000, 'occupied'),
+  ('867313b8-c4a3-8bea-88d9-0d30b48125ce', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D15', 151, 'standard', 5, 3800, 'occupied'),
+  ('97c95579-48ea-b5a8-9d83-2c7ba4cea152', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D16', 152, 'standard', 7, 3600, 'occupied'),
+  ('aed257d6-dfe8-ec27-e831-4738fa4c663a', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D17', 153, 'standard', 7, 4000, 'occupied'),
+  ('eb6ff1b8-e1a5-fd13-aca2-f82f28f4a5ba', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D18', 154, 'standard', 8, 3600, 'occupied'),
+  ('a1f4bb07-7d21-ed3b-a99e-32f293040a9a', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D19', 155, 'standard', 8, 4200, 'occupied'),
+  ('dc78ad50-ecf9-95cd-a31b-a74d6f4952da', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D20', 156, 'standard', 7, 4000, 'occupied'),
+  ('c7cec63f-d2e3-abc2-0fb8-264525c2509b', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D21', 157, 'standard', 5, 3600, 'occupied'),
+  ('25376da7-841e-3c5a-3f35-25398fd35b33', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D22', 158, 'standard', 8, 4400, 'occupied'),
+  ('d423b620-f85b-15a0-e085-03aa45346cc5', '75db366f-06f4-5bbb-f769-811efb0431c6', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'D23', 159, 'standard', 6, 3600, 'occupied'),
+  ('4df68c86-8422-fad3-55f1-23324f925060', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD01', 160, 'standard', 6, 3600, 'occupied'),
+  ('56847132-41c6-b45e-7319-71ccb6d3da2e', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD02', 161, 'standard', 6, 3600, 'occupied'),
+  ('b4d4f10c-7a2b-4df8-d6d6-a1aef2a5d7bd', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD03', 162, 'standard', 6, 3600, 'occupied'),
+  ('3f5478c4-7859-11b9-7bd6-9793016bda9e', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD04', 163, 'standard', 6, 3600, 'occupied'),
+  ('5c431d5f-21e1-9574-0fb7-d013514c436d', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD05', 164, 'standard', 6, 3800, 'occupied'),
+  ('b23f974d-8e9e-c229-8119-611ab6b3a6fa', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD06', 165, 'standard', 6, 3600, 'occupied'),
+  ('9e690210-2e67-88ed-4eb3-f068e6738bdd', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD07', 166, 'standard', 9, 4200, 'occupied'),
+  ('6bc15325-a467-0c4f-5180-f36a2d7c70d8', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD08', 167, 'standard', 6, 3600, 'occupied'),
+  ('8a10720a-c64e-dfcb-d449-5fc69658692d', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD09', 168, 'standard', 7, 4000, 'occupied'),
+  ('1baeae71-583b-ee7f-23da-a168aea44e5b', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD10', 169, 'standard', 8, 3600, 'occupied'),
+  ('cf072f7e-b703-a2aa-8b2c-5f14b33334d0', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD11', 170, 'standard', 5, 3600, 'occupied'),
+  ('3429bbcd-e39d-46ce-5389-13a4c3bbfbf1', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD12', 171, 'standard', 4, 3800, 'occupied'),
+  ('d0eba62a-508a-80d1-1486-8b7ad5a72dcf', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD13', 172, 'standard', 6, 3600, 'occupied'),
+  ('43b47b3d-906c-acb0-9780-008bb6ec3ebc', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD14', 173, 'standard', 5, 3600, 'occupied'),
+  ('92e6d6fd-c967-77d8-2cc1-24b0ac8fad6c', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD15', 174, 'standard', 7, 3600, 'occupied'),
+  ('3ee924de-7298-851c-d1f4-e05d53dc9039', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD16', 175, 'standard', 6, 3800, 'occupied'),
+  ('800a1b31-6514-23a7-d4ec-eabce5c781f8', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD17', 176, 'standard', 6, 4200, 'occupied'),
+  ('518369ee-947d-2fef-bd4b-de0863af5a6c', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD18', 177, 'standard', 8, 4000, 'occupied'),
+  ('c3621ca8-8b9e-f239-2925-936844258502', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD19', 178, 'standard', 7, 4400, 'occupied'),
+  ('f61a86d8-cc2e-bf71-48eb-71e5eec1e842', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD20', 179, 'standard', 6, 3600, 'occupied'),
+  ('8142522d-3c8d-7297-b7d1-2a13769ad658', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD21', 180, 'standard', 6, 3800, 'occupied'),
+  ('5aed8914-b486-d914-c082-d8ecaf68d98c', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD22', 181, 'standard', 7, 3600, 'occupied'),
+  ('2de01cbd-d3c4-bdbb-1cdd-278dc632a0a6', '801d55de-cc2b-e9b6-55ec-e14f88e4db30', '3da58246-a5f2-1697-f5ef-74979191554b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'DD23', 182, 'standard', 6, 3600, 'occupied'),
+  ('2be026e5-f73a-fb07-cd65-2e287bc9dfd8', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E01', 183, 'standard', 5, 3600, 'occupied'),
+  ('e2239e34-24c1-d02f-7e13-4203619c58b5', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E02', 184, 'standard', 7, 3600, 'occupied'),
+  ('fe4026d8-c0a1-707d-cc2f-6cd7d25a2793', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E03', 185, 'standard', 6, 3600, 'occupied'),
+  ('02e56c2b-ba5a-ff5a-c415-f3074a96593f', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E04', 186, 'standard', 5, 3600, 'occupied'),
+  ('7f92ba46-9620-170e-3285-0dad1d3cea21', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E05', 187, 'standard', 7, 4400, 'occupied'),
+  ('ff7aba55-1332-1df9-a61c-db0842c6e1bd', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E06', 188, 'standard', 6, 3600, 'occupied'),
+  ('c44faf6b-a4b7-49f0-76ea-edd23cc91635', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E07', 189, 'standard', 7, 4000, 'occupied'),
+  ('14a9a0e1-abdd-7dce-7a26-717ca845c8ae', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E08', 190, 'standard', 6, 4400, 'occupied'),
+  ('c6f926d0-02e3-899c-0b84-7ca2f14a962a', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E09', 191, 'standard', 6, 4000, 'occupied'),
+  ('7c6ceadc-1f6e-e656-2e93-eb5f0e0cfe88', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E10', 192, 'standard', 8, 4000, 'occupied'),
+  ('c5811b91-7291-429e-37f6-fcf8a1f0f804', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E11', 193, 'standard', 6, 4400, 'occupied'),
+  ('4a14ca0d-63c2-8914-9025-69980ec6d959', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E12', 194, 'standard', 6, 4400, 'occupied'),
+  ('663cbb86-bb75-70d9-d4a2-6bdf2c1d6db1', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E13', 195, 'standard', 7, 3800, 'occupied'),
+  ('ab31a872-9600-055e-593d-9d26fd4029fd', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E14', 196, 'standard', 6, 3600, 'occupied'),
+  ('83e28e95-a5a4-d75f-ae39-4f96c74e561a', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E15', 197, 'standard', 5, 4400, 'occupied'),
+  ('ffd3bcca-4c6a-137e-915a-7f0ba2916764', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E16', 198, 'standard', 5, 4400, 'occupied'),
+  ('f47e7f7e-c689-5506-216b-4511b456a7d4', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E17', 199, 'standard', 6, 4000, 'occupied'),
+  ('c73045aa-a330-fe60-5b28-b69784d50bf4', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E18', 200, 'standard', 6, 3600, 'occupied'),
+  ('36f726b4-cd46-5f6b-487b-496470ad1839', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E19', 201, 'standard', 6, 4400, 'occupied'),
+  ('c87e0938-998f-0173-bfa5-eb1f27452bc7', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E20', 202, 'standard', 6, 3800, 'occupied'),
+  ('382825ab-5ef8-d3a2-c0a6-2f22d27f0a27', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E21', 203, 'standard', 8, 4400, 'occupied'),
+  ('d83df73a-6c78-7e6a-5b76-13fc544c2e53', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E22', 204, 'standard', 6, 4400, 'occupied'),
+  ('8a68e564-c2f7-496a-eb51-de4044da05d4', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E23', 205, 'standard', 6, 4400, 'occupied'),
+  ('9fc9eacf-1ddc-f6aa-d005-52a919bfc00a', '82e95b26-71a7-63c3-f673-3bcb87ae7e26', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'E24', 206, 'standard', 5, 3800, 'occupied'),
+  ('dcb8740c-9cb1-4061-1e85-04559caa3edf', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE01', 207, 'standard', 5, 3600, 'occupied'),
+  ('cd137f67-442b-cbd9-7a9f-145368034af0', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE02', 208, 'standard', 6, 3800, 'occupied'),
+  ('4425dbb2-cc46-3d35-e73e-accf350758be', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE03', 209, 'standard', 6, 4000, 'occupied'),
+  ('91ca9e43-b4e4-c9ad-cbb7-715a40cccadd', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE04', 210, 'standard', 7, 3600, 'occupied'),
+  ('ca80c65a-57ab-9752-d53f-aa793f457d4d', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE05', 211, 'standard', 4, 3600, 'occupied'),
+  ('1371b730-741c-5d7c-d5b8-022245fb50d7', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE06', 212, 'standard', 4, 4800, 'occupied'),
+  ('9e907398-a6cf-3f30-c246-05addcbfe3a4', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE07', 213, 'standard', 7, 3600, 'occupied'),
+  ('8070a010-0abd-712b-6908-de72e55bc66d', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE08', 214, 'standard', 5, 3600, 'occupied'),
+  ('402a37ca-d99c-1ee0-488c-5a95c34105c7', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE09', 215, 'standard', 5, 4400, 'occupied'),
+  ('431b9631-6d78-2db3-c0ed-7eaa15195c4b', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE10', 216, 'standard', 6, 3800, 'occupied'),
+  ('486e9107-7611-bbe4-2cc1-84c2c8a09a82', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE11', 217, 'standard', 7, 3600, 'occupied'),
+  ('7b6facb4-ea65-bdd5-9098-4babcd04d3c3', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE12', 218, 'standard', 7, 3600, 'occupied'),
+  ('6d497f97-37fe-6b5f-4939-007898d5a310', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE13', 219, 'standard', 7, 3600, 'occupied'),
+  ('cafd4367-889f-b6e4-0dcf-62159654badf', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE14', 220, 'standard', 7, 3800, 'occupied'),
+  ('21ac2c11-a1e0-52db-e64d-882c994c16a3', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE15', 221, 'standard', 6, 3600, 'occupied'),
+  ('f7fc872b-b4ec-45b9-c102-84d6ae76078e', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE16', 222, 'standard', 8, 4000, 'occupied'),
+  ('5005b1ec-edfe-42ad-63e1-f40744a2a8ce', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE17', 223, 'standard', 6, 4400, 'occupied'),
+  ('675f27a7-898e-975e-247c-a5f7fab8794c', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE18', 224, 'standard', 6, 4000, 'occupied'),
+  ('ca05e632-adab-e125-a5c0-42497455e67b', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE19', 225, 'standard', 7, 3600, 'occupied'),
+  ('46dcf4d0-a164-1186-8503-ab679a97a980', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE20', 226, 'standard', 6, 3600, 'occupied'),
+  ('7713d2e1-2470-e152-cfe0-1a1297462f82', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE21', 227, 'standard', 6, 4000, 'occupied'),
+  ('232d9f8d-8ab4-eab7-d75a-71b663a0e262', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE22', 228, 'standard', 7, 3800, 'occupied'),
+  ('e67c73b1-897a-e295-9ac6-831557fd6cac', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE23', 229, 'standard', 6, 3600, 'occupied'),
+  ('698146dc-884f-82a7-0266-093fe8a40395', 'afd175d3-b78b-bfb1-bb5a-ba9a481c03dc', '27a1bf8a-c338-d108-27ee-2712a0759bed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'EE24', 230, 'standard', 7, 3600, 'occupied'),
+  ('eab9abc9-db1e-001b-6d6a-37f22c3a9d25', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F01', 231, 'standard', 5, 3600, 'occupied'),
+  ('5f744488-28e2-f0e1-80de-a93aa398534c', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F02', 232, 'standard', 5, 4000, 'occupied'),
+  ('88c38b23-1a32-c9ca-b0b1-b99af8ce9dde', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F03', 233, 'standard', 6, 3600, 'occupied'),
+  ('65aa2461-ce5b-4e3b-8ecc-4d7caf09e3ce', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F04', 234, 'standard', 5, 3600, 'occupied'),
+  ('e8e00493-d214-691e-492d-8135afe7384a', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F05', 235, 'standard', 6, 4000, 'occupied'),
+  ('d347a97d-2a6a-f212-b1b7-4802e4c2699a', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F06', 236, 'standard', 8, 3600, 'occupied'),
+  ('90bc5b8d-f0e9-33a7-d49d-587e12a2e816', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F07', 237, 'standard', 4, 3600, 'occupied'),
+  ('5eaa632d-3a06-7ace-9c2b-18fc3a4eb879', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F08', 238, 'standard', 6, 3600, 'occupied'),
+  ('36d1af28-1a3f-01d6-7945-2a4b62ba9433', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F09', 239, 'standard', 8, 4000, 'occupied'),
+  ('6cd974dd-a343-810d-5b55-bf77af15a967', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F10', 240, 'standard', 4, 4000, 'occupied'),
+  ('1f4f2054-b723-b524-85ed-244afb1a26f1', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F11', 241, 'standard', 5, 4000, 'occupied'),
+  ('a18ee8ad-d676-e2cd-8b49-7e801dfeefa8', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F12', 242, 'standard', 6, 4000, 'occupied'),
+  ('4ec112ac-fad8-7436-4c76-f1506016fd92', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F13', 243, 'standard', 6, 3600, 'occupied'),
+  ('a3be8b89-d857-498d-0791-884248a1c926', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F14', 244, 'standard', 6, 4400, 'occupied'),
+  ('725b6593-ba44-2ac9-e08e-3e4a38a063a3', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F15', 245, 'standard', 6, 3600, 'occupied'),
+  ('314c0af2-fb6f-6c3d-e17a-8c0760337136', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F16', 246, 'standard', 8, 3600, 'occupied'),
+  ('c383c90a-6ac9-0803-f112-5f501332609f', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F17', 247, 'standard', 6, 4000, 'occupied'),
+  ('9e941bc3-1e9c-f03a-652e-8143126edf0f', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F18', 248, 'standard', 5, 3600, 'occupied'),
+  ('33277479-c5b2-2962-8d54-8afb06ab2362', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F19', 249, 'standard', 6, 4000, 'occupied'),
+  ('f77a0cf6-a7fe-89a2-89f3-a67b49c0884a', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F20', 250, 'standard', 6, 4000, 'occupied'),
+  ('1274a665-bd96-a087-1080-2a04ab77b716', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F21', 251, 'standard', 4, 3600, 'occupied'),
+  ('da324106-f4b6-72f0-b763-8e9639981796', '2f2d0651-f898-5e13-5eca-ed62bf2def59', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'F22', 252, 'standard', 6, 4000, 'occupied'),
+  ('30857481-044a-dcd7-3d7b-cf31b410fc9d', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF01', 253, 'standard', 8, 4400, 'occupied'),
+  ('42a24dc6-b4b9-6073-ea5b-60859a40d8ad', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF02', 254, 'standard', 7, 4000, 'occupied'),
+  ('e50b800c-ce0b-fd45-7717-2e6ffd050e6f', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF03', 255, 'standard', 6, 3600, 'occupied'),
+  ('b0701635-a3c6-2985-7c17-da559ca85242', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF04', 256, 'standard', 5, 3600, 'occupied'),
+  ('4fe7f532-9a66-bd81-64da-55ee4442418a', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF05', 257, 'standard', 7, 4000, 'occupied'),
+  ('941d3e98-5e23-f23f-ad5c-a9dff0437423', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF06', 258, 'standard', 1, 3600, 'occupied'),
+  ('b827147e-5928-e390-3d49-4687dbc2556e', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF07', 259, 'standard', 7, 4000, 'occupied'),
+  ('64eac004-12dc-d288-0404-5733c080302f', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF08', 260, 'standard', 5, 3600, 'occupied'),
+  ('31f5a7c7-13f2-d168-6458-e0efffa6eaee', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF09', 261, 'standard', 4, 3600, 'occupied'),
+  ('1d4c1ca3-79f5-9ac1-a710-43ea1c70d2db', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF10', 262, 'standard', 7, 4000, 'occupied'),
+  ('48ca3a71-f155-09bf-3357-395393c2f505', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF11', 263, 'standard', 7, 4200, 'occupied'),
+  ('354d86f0-21cb-dafe-a3f1-2accb348999d', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF12', 264, 'standard', 7, 3800, 'occupied'),
+  ('abeb21cc-39e0-c669-40ee-964e7b3de370', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF13', 265, 'standard', 6, 3600, 'occupied'),
+  ('e299747f-6e1a-f198-0924-7053a6e424e5', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF14', 266, 'standard', 6, 3600, 'occupied'),
+  ('352ed3f3-3f1d-9f4b-10ac-0b8dca1e0b48', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF15', 267, 'standard', 6, 3600, 'occupied'),
+  ('28982004-3bc4-1964-e0c1-0a6605a17278', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF16', 268, 'standard', 7, 4200, 'occupied'),
+  ('bde2f5cf-5ff2-a977-99bc-2f0f028684a1', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF17', 269, 'standard', 7, 4000, 'occupied'),
+  ('ba40c1be-4276-3815-69ab-2a1f6160e064', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF18', 270, 'standard', 8, 4400, 'occupied'),
+  ('792206f9-1146-facf-432e-2b7a3b1cfe13', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF19', 271, 'standard', 7, 4000, 'occupied'),
+  ('bca8fbbb-e84c-1554-3666-c42fc83fb399', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF20', 272, 'standard', 6, 3600, 'occupied'),
+  ('7078bf03-8c60-6ab7-d542-bba7214141ea', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF21', 273, 'standard', 7, 4000, 'occupied'),
+  ('9909495b-f777-53fd-4136-d5b334a161b7', 'c35feaa0-3e80-6253-59a8-81b4844d57c2', '82044d9d-8bff-f73a-bc36-bba2cba99819', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 'FF22', 274, 'standard', 8, 4400, 'occupied');
+
+-- ── ROOMS: CAMP 2 (179 rooms) ────────────────────────────────
+INSERT INTO rooms (id, block_id, building_id, camp_id, room_number, sr_number, old_room_number, room_type, max_capacity, standard_rent, status, fp_wing) VALUES
+  ('692ecce5-cce1-7ed1-52ac-d7407e92e8ed', '63623734-44ee-04df-5b8e-3a2ddc715d0a', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A01', 1, 'NEW', 'service', 8, 0, 'vacant', 'Ground'),
+  ('58741e86-d940-e77e-436f-2ad7cf336050', '63623734-44ee-04df-5b8e-3a2ddc715d0a', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A02', 2, 'A03 D', 'standard', 10, 6500, 'occupied', 'Ground'),
+  ('bfaa8695-827b-3747-4fff-7549af3251ab', '63623734-44ee-04df-5b8e-3a2ddc715d0a', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A03', 3, 'A02 D', 'standard', 12, 3300, 'occupied', 'Ground'),
+  ('0b2e2fd5-233d-a6e5-5847-405acc9dff19', '63623734-44ee-04df-5b8e-3a2ddc715d0a', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A04', 4, 'A01', 'bartawi', 10, 0, 'bartawi_use', 'Ground'),
+  ('41bae381-22a2-e8c2-5482-f8cd41cc96d1', '63623734-44ee-04df-5b8e-3a2ddc715d0a', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'A05', 5, 'A 01 G', 'bartawi', 10, 0, 'bartawi_use', 'Ground'),
+  ('5842b2f7-36ab-f92c-72fb-c087317c4d79', '9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA01', 6, 'A106 D', 'standard', 9, 7800, 'occupied', 'First'),
+  ('2fcdd4a7-aa52-f192-04bf-e671d5b73d00', '9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA02', 7, 'A105D', 'standard', 10, 6500, 'occupied', 'First'),
+  ('c96ef0b0-2d21-6991-d4b1-c32c9e1d1ccf', '9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA03', 8, 'A104', 'standard', 11, 5400, 'occupied', 'First'),
+  ('39eceda3-a771-a4aa-d3d0-9b945f407c95', '9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA04', 9, 'A 103', 'standard', 11, 7800, 'occupied', 'First'),
+  ('1b5f89fc-21ad-6bc8-f4ad-09b8c099fadf', '9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA05', 10, 'A102', 'standard', 9, 6500, 'occupied', 'First'),
+  ('92daa98f-d20d-1e28-0ea5-7cda77ffab88', '9408bbdd-b086-8143-e0ee-74872ac05da2', '67270134-cfd6-1672-dada-3cfe56413378', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'AA06', 11, 'A101', 'bartawi', 10, 0, 'bartawi_use', 'First'),
+  ('fa20b082-29d8-8b07-d649-636cad101be6', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B01', 12, 'B1', 'standard', 10, 4500, 'occupied', 'Ground'),
+  ('83b2e2c5-3a93-32e2-6d75-a15d9a1a460a', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B02', 13, 'B 02', 'standard', 8, 5500, 'occupied', 'Ground'),
+  ('4560f53c-9ec8-845d-7ae4-89b491667611', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B03', 14, 'B03', 'standard', 7, 4500, 'occupied', 'Ground'),
+  ('1489c3c3-c85b-b0e7-49b0-ce824a45e11a', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B04', 15, 'B04', 'standard', 8, 4500, 'occupied', 'Ground'),
+  ('0fec0ad3-aebf-7297-8ee1-adff814d6547', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B05', 16, 'B05', 'standard', 8, 4500, 'occupied', 'Ground'),
+  ('e60d65a7-70ac-9805-f940-483fd584dddf', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B06', 17, 'B06', 'standard', 6, 5500, 'occupied', 'Ground'),
+  ('b4f538b7-f31d-79f4-4e03-e008cd579186', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B07', 18, 'B07', 'standard', 7, 5500, 'occupied', 'Ground'),
+  ('a5d1ac7d-34fe-b395-c31c-b9c8bf255453', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B08', 19, 'B08', 'standard', 4, 3600, 'occupied', 'Ground'),
+  ('cdb1a1b2-3aaa-4af4-3dda-d4a3b6374738', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B09', 20, 'B09', 'standard', 5, 3600, 'occupied', 'Ground'),
+  ('e9b2b45e-f4b7-0c9f-ddba-e2fc9dd96b3f', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B10', 21, 'B10', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('cf8c4254-427a-8a55-3f51-ffb52d25bff5', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B11', 22, 'B11', 'standard', 4, 3600, 'occupied', 'Ground'),
+  ('707a4537-205d-2885-1c57-ed1c4a78c619', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B12', 23, 'B12', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('256d71ac-6280-cfb2-df32-f864488577ac', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B13', 24, 'B13', 'standard', 5, 3600, 'occupied', 'Ground'),
+  ('9364285c-e18b-2ad4-e540-4d303fb6f720', 'a1fc1342-1371-5024-f0b0-386b28f151e3', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'B14', 25, 'B14', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('f110063d-341e-0596-7272-e88356b058f8', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB01', 26, 'B101', 'standard', 6, 4500, 'occupied', 'First'),
+  ('266bcac9-fa22-75be-7efe-0edfe4a9ca0f', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB02', 27, 'B102', 'standard', 5, 3600, 'occupied', 'First'),
+  ('322a1445-bb4d-6a1e-21bd-de745dc37faf', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB03', 28, 'B103', 'standard', 8, 3600, 'occupied', 'First'),
+  ('df926aa3-01f2-e5e8-bce5-6df6e868c268', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB04', 29, 'B104', 'standard', 8, 3600, 'occupied', 'First'),
+  ('65d501ec-1575-f670-96d5-0d85f788f758', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB05', 30, 'B105', 'standard', 8, 3600, 'occupied', 'First'),
+  ('8ca60b19-6d29-b1e8-d68e-b53e12a6e8a4', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB06', 31, 'B106', 'standard', 8, 3600, 'occupied', 'First'),
+  ('6d92089a-a036-f8fc-a58e-aa5b73a1dcb7', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB07', 32, 'B107', 'standard', 8, 3600, 'occupied', 'First'),
+  ('5d79747f-c14a-e1d1-a933-cae7a98e65e7', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB08', 33, 'B 108', 'standard', 5, 0, 'occupied', 'First'),
+  ('f334b9af-61d7-4f10-2af7-cd3744b8a73c', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB09', 34, 'B109', 'standard', 8, 3600, 'occupied', 'First'),
+  ('84b4eb45-04e1-51c2-3c90-7a7af7d489e8', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB10', 35, 'B110', 'standard', 8, 4500, 'occupied', 'First'),
+  ('d61361e9-d3e1-b78d-7962-e358bb16701f', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB11', 36, 'B111', 'standard', 8, 3600, 'occupied', 'First'),
+  ('1cb21aab-6fcf-0276-6646-1f2605568fe1', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB12', 37, 'B112', 'standard', 6, 5500, 'occupied', 'First'),
+  ('4e7e8c94-b156-fe58-d9bd-18ce2446c284', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB13', 38, 'B113', 'standard', 6, 4400, 'occupied', 'First'),
+  ('b61d25d4-47de-6f15-efc0-0beb278e71ac', 'eb5e77ad-ac5a-bb5b-5e92-b3848d8b03b0', '2d1d0b15-807d-127f-67e1-7dc978ddfe74', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'BB14', 39, 'B 114', 'standard', 8, 6100, 'occupied', 'First'),
+  ('9828f5dd-a65f-fa43-1da0-2cb52ab6b33c', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C01', 40, 'C11 D', 'standard', 8, 2420, 'occupied', 'Ground'),
+  ('df1bb929-7a16-3698-6d0c-986700d05759', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C02', 41, 'C10', 'standard', 8, 2420, 'occupied', 'Ground'),
+  ('8b1208b9-1d06-f3fd-8b17-1048fe064ace', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C03', 42, 'C09', 'standard', 5, 2420, 'occupied', 'Ground'),
+  ('0515aecb-c4cc-b8a5-fddb-cb728fffcb54', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C04', 43, 'C08', 'standard', 8, 2420, 'occupied', 'Ground'),
+  ('3e72b0d5-ed6e-61c0-2f13-df1f86bae42d', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C05', 44, 'C07', 'standard', 6, 2420, 'occupied', 'Ground'),
+  ('67b4fa68-1286-b158-cb92-fe113cbeef6d', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C06', 45, 'C06', 'standard', 6, 2420, 'occupied', 'Ground'),
+  ('8c5067f8-d39e-d23f-6849-5cd9bbdd13f5', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C07', 46, 'C05', 'standard', 9, 6500, 'occupied', 'Ground'),
+  ('5b59d8b9-98d9-9dd1-b898-286892d6bb5f', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C08', 47, 'C04', 'bartawi', 8, 0, 'bartawi_use', 'Ground'),
+  ('f8bb6046-1785-b809-fafc-94f631d866b8', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C09', 48, 'C03', 'standard', 10, 5500, 'occupied', 'Ground'),
+  ('5c68a33b-b18b-351c-e7b9-7a8a4057ae91', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C10', 49, 'C02', 'bartawi', 4, 0, 'bartawi_use', 'Ground'),
+  ('8d3fbf9b-5765-32c3-cc74-92742e695bf9', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C11', 50, 'C 01', 'standard', 6, 2420, 'occupied', 'Ground'),
+  ('97868f37-8902-7703-bae7-af956cdcea82', 'aa014917-b144-b127-0c22-85e957614535', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'C12', 51, 'NEW', 'bartawi', 7, 0, 'bartawi_use', 'Ground'),
+  ('659cd619-5e07-03f9-26ff-782740392fc0', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC01', 52, 'C111D', 'standard', 8, 0, 'occupied', 'First'),
+  ('60554c51-0e41-54b5-3984-df51580476ba', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC02', 53, 'C110', 'standard', 3, 0, 'occupied', 'First'),
+  ('e368408c-5b1b-d0ff-b4df-749866206c77', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC03', 54, 'C109', 'standard', 8, 4225, 'occupied', 'First'),
+  ('fbab8c33-a697-f6c5-58b2-5e3ff9419980', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC04', 55, 'C108', 'standard', 7, 4225, 'occupied', 'First'),
+  ('5efc740c-ae51-388d-f131-20ebf28f45e8', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC05', 56, 'C107', 'standard', 8, 0, 'occupied', 'First'),
+  ('7a19ad01-2c4d-fd04-55eb-07e64c5e1cdf', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC06', 57, 'C106', 'standard', 8, 0, 'occupied', 'First'),
+  ('b68cef37-22ad-e452-238a-6b0c7df5169a', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC07', 58, 'C105', 'standard', 6, 4400, 'occupied', 'First'),
+  ('301bb9ab-c1ff-6b18-63ab-677ed440bd64', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC08', 59, 'C 104', 'standard', 3, 5500, 'occupied', 'First'),
+  ('4164c77d-9603-729f-d086-ee91fe2cbaf3', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC09', 60, 'C103', 'standard', 8, 5500, 'occupied', 'First'),
+  ('203381ce-a012-1b44-ba77-4b72b8217c11', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC10', 61, 'C102', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('be4219c4-297e-4c46-74fd-cc4d72b7aec1', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC11', 62, 'C 101', 'standard', 5, 5500, 'occupied', 'First'),
+  ('3cb7695a-73be-2b59-828d-e82369209762', '2d3cd8e7-a2e3-3b25-a022-852890236d56', 'f53e8e4f-6785-107f-25df-509fb6eb1654', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'CC12', 63, 'C 101D', 'standard', 6, 5500, 'occupied', 'First'),
+  ('10928bc4-b497-8192-c22c-0954bb716e1e', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D01', 64, 'D01', 'standard', 6, 5500, 'occupied', 'Ground'),
+  ('69417878-b48f-1d02-e33b-3a95e4a9a28c', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D02', 65, 'D02', 'bartawi', 7, 3600, 'bartawi_use', 'Ground'),
+  ('4ccfc490-0654-ba0e-b4fc-a78e453c785a', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D03', 66, 'D03', 'standard', 7, 3600, 'occupied', 'Ground'),
+  ('231a382c-2c9e-7332-9837-22e156da9178', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D04', 67, 'D04', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('b59d50a0-f313-5dd9-0d71-b439c4b8ca1e', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D05', 68, 'D05', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('b0dbe4e9-0838-6c50-b20f-71be1a2d8dfb', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D06', 69, 'D06', 'standard', 8, 5500, 'occupied', 'Ground'),
+  ('a12a4ef8-aca4-476e-3764-9cd7218a6514', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D07', 70, 'D7', 'standard', 10, 4500, 'occupied', 'Ground'),
+  ('f40d2b2b-f169-7f33-8b90-c2e4297a3a7a', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D08', 71, 'D08', 'standard', 4, 2420, 'occupied', 'Ground'),
+  ('245a06de-42e1-818a-a048-242531b9a07c', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D09', 72, 'D9', 'standard', 8, 4500, 'occupied', 'Ground'),
+  ('ee339652-c6e5-58fe-4eaf-d116039d184e', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D10', 73, 'D10', 'standard', 6, 2350, 'occupied', 'Ground'),
+  ('2413ec8c-b1fc-68bf-fcae-60e97234dd62', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D11', 74, 'D11', 'standard', 3, 2350, 'occupied', 'Ground'),
+  ('c187d54c-f3d2-7622-1674-606c1f2c4073', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D12', 75, 'D12', 'standard', 10, 5500, 'occupied', 'Ground'),
+  ('c7123173-fc06-fdb6-0ab3-4c10bbade312', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D13', 76, 'D13', 'standard', 10, 5500, 'occupied', 'Ground'),
+  ('5ffde3eb-22a7-d854-feed-9054459200af', 'fe167b10-d1b0-c910-9a04-df8b50c795f0', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'D14', 77, 'D14', 'standard', 10, 5500, 'occupied', 'Ground'),
+  ('3cfc222f-aaa2-1fad-c28c-ce230ffdf53a', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD01', 78, 'D101', 'standard', 3, 5500, 'occupied', 'First'),
+  ('7bf3e370-4b21-16b0-c071-53caf51387d1', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD02', 79, 'D102', 'bartawi', 4, 0, 'bartawi_use', 'First'),
+  ('41580399-c52e-8278-3bf9-b308fc478f8f', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD03', 80, 'D103', 'standard', 7, 5500, 'occupied', 'First'),
+  ('971bc0b7-6594-d469-7978-aa676837190b', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD04', 81, 'D104', 'standard', 8, 3600, 'occupied', 'First'),
+  ('c0842d29-fbcb-a7c0-9afa-11131e15cd77', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD05', 82, 'D 105', 'standard', 8, 5500, 'occupied', 'First'),
+  ('cf74214b-30b8-215a-3988-9bc765dd9021', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD06', 83, 'D106', 'standard', 8, 5500, 'occupied', 'First'),
+  ('4ebfb1da-60ee-feef-6a43-9d5787e40289', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD07', 84, 'D 107', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('ea49f842-662c-e07b-9885-8fd74bb347fe', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD08', 85, 'D108', 'standard', 7, 5500, 'occupied', 'First'),
+  ('c72c9a3b-4641-1441-f5b3-7d252925ec13', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD09', 86, 'D109', 'standard', 7, 5500, 'occupied', 'First'),
+  ('0839f7ad-0daa-66a4-a84a-324366d09ece', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD10', 87, 'D110', 'standard', 6, 4400, 'occupied', 'First'),
+  ('b2d8abc4-5d28-c551-209e-ab90ed4d4bfd', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD11', 88, 'D111', 'standard', 6, 4400, 'occupied', 'First'),
+  ('b00028ec-dd89-97e8-df74-bd3e2a49d878', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD12', 89, 'D112', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('5521569e-6339-6e09-7b48-d626b4f1839f', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD13', 90, 'D113', 'bartawi', 9, 0, 'bartawi_use', 'First'),
+  ('592c8d2a-3e9a-d60e-898f-a4ff141eccfd', '7eebe0d8-f487-6a8e-c9cf-8f73fee83b31', '46778a77-f067-6ffd-15bf-3220c04ff144', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'DD14', 91, 'D114', 'standard', 8, 0, 'occupied', 'First'),
+  ('81be3ee1-915a-53b2-357c-446b94dbda2f', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E01', 92, 'E01', 'standard', 3, 5500, 'occupied', 'Ground'),
+  ('64db2470-ca51-344a-4567-13ac5fc2c879', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E02', 93, 'E02', 'bartawi', 7, 0, 'bartawi_use', 'Ground'),
+  ('f19d1d72-cf01-6495-c871-ab98b64d303e', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E03', 94, 'E03', 'bartawi', 8, 0, 'bartawi_use', 'Ground'),
+  ('7de2d3d3-2c52-3793-8413-f29c37975b24', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E04', 95, 'E04', 'standard', 10, 5500, 'occupied', 'Ground'),
+  ('d55467cd-3cad-6923-858b-acb77062ddef', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E05', 96, 'E05', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('69c04e2c-9258-9bb9-44cd-68831ad9f0fe', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E06', 97, 'E06', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('b884a8a2-24ab-ce48-7346-a26f77257923', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E07', 98, 'E07', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('ecdc569d-507a-6702-6cf3-63af1f969214', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E08', 99, 'E08', 'standard', 8, 2350, 'occupied', 'Ground'),
+  ('2e72b5d0-5481-b00f-198e-528f725755d4', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E09', 100, 'E09', 'standard', 1, 2350, 'occupied', 'Ground'),
+  ('70bed9b9-5f9c-d6ab-3189-ee63e269cbe9', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E10', 101, 'E10', 'standard', 1, 2350, 'occupied', 'Ground'),
+  ('6a65048c-9bfd-3a73-5b10-bff3e6992725', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E11', 102, 'E11', 'standard', 6, 5500, 'occupied', 'Ground'),
+  ('2b045874-fc2e-5cf9-6cdb-1cdb93934cb3', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E12', 103, 'E12', 'standard', 7, 5500, 'occupied', 'Ground'),
+  ('21541a32-fd75-b837-70de-c6b638851b7f', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E13', 104, 'E13', 'standard', 4, 5500, 'occupied', 'Ground'),
+  ('b20c4a76-3853-a44d-3a09-96c4a8c637a6', '7eb52e12-a967-400c-5037-c798235fe7fd', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'E14', 105, 'E14', 'bartawi', 4, 0, 'bartawi_use', 'Ground'),
+  ('43c4b3b0-240e-45f2-a465-027c62765831', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE01', 106, 'E101', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('b099291a-b655-e181-601f-0e993d8f57ec', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE02', 107, 'E102', 'standard', 8, 4500, 'occupied', 'First'),
+  ('bce7b8d0-4971-cc4b-ecdb-0c8bc4333ab5', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE03', 108, 'E103', 'standard', 8, 4500, 'occupied', 'First'),
+  ('cb38b2cf-00f6-a22e-a25b-c40ec62c1a09', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE04', 109, 'E 104', 'standard', 7, 5500, 'occupied', 'First'),
+  ('bac4f5ea-e90a-f6ef-942c-fe15b8efbe2a', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE05', 110, 'E105', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('2b4d7471-043d-524b-0ea5-f99e9736316c', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE06', 111, 'E106', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('c029b6cf-869c-7e62-61f1-8f9f22f06f9d', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE07', 112, 'E107', 'bartawi', 7, 0, 'bartawi_use', 'First'),
+  ('fe75e338-9e27-f72d-2aa8-593abe919b9d', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE08', 113, 'E108', 'standard', 3, 2350, 'occupied', 'First'),
+  ('aa7bacc6-dc27-a556-d46c-96413a96ba9c', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE09', 114, 'E109', 'standard', 5, 2350, 'occupied', 'First'),
+  ('604c962f-6b37-3d08-1041-4f75b979caff', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE10', 115, 'E110', 'standard', 6, 2350, 'occupied', 'First'),
+  ('d873449f-4749-c77b-ad3f-ccc29607a26e', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE11', 116, 'E111', 'standard', 5, 2350, 'occupied', 'First'),
+  ('86a91418-4a55-6589-3a57-21d0ef5d6db7', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE12', 117, 'E112', 'standard', 7, 2350, 'occupied', 'First'),
+  ('a4093cdd-4abc-52cc-5163-3826c52f9e2a', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE13', 118, 'E113', 'standard', 4, 2350, 'occupied', 'First'),
+  ('c2f7bc25-ab18-667f-7085-d6a258e3fb61', '44a400d3-11d2-f02c-9905-3511c354a736', '697470d6-59aa-9d24-e671-d1c313e55b51', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'EE14', 119, 'E114', 'standard', 5, 2350, 'occupied', 'First'),
+  ('53a60fac-22f9-3ddb-dc0f-43c8dfea5273', '17d7db1e-64b0-684f-333f-62e264f097ee', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F01', 120, 'F04D', 'service', 8, 0, 'vacant', 'Ground'),
+  ('5d23a7f7-d37a-8310-39bd-13908f16d93b', '17d7db1e-64b0-684f-333f-62e264f097ee', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F02', 121, 'F01', 'standard', 6, 3600, 'occupied', 'Ground'),
+  ('91ab3836-c563-cbbd-f950-369f19f3a855', '17d7db1e-64b0-684f-333f-62e264f097ee', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F03', 122, '', 'standard', 10, 5500, 'occupied', 'Ground'),
+  ('0c5c5b0d-57d2-1fd9-2dba-5bfa94c8d2db', '17d7db1e-64b0-684f-333f-62e264f097ee', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F04', 123, 'F03D', 'standard', 10, 4500, 'occupied', 'Ground'),
+  ('c2141ac9-e3a9-a062-eee7-5313f5829a9e', '17d7db1e-64b0-684f-333f-62e264f097ee', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'F05', 124, '', 'standard', 9, 4500, 'occupied', 'Ground'),
+  ('8829a458-7de0-c759-fc68-d30abeb1994e', '7e8e43f1-1a0b-a288-6364-4cd1aaf08eb4', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'FF01', 125, 'NEW', 'service', 8, 0, 'vacant', 'Ground'),
+  ('ee259dc1-4a1d-c734-d4fc-5cee1fab897f', '7e8e43f1-1a0b-a288-6364-4cd1aaf08eb4', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'FF02', 126, 'F101 A', 'standard', 7, 5500, 'occupied', 'First'),
+  ('47d1e562-cc82-8a64-ea69-5362bf3fc9c2', '7e8e43f1-1a0b-a288-6364-4cd1aaf08eb4', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'FF03', 127, 'F101', 'standard', 5, 2350, 'occupied', 'First'),
+  ('ad8219fb-d54b-521a-c801-6929b29e9ca3', '7e8e43f1-1a0b-a288-6364-4cd1aaf08eb4', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'FF04', 128, 'F102', 'standard', 3, 2350, 'occupied', 'First'),
+  ('1a0e1f51-dd5c-819f-c05e-65b347454acb', '7e8e43f1-1a0b-a288-6364-4cd1aaf08eb4', '24b6ae71-61ad-4539-2905-24f59cf1f531', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'FF05', 129, 'F103', 'standard', 4, 2350, 'occupied', 'First'),
+  ('104acb2e-e99c-0b6d-3c22-f9dfcd2ae33b', '1d5c9b91-321c-1a36-39d2-23514b4f980d', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'S01', 130, 'S06', 'commercial', 8, 6500, 'occupied', 'Ground'),
+  ('6616fc0c-c789-728c-4bc7-b10e3a8bb8d2', 'd9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS01', 131, 'S101', 'bartawi', 14, 0, 'bartawi_use', 'First'),
+  ('5e204b76-a999-63ad-3865-0d587d072993', 'd9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS02', 132, 'S102', 'standard', 8, 5500, 'occupied', 'First'),
+  ('d04ea037-695e-da16-44d4-c55db6e16417', 'd9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS03', 133, 'S103', 'standard', 10, 4500, 'occupied', 'First'),
+  ('c601511c-04f3-ed7b-e66c-ddb492e13cfb', 'd9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS04', 134, 'S104', 'bartawi', 16, 0, 'bartawi_use', 'First'),
+  ('7c353559-9129-3f47-6364-8683e67bb0ce', 'd9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS05', 135, 'S105', 'bartawi', 14, 0, 'bartawi_use', 'First'),
+  ('0ca7cddf-304c-ae58-1ab8-b7a4d851dcd6', 'd9b1cd76-74af-2b98-217b-95ddd63ddbba', 'c3e99c5d-58fa-5c4b-4329-cb61c0d288f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'SS06', 136, 'S106', 'standard', 7, 7800, 'occupied', 'First'),
+  ('f1103034-4fcc-d666-c693-7cfefdf26656', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U01', 137, 'U01', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('1bba0ca6-9fba-8fbf-8064-b5f5c8ab422c', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U02', 138, 'U02', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('eb9cff5e-1025-5ed1-132b-34dbcb9e242b', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U03', 139, 'U03', 'standard', 7, 3600, 'occupied', 'Ground'),
+  ('c90fd948-f4bf-2cad-36db-9d022587fdb2', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U04', 140, 'U04', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('d06654e4-e30c-9154-4ffd-b835e9c047e0', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U05', 141, 'U05', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('0e04666e-f9b5-31e4-21f8-500055f5b36c', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U06', 142, 'U06', 'standard', 7, 3600, 'occupied', 'Ground'),
+  ('66f2dcbc-8660-1728-49d6-ed907c1a30d8', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U07', 143, 'U07', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('e1cc54e0-04e7-41c9-8cf2-6c034e96ddee', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U08', 144, 'U08', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('015b06d9-ca78-21ce-f43f-30e758c6f1d1', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U09', 145, 'U09 ', 'standard', 7, 5500, 'occupied', 'Ground'),
+  ('483e6f48-3f6d-45ac-d42a-5a9b4606de24', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U10', 146, 'U10', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('3bff6527-ec1a-f757-0fc3-f33571e05c9c', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U11', 147, 'U11', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('dbbc9ebe-4b6d-8960-8120-3e36f87133d3', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U12', 148, 'U12', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('1c9b951d-9d37-1c51-6016-d82e832c71ad', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U13', 149, 'U13', 'bartawi', 8, 0, 'bartawi_use', 'Ground'),
+  ('8ba22f81-9638-d739-b145-be838909ea9c', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U14', 150, 'U14 D', 'standard', 8, 3600, 'occupied', 'Ground'),
+  ('98585ef1-3bd1-4240-b431-bdc081f63c5e', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U15', 151, 'U15D', 'standard', 8, 5500, 'occupied', 'Ground'),
+  ('5faeeca8-398c-a31a-ace4-32cae7083c0b', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U16', 152, '', 'commercial', 7, 3400, 'occupied', 'Ground'),
+  ('3413c2fa-a007-8cb2-6831-8ebab9266ec3', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U17', 153, '', 'commercial', 6, 3400, 'occupied', 'Ground'),
+  ('66e3c4ad-b39d-b0e5-c36e-329d42665e4c', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U18', 154, '', 'commercial', 8, 3400, 'occupied', 'Ground'),
+  ('1971ae05-af47-da6d-4226-025ab090e65e', '5d74d5a0-6ba8-48f1-fb7b-0e4ae9f35dd2', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'U19', 155, '', 'commercial', 5, 3400, 'occupied', 'Ground'),
+  ('28ea425c-7f59-ca13-9d65-b1ba67e320ed', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU01', 156, 'U101', 'standard', 7, 3600, 'occupied', 'First'),
+  ('9574ff82-0a29-8b84-2e41-f53c2e14251a', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU02', 157, 'U102', 'standard', 7, 3600, 'occupied', 'First'),
+  ('0dfd1bca-00cc-0703-f51a-374be58729c7', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU03', 158, 'U103', 'standard', 8, 3600, 'occupied', 'First'),
+  ('2eebb59a-e367-dded-79d5-05437c4d702e', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU04', 159, 'U104', 'standard', 5, 3600, 'occupied', 'First'),
+  ('721743de-f134-af6f-adfb-4087f664ae3d', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU05', 160, 'U105', 'standard', 3, 5500, 'occupied', 'First'),
+  ('d5356fd5-b492-3f65-86f8-828daa337552', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU06', 161, 'U106', 'standard', 6, 5500, 'occupied', 'First'),
+  ('50abe551-16a9-aed8-b779-1a26bd0a29ee', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU07', 162, 'U107', 'standard', 7, 5500, 'occupied', 'First'),
+  ('55e74b42-fcd8-f09c-f8cf-e01d2a7fde4f', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU08', 163, 'U108', 'standard', 6, 3800, 'occupied', 'First'),
+  ('47e9438b-1dbc-efbb-4b36-365883bac87c', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU09', 164, 'U109', 'standard', 6, 3800, 'occupied', 'First'),
+  ('a7ef3f2d-a444-45b0-ff57-1b16f40fc9dd', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU10', 165, 'U110', 'bartawi', 8, 0, 'bartawi_use', 'First'),
+  ('ce29b8ff-1015-3ad5-b4a5-4534c2a860c2', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU11', 166, 'U111', 'standard', 7, 3800, 'occupied', 'First'),
+  ('c3cb2a0f-554d-f6b3-5adb-561c300f36d4', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU12', 167, 'U112', 'standard', 8, 5500, 'occupied', 'First'),
+  ('3ed5cc87-0a50-cb27-2c3e-3b2433c51047', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU13', 168, 'U113', 'standard', 5, 3600, 'occupied', 'First'),
+  ('02de01aa-313e-aaa7-969f-3f58fd19c534', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU14', 169, 'U114', 'standard', 8, 5500, 'occupied', 'First'),
+  ('173e4af4-f5c9-1675-b6b8-64cb74c1b5ca', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU15', 170, 'U115', 'standard', 8, 5500, 'occupied', 'First'),
+  ('17a7ae8a-4234-06d9-09a6-07771945e5fc', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU16', 171, 'U116', 'standard', 6, 3600, 'occupied', 'First'),
+  ('88df63a7-f73a-b6e9-f2c6-39a8a8a2cccb', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU17', 172, 'U117', 'standard', 9, 4500, 'occupied', 'First'),
+  ('77f4ac2a-6083-4d9d-7fe7-ae4ee417f45c', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU18', 173, 'U118', 'commercial', 12, 6500, 'occupied', 'First'),
+  ('84d4e61e-ac56-4e7f-bec7-fc78a574f427', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU19', 174, 'U119D', 'standard', 6, 5500, 'occupied', 'First'),
+  ('8980139f-4d49-8aac-5adb-4fa0513db751', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU20', 175, 'U120D ', 'standard', 7, 5500, 'occupied', 'First'),
+  ('0afc046b-ae27-310a-61b4-7606bd5495e9', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU21', 176, 'U121', 'bartawi', 8, 2420, 'bartawi_use', 'First'),
+  ('9791077e-8b80-795e-4f1a-a81106b71ebb', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU22', 177, 'U122', 'standard', 9, 4500, 'occupied', 'First'),
+  ('cea8da67-c6fb-b39f-e123-208f1b7bca24', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU23', 178, 'U123', 'standard', 10, 4500, 'occupied', 'First'),
+  ('5fb55ad6-7111-55df-a0ef-67cf0fce1778', '83d89dbb-69d8-4223-d494-285fa451a77e', '666b976c-ac52-f3f4-029a-636ee3aa11bf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 'UU24', 179, 'U124', 'standard', 9, 4500, 'occupied', 'First');
+
+-- ── EXPENSE CATEGORIES ────────────────────────────────────────
+INSERT INTO expense_categories (id, tenant_id, name, description) VALUES
+  ('b0907608-d8b0-a058-9e73-0512e2115647', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Utilities', 'Water, electricity, gas'),
+  ('3a88a462-08c0-c036-a16d-8b4a3ea9ecac', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Maintenance', 'Building maintenance & repairs'),
+  ('43f1df17-75f0-ced7-9068-4989c671a7d2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Staff', 'Staff salaries and allowances'),
+  ('7f58d1f4-b99b-6cd1-5668-8f674796dcd3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Security', 'Security services'),
+  ('a54c0d42-669b-c7c7-d9ab-535de582c395', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Cleaning', 'Cleaning and housekeeping'),
+  ('4c8976a2-0867-4328-5aba-fc84e4984986', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Insurance', 'Insurance premiums'),
+  ('57a96557-9f2a-0a58-cefe-4a3a627662f1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Admin', 'Administrative and office expenses'),
+  ('38a1ab72-9933-3dcd-8391-6cef9d79229e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sensor Infra', 'IoT sensor infrastructure (dormant)');
+
+-- ── COMPLAINT CATEGORIES ─────────────────────────────────────
+INSERT INTO complaint_categories (id, tenant_id, name, priority_default, is_active) VALUES
+  ('7df962f8-1386-2709-f330-80602965d423', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Water Issue', 'high', true),
+  ('e1cb1891-e30c-9fe4-b283-b123f6967653', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Electricity', 'high', true),
+  ('0cb87ece-433e-3fe7-ca97-beedd9204248', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'AC / Cooling', 'medium', true),
+  ('959f14b1-e3c3-386d-606d-9715b866d175', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Plumbing', 'medium', true),
+  ('3333656b-860b-6b6a-aaa3-dbadd764ef26', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Maintenance', 'medium', true),
+  ('70783489-1276-8c55-0e28-1bff4d2d8417', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Hygiene / Cleaning', 'low', true),
+  ('6bade353-fbff-f2af-b5b6-9b4866abaf86', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Security', 'high', true),
+  ('b75c4ef1-73fa-a186-44ff-4ef449600107', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Noise', 'low', true),
+  ('f3e6c45d-2456-8c54-9418-c991189863be', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Other', 'medium', true);
+
+-- ── SENSOR TYPES (IoT pipeline — dormant) ────────────────────
+INSERT INTO sensor_types (id, name, unit, description) VALUES
+  ('58344024-238c-2957-ff44-6c9dd74041d9', 'water_flow', 'L/min', 'Water flow rate'),
+  ('a8362d47-3c1f-66d8-6a36-9390ed73cea0', 'water_volume', 'm³', 'Cumulative water consumption'),
+  ('6d708841-51f6-4a22-d279-b08bf0d8601d', 'electricity_kwh', 'kWh', 'Electricity consumption'),
+  ('e0f0eb16-7abf-c9f4-7d62-65d1a508892e', 'electricity_kw', 'kW', 'Electricity demand/load'),
+  ('7f6a536e-cc97-e699-9008-b4db4347899e', 'temperature', '°C', 'Ambient temperature'),
+  ('0b551311-0ad1-eb10-990f-a4fb73315ef7', 'humidity', '%', 'Relative humidity'),
+  ('13684c52-0533-ba28-c7a1-94857567f5ab', 'occupancy_count', 'persons', 'Occupancy count via motion'),
+  ('55992700-8c3f-6f9f-c57d-455c839f8396', 'pressure_psi', 'psi', 'Water pipe pressure'),
+  ('833c3800-e559-4532-4dbe-2fd9459d3315', 'door_event', 'event', 'Door open/close event');
+
+-- ── MAP LAYOUTS (waiting for layout paper) ───────────────────
+INSERT INTO map_layouts (id, camp_id, version, canvas_width, canvas_height, is_configured) VALUES
+  ('d2bd2fd1-9857-09f3-80b8-f57bd93e48c1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 1400, 900, false),
+  ('ad28e6b6-7bbd-31f2-a05d-2e70a8cbb9e9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 1400, 900, false);
+
+-- ── FEATURE FLAGS ────────────────────────────────────────────
+INSERT INTO feature_flags (id, tenant_id, flag_key, flag_name, description, is_enabled) VALUES
+  ('e6717f6e-db06-45cc-3cb7-e9c76341ef9a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'tenant_self_service_complaints', 'Tenant Self-Service Complaints', 'Allow tenants to submit complaints via QR code. Activates QR code UI and complaint submission endpoint.', false),
+  ('793ecfb1-9676-5872-6cd2-fa43550783a6', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'iot_sensor_pipeline', 'IoT Sensor Pipeline', 'Enable sensor data ingestion from hardware. Activates /api/sensors/ingest endpoint and sensor dashboard widgets.', false),
+  ('56d1ddbf-ce87-bfb0-2699-8ee8f133e724', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'sensor_anomaly_alerts', 'Sensor Anomaly Alerts', 'Send alerts when sensor readings exceed defined thresholds.', false),
+  ('f5cd422a-3164-1002-0cc3-8209301ec9f4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'mobile_app_access', 'Mobile App Access', 'Enable mobile app features and push notification endpoints.', false),
+  ('b6c961fc-05bc-5ca6-cd7f-0552dccf0a32', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'multi_tenant_saas', 'Multi-Tenant SaaS Mode', 'Enable multi-tenant SaaS features for external clients.', false),
+  ('576487d8-1a3d-f532-41d0-0ab9b5d446bc', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'contract_auto_alerts', 'Contract Expiry Auto-Alerts', 'Automatically generate alerts 90/60/30 days before contract expiry.', true),
+  ('99ed4d8b-b1ce-b49a-1f75-ff2a72af3f21', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'payment_overdue_alerts', 'Payment Overdue Alerts', 'Alert staff when room balance remains outstanding.', true),
+  ('667f3a46-6730-bf3c-a81b-b34394315428', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'monthly_report_generation', 'Monthly Report Generation', 'Auto-generate monthly financial summary reports.', true);
+
+```
+---
+
+
+## Companies & Individuals Seed
+
+```sql
+-- ============================================================
+-- SEED DATA — COMPANIES (Camp 2 corporate tenants)
+-- ============================================================
+
+INSERT INTO companies (id, tenant_id, name, name_normalized) VALUES
+  ('99f69dec-b282-3aca-18a0-3bdb20803255', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', '800 Truck', '800 TRUCK'),
+  ('fd7231ad-503f-333e-90a2-7e3687cda889', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Advance Aluminium Systam', 'ADVANCE ALUMINIUM SYSTAM'),
+  ('af00ac0a-4023-cd17-2954-9a11c811c408', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Advance Aluminium System', 'ADVANCE ALUMINIUM SYSTEM'),
+  ('cd651d3b-8613-a9d4-c965-5a6640733a8b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC'),
+  ('bc711af6-0ecc-f350-225d-2e7edafe487b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'AL HAYAT', 'AL HAYAT'),
+  ('d35926ce-48e0-4642-ded1-0988898bdb88', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Al Hayat Albsyth Co', 'AL HAYAT ALBSYTH CO'),
+  ('af90354e-6157-1e69-e583-d8982d2148fa', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Al Naami', 'AL NAAMI'),
+  ('ae413320-1073-96e1-eb16-8ccf3e51207e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Al Shwifat', 'AL SHWIFAT'),
+  ('cfd0cafe-3623-380a-c5b3-bd31d7489d5a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'AL SHWIFAT TECHNICAL SERVICES', 'AL SHWIFAT TECHNICAL SERVICES'),
+  ('240a751f-e4d8-0cdb-cf21-7d0afa7fd732', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'ALNAAMI GENERAL CONTRACTING LLC', 'ALNAAMI GENERAL CONTRACTING LLC'),
+  ('6b1f1fef-740c-13b2-1510-0c7a17883788', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ambigram', 'AMBIGRAM'),
+  ('55728a38-81ce-4ac7-6c03-3b5984030813', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'AMBIGRAM INTERIORS LLC', 'AMBIGRAM INTERIORS LLC'),
+  ('427237ca-c274-eddb-7d65-93e47f483e02', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ana Interior LLC', 'ANA INTERIOR LLC'),
+  ('0e740921-9f36-ea5c-9a4f-42014c1e5ddb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bait Al Lait', 'BAIT AL LAIT'),
+  ('beb4b1a3-bc4e-810d-b68a-8265fa62afdb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'BAIT AL LAITH TECHNICAL SERVICES', 'BAIT AL LAITH TECHNICAL SERVICES'),
+  ('79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bartawi Gen. Cont Cleaners', 'BARTAWI GEN. CONT CLEANERS'),
+  ('28b8076e-d92d-5dd5-88d6-026d9d165569', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Blue Ginger', 'BLUE GINGER'),
+  ('22aec601-abf5-390f-1b02-c687fc36e2ea', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Camp Office', 'CAMP OFFICE'),
+  ('9dd093be-c279-4865-c4b4-4630dd854925', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Cool Wood Interior', 'COOL WOOD INTERIOR'),
+  ('956c2b40-1d82-2487-395b-9328d9c6eaab', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'COOL WOOD INTERIOR DECORATION LLC', 'COOL WOOD INTERIOR DECORATION LLC'),
+  ('1c9d727d-4a9e-ae81-1961-1dde8fb51237', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Cyana Technical Services llc', 'CYANA TECHNICAL SERVICES LLC'),
+  ('de37c09f-5f70-92e5-e7da-4bc85ab30fc0', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'CZAR', 'CZAR'),
+  ('913ae1f9-1acf-cf05-d11a-2f6172fcea66', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Electricity Room', 'ELECTRICITY ROOM'),
+  ('2868ce4c-9a0a-99da-1377-25f82e3da396', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Falcon Pool', 'FALCON POOL'),
+  ('d18265d2-62ae-33c0-aea3-6e888fc3c5ff', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'FALCON POOLS LLC', 'FALCON POOLS LLC'),
+  ('8c9e7446-d4b1-8069-f30a-08f48303afb4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'FAVORITE PLUS PAINTING CONT LLC', 'FAVORITE PLUS PAINTING CONT LLC'),
+  ('c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'FAVORITE PLUS PAINTING CONTRACTING LLC'),
+  ('d1743bec-aac7-6741-9010-9f8038bbbd56', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Favourite Plus', 'FAVOURITE PLUS'),
+  ('db109df9-79f4-eaf4-5dba-511f67b5877c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'GBT Golden Brush Tech', 'GBT GOLDEN BRUSH TECH'),
+  ('9319e8da-8ca3-a3f2-dbc3-fdd6812cf955', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'GBT GOLDEN BRUSH TECHNICAL SERVICES', 'GBT GOLDEN BRUSH TECHNICAL SERVICES'),
+  ('ef417706-af53-62e0-3934-d21ac36a23f7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Gulf Fidelity Security Serv LLC', 'GULF FIDELITY SECURITY SERV LLC'),
+  ('d183b95f-5b4b-6691-7d89-617f1cba3225', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'GULF FIDELITY SECURITY SEVICES LLC', 'GULF FIDELITY SECURITY SEVICES LLC'),
+  ('4809a3c4-7304-8487-26c2-0cc956d76eca', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Hashim Darwish Co', 'HASHIM DARWISH CO'),
+  ('24f5d4a5-a737-4358-06b7-cde553770d81', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'HASHIM DARWISH IBRAHIM LANDSCAPING LLC', 'HASHIM DARWISH IBRAHIM LANDSCAPING LLC'),
+  ('d20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'HHM Bld Contracting', 'HHM BLD CONTRACTING'),
+  ('fb61c310-3513-b50e-fea3-49a77ee1cc4d', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'HHM Building Contracting LLC', 'HHM BUILDING CONTRACTING LLC'),
+  ('85e1dace-2653-b3b1-bc4f-cdff507261a0', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'HHM ELECTROMECHANICAL LLC', 'HHM ELECTROMECHANICAL LLC'),
+  ('75cce825-9bcd-a56a-6c5c-7dd3e75e3148', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Iftikar Hussain', 'IFTIKAR HUSSAIN'),
+  ('2736db3f-6f59-3650-4fe4-b315f2c1f226', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jadar al Madina', 'JADAR AL MADINA'),
+  ('9a91be12-6b65-f692-4bfe-804924d5764e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jamshed Technical', 'JAMSHED TECHNICAL'),
+  ('f54eb7d5-1766-2066-8fef-5bfe0a121090', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'JELNAR', 'JELNAR'),
+  ('d15b2c51-6ac7-7301-3337-821d5a41d84f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'JELNAR (Jamshed Technical)', 'JELNAR (JAMSHED TECHNICAL)'),
+  ('eeb276fa-e618-d840-ec66-ff787214b96b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jelnar ElC Comapnay', 'JELNAR ELC COMAPNAY'),
+  ('79ad6dbf-3fc0-4a74-4938-1487a7441571', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jelnar ELC Company', 'JELNAR ELC COMPANY'),
+  ('3901e018-bf1f-2dc5-7df5-efe74c86d280', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jubily Super Market', 'JUBILY SUPER MARKET'),
+  ('73675964-ddfc-b08d-2aa6-846fac3b6656', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jubily Supermarket', 'JUBILY SUPERMARKET'),
+  ('534e6d8a-5731-1856-7ce6-e3b8a014e045', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jubily Tea Shop', 'JUBILY TEA SHOP'),
+  ('3578f07d-b785-ff33-8974-38c9c0ef18e1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'JUBLI TEA SHOP', 'JUBLI TEA SHOP'),
+  ('ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'M.B.K', 'M.B.K'),
+  ('fa99e464-aa8f-5067-062b-2a8feb09a533', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'MALIK', 'MALIK'),
+  ('622a82b6-8b60-0bd6-77ce-5bf7f5c35777', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'MBK TECHNICAL SERVICES', 'MBK TECHNICAL SERVICES'),
+  ('882b2430-ddf5-aef1-2011-33ab0f50f790', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mindmap Human Capital', 'MINDMAP HUMAN CAPITAL'),
+  ('a52fdb30-bf40-5153-da13-14eeae9d1774', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mizna', 'MIZNA'),
+  ('fd0625c8-32e3-7545-b121-03841e89e235', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'MIZNA MIZNA PROJECT', 'MIZNA MIZNA PROJECT'),
+  ('7e2d1344-68ff-b909-c7bf-14cd28bc1fb1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mosque', 'MOSQUE'),
+  ('a48b5bbc-ab0f-8626-8b30-c33f6911ffb5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'New Phoenix', 'NEW PHOENIX'),
+  ('6538b5c2-7bb4-f77f-881f-df9f150aece2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'NEW PHOENIX TECHNICAL SERVICES LLC', 'NEW PHOENIX TECHNICAL SERVICES LLC'),
+  ('f7340e69-b900-f762-bedc-e835668b949a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Olive Star', 'OLIVE STAR'),
+  ('32736642-00a6-ddd3-024c-d305b53ca4b1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'OLIVE STAR TECHNICAL SERVICES LLC', 'OLIVE STAR TECHNICAL SERVICES LLC'),
+  ('988374cb-8fc1-f3be-2111-0a843efe3370', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Petra Oasis', 'PETRA OASIS'),
+  ('033df181-7ba0-d9d0-e674-cc9f8204b410', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Pristine Pro Carpentry', 'PRISTINE PRO CARPENTRY'),
+  ('0c870a3f-3af9-db5a-b663-755b5f7987ad', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'RAJA JEEVANNANTHAM', 'RAJA JEEVANNANTHAM'),
+  ('16c78be6-7f8d-d148-4af2-c88a87469d84', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rajajeevannatham', 'RAJAJEEVANNATHAM'),
+  ('f54f7849-38c3-45d4-b6e0-828192e30f9e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Reno Space Interior Cont Co', 'RENO SPACE INTERIOR CONT CO'),
+  ('bba2ca18-0f7e-ff04-7819-ea51cea63d44', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'RENO SPACE TECHNICAL SERVICES CO.', 'RENO SPACE TECHNICAL SERVICES CO.'),
+  ('d69eef71-5c6d-f465-2567-f439f5e5d2b8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'RITHI TECH', 'RITHI TECH'),
+  ('23bbb361-032c-0642-0b0f-68f51605a0d2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rithi Technical Serevices LLC', 'RITHI TECHNICAL SEREVICES LLC'),
+  ('c6eb45f2-9cb8-43ac-707d-95070fe820da', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shahid Ali', 'SHAHID ALI'),
+  ('b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Tayas Contarcting LLC', 'TAYAS CONTARCTING LLC'),
+  ('a9adebb4-b846-4faa-974f-92a3e23ff66e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'TAYAS CONTRACTING LLC', 'TAYAS CONTRACTING LLC'),
+  ('05fa3468-49f1-2732-dea7-9bfbff53cd57', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'VENUS CONSTRUCTION LLC', 'VENUS CONSTRUCTION LLC'),
+  ('380c1586-fb21-3763-2795-19c14981434e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Venus Contracting LLc', 'VENUS CONTRACTING LLC'),
+  ('ca7c744c-955d-822c-0422-48e2b6972e1c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Zadar AL Madina', 'ZADAR AL MADINA'),
+  ('4fe94cfe-879d-3245-b2cf-0174a8e1e382', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Zaika Al Kabab (Store)', 'ZAIKA AL KABAB (STORE)'),
+  ('4c6cd757-68e6-5e55-1159-293566ac46a7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'ZAIQA AL KEBAB RESTAURANT LLC', 'ZAIQA AL KEBAB RESTAURANT LLC'),
+  ('1d202014-1361-4c3c-478a-db626d6435e1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'ZAKUM', 'ZAKUM'),
+  ('6b01a6b3-c9c4-92ee-f265-0053f8cec003', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Zakum Contracting Co', 'ZAKUM CONTRACTING CO'),
+  ('b6916a3f-42d1-23de-d15d-ad54100f8941', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Zamco', 'ZAMCO'),
+  ('d1907102-68c4-ac08-5b22-dcec76349be5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Zaykaa Biryani Restaurant llc', 'ZAYKAA BIRYANI RESTAURANT LLC');
+
+
+-- ============================================================
+-- SEED DATA — INDIVIDUALS (Camp 1 tenant owners, unique names)
+-- ============================================================
+
+INSERT INTO individuals (id, tenant_id, owner_name) VALUES
+  ('3b52d104-9880-fa94-a23b-b6c22dd7949e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Abdul Ghafoor Fateh'),
+  ('9acf1d1d-7aea-a7f8-d5e9-e716c57d4098', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Abdul Qadeer'),
+  ('ea542e0f-4767-bf79-bb48-6362fea41e0f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Abdul Rahman'),
+  ('d2341d53-6234-a681-222b-79266264f87d', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Acrilic Land'),
+  ('477f150f-2cb4-6695-37bb-bb09a39ed2e3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Aditya Sahani'),
+  ('078ff57b-cf22-9993-a332-7c7dbbf967e5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Advanced Fibreglass Ind'),
+  ('d0cfe060-ff58-127d-4628-a5736fe7889b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'AITS Tech Services llc'),
+  ('51d00f90-a6d5-80e4-8b02-a573ff15bb66', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ajay Nishad'),
+  ('bf12a45a-98e1-a12c-5b2b-1259f0326cea', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Aklesh Sahani'),
+  ('11f4ff60-bf5e-08ce-2123-17348510dc07', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Al Deraa Structural Steel'),
+  ('eb5357f8-4516-3a27-449e-33127a35b68f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Al Junaibi/Hartoshi Cont'),
+  ('2a2baa9f-a0d4-76ba-2ec7-8c701f70c748', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Amarnath Kpildev Nishad'),
+  ('7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Amman Syed'),
+  ('5a7638cb-da73-2ae2-1e1e-4f845bff63a7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Angreez Singh'),
+  ('5958ed1f-beee-13c6-e993-237f7f8450d4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Apu Haidar'),
+  ('7a0456e3-00c7-2b7e-b9b1-8052039a419f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Arumurkan'),
+  ('63190fd3-4b04-7abe-b94b-432447ca06ce', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Asaithambi Kuppusamy'),
+  ('bc1b26e4-0d10-b3b0-6abe-a68d28a94410', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ashok Kumar'),
+  ('0748c6d4-bb5f-f967-df34-c7553ea8ef69', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ashok Sahani'),
+  ('0aa726bf-2305-e9c4-0ada-e2031e79fc74', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ashwani Kumar'),
+  ('bee8793c-cbc2-a3b4-7cd7-2237dfa4be0a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Asif Khalid'),
+  ('7b9bc8a8-9f67-233e-c87c-e8c85f2043f7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ayyamperumal Jothi'),
+  ('5b0a8148-06ba-91f5-84bf-dc3879c7a8db', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Babu Lal'),
+  ('706de5e7-6ee4-03d9-dcb3-a8b054567ea2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Baljit Singh'),
+  ('38bbf442-a02b-e33e-3981-9cadb30311b1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Balwan Nishad'),
+  ('075fbe4a-97c0-273e-e648-67e8500b3406', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Balwinder Singh'),
+  ('531639cb-09b2-5bee-6cdb-4b6b9218f7a1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Banam Buld Mtr Trd llc'),
+  ('49fe5c61-0909-2372-a1dc-6fa38f3fa25a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Banjrangi Yadave'),
+  ('0247fa11-8b9b-528e-e01f-c23d5beb99d4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Banwari Lal'),
+  ('47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Base Plate Company'),
+  ('9ede4cf0-d4d8-34f4-7cfc-908413567751', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'BGC Room'),
+  ('c5be0fe8-d927-432b-bee1-9bf77171e18a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bhagwati Prashad'),
+  ('113cb6e6-1dda-a5f7-8eb6-c2369e10ab3e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bhem Kumar'),
+  ('de5ee086-228e-537b-787f-8c50e602fbb9', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bhubinder Singh'),
+  ('2a7337c8-0c0c-1fae-97fa-926b5c9d9225', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bikar Singh'),
+  ('719af14e-8cde-77da-c4c0-09ca5888350b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Bin Bador Heary Truck'),
+  ('3d4be57f-2dff-ffc2-41f0-6292ea616e5b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Birbal Kumar'),
+  ('8ee7c5fd-f082-2a23-aa74-93463dee465e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'BMX Cargo Co'),
+  ('cbd5c850-6e43-ef5b-b2cb-7748681483df', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Booran Mal'),
+  ('4f11f76a-d9a9-a746-b204-3361f37bba41', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Camp Boss'),
+  ('7f61e2f0-4931-f106-e402-20c0a7169b56', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Camp Office'),
+  ('297ce70e-d88f-6f29-1854-e510f2602ee2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Carpentors Technicals LLC'),
+  ('bc272bfc-c100-8290-2dc5-ee8a40b37094', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Casa Co.'),
+  ('4eb119aa-8ca2-648f-4fa2-983ee323a532', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Cleaners'),
+  ('3e8b7a53-fd6d-af83-2cc3-1865edb8c0da', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Dalip Hanuman'),
+  ('b8cc9f74-52af-bcc3-0df8-e18d430fd337', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Daulat Sahani'),
+  ('a3e4d3f8-9692-3200-e762-1cb16faafd4e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Deepak Nishad'),
+  ('81f1bcf5-b394-3ddb-5284-868e096f4e7d', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Deepak Shukla'),
+  ('8bb10110-aaf4-4fa5-0d6a-6bfc73345393', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Dipu Yadav'),
+  ('4646a30a-39f2-fecd-bd4b-b3a9c1059103', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Faisal Ud Din'),
+  ('9b149ac9-224c-5915-978c-f274a47fb634', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ganesh Nishad'),
+  ('13394146-0147-164f-22fd-b0a4368eb0a3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Gangadhar Gunda'),
+  ('339f315a-67a7-0ed8-7343-a757be722b4a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Gangir Trading'),
+  ('9a8288af-a7ea-49d4-0d1b-ccad4e3f75f8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Gaurab Bharat Singh'),
+  ('ab32edcb-3fbe-1b5b-95ca-261f80ebbcbf', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Girijesh'),
+  ('0afd7c93-b7a4-24a3-03fd-64cbf59568cb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Goddu Ram Singh'),
+  ('a6620ac1-25f9-c197-48a0-45ab91bf4556', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Goran Paswan'),
+  ('273cf788-1029-59ee-c642-a8048beec2ae', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Goverdhan'),
+  ('aeefcacb-2e8e-5d5a-5e65-1749993c650a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Govind Sahani'),
+  ('32772088-32e9-8dcd-d950-e7c8a9b188bb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Gulam Murtaza Transport'),
+  ('a80a7a8f-a4f2-b36c-4ffb-e5841b22df94', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Guman Khan'),
+  ('83b474a0-08b3-4b62-1acd-9ad7b1c96d58', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Habib Ur Rahman'),
+  ('a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Half Million Tech Services llc'),
+  ('3f365ff8-b7de-a758-3982-b5139fc568c5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Hamdan Saeed'),
+  ('f259a7c2-31b3-d335-3f35-fa1a06851348', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Harbajan Siongh'),
+  ('8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Idear Star Tech. Services'),
+  ('4409bee7-4cb0-9e53-8f48-c46e29387f55', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Irfan Ali'),
+  ('b36a8107-39f7-6aee-d79f-d74d6c178863', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jabar Qasim'),
+  ('6ebbe096-03c8-1c04-d3eb-55ba3f816aeb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jawala Sahani'),
+  ('db28b411-14ec-567f-a937-1a6708b0a5e4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jay Chand'),
+  ('240253d8-dd6a-1e8d-de9a-e9d9211819df', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Jay Prakash'),
+  ('5059d64e-1c16-d6a9-e19a-e394968c8a47', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Johns Paints Trading'),
+  ('03d9a09b-e0e7-5d3b-ccf9-0a29dda5ba1b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'K Nizamuddin'),
+  ('20d5232f-c922-9180-f749-6d612d71232c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Kabul City Restaurant'),
+  ('ae3f9216-c1ce-564f-4cd3-23c4afba84ce', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Kadhif Ali'),
+  ('47ab4d89-bbf8-64a6-17e2-2255562e60cb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Kailash Chander Bhagwana'),
+  ('f93eed7f-710b-9cdb-b2c1-b69f88ea4b94', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Kasco Co.'),
+  ('a5f537fe-038d-08e9-22c9-944c6cf1cfa6', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Khushi Mohammad'),
+  ('08302e39-5f38-9f68-8577-e9ad673a85a3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Krishna Mohan'),
+  ('9bbf4c23-eb4c-4602-1635-ca45ec43f1b2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Kulwant Singh'),
+  ('f99c2098-c926-93bf-0952-b045dec2e730', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Lal Kumar'),
+  ('c41941c2-12ab-71b0-fbcb-506736e61be2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Leaf Optan Tech'),
+  ('7c949679-7cb9-f2eb-6f93-fef5083ae55c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Lohithak Shan'),
+  ('595332b5-c046-acf8-dc43-2cc091c632e8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Lovkush Pal'),
+  ('d06d6c47-106a-2bf7-d198-eeb0d97474eb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Lukman Naser'),
+  ('e5d1efef-14ea-c5d8-984b-7c5e4957b9a2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mahandra Kumar'),
+  ('ae013eaa-0935-e348-b3f6-5321fdf7cf1d', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mahendra Nishad'),
+  ('0054ff71-622f-0728-8c05-4341fb89805b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mahmoud Attia'),
+  ('1c05d782-a009-4722-a829-1a6d7d39a144', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Makana Girage'),
+  ('3851cc69-7f11-7b18-bf3e-2d4f0a526f59', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Manik Md'),
+  ('c4b10f23-71a0-dc1d-db10-78a6b8b3c65c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Maruthu Kaiyan'),
+  ('77f01175-9184-801f-2237-8002d3281d4c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Md Akash'),
+  ('870b4bba-60b6-b20c-0ef9-15e9adb969a6', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Md Ali Hussain'),
+  ('b1dc6056-9142-593f-a39a-efde72fc2e29', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Md Rabiul Islam'),
+  ('ce0add42-0bcf-03d1-4349-8559c39503e5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Md. Arfat'),
+  ('3654b579-b7a6-6d09-56de-9caedc826ee6', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mehmood'),
+  ('bbc1e9da-f11c-bb9f-2e08-382e5572fd6f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mehmoud'),
+  ('46e7a7f8-158d-2219-09db-e65fb19247c5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Meva Lal'),
+  ('4b8e13bb-b775-7b26-4f7e-8c78f99a3264', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mitlesh Yadave'),
+  ('5404113d-b0d9-db93-ca40-b5a8d5a46bf8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Akhtar'),
+  ('246f3f06-52d1-bc92-0e54-8ccf5f7324f2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Alau Din'),
+  ('26892594-a4c5-8c5e-fed3-46b7a017bdc2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Ansar'),
+  ('b0a76c3a-8eab-a547-8b7c-46b774276c33', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Azad'),
+  ('0c2d47ee-2dd9-4a74-6f69-c522618a2320', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Galib'),
+  ('685974ba-23a0-e7a9-d86a-f8279fd7584f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Ibrahim'),
+  ('5b20f17e-a8a9-e634-26bd-ade88f17d58a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Jayath'),
+  ('8caeae09-9dde-6583-b729-37bb2ec6fa34', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Rashid'),
+  ('9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Rizwan'),
+  ('3040e896-778d-e80a-bcfa-15f26eee9c05', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Saleem'),
+  ('dcf9efeb-84d0-6bd9-5c9b-e81043b771c3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Shakeel'),
+  ('e5a4480a-7232-8ed2-a54a-42dbc3db2b00', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Sharful'),
+  ('609b1b99-b7b8-4b2d-668b-5b96d5aab8ff', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammad Tariq'),
+  ('39cb122d-dfcd-5e5c-e2d2-3f6ab04531d8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohammed Didarul'),
+  ('29c70f78-6f5e-e21e-9eb4-98c5134ebabc', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohan Jumbaka'),
+  ('4fbf7bfe-c846-a479-de17-eebc054b709c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohan Lal'),
+  ('ead3e8e5-740a-7741-c507-bac3e32d4141', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mohesh Parsad'),
+  ('dfb5dba7-4dcb-7f57-70cb-b6671853eda3', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Monesh Kumar'),
+  ('4702d304-a5c5-b2fb-61b6-31c6d9c23bf0', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Morali Lal'),
+  ('2fd21f46-a9ec-dafa-75c1-6f762c69fdad', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Moti Lal Gupta'),
+  ('92f819a8-53ef-990d-888d-2a2fd9fa58ca', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Mubarak Ali Khan'),
+  ('805758b3-d0c0-0dcd-5b3e-03cafe2acdaa', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Muneer Ahmad'),
+  ('a2f0b399-caa3-c6fd-235a-b205fdd4d222', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Murari Lal Ram'),
+  ('d160d154-4b90-b156-29d9-4c4669c7e96f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Murtaza Ali'),
+  ('3604d8a9-f659-4efd-9168-e48c0572b0d0', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Nalesh Achehal'),
+  ('1fc5be36-3ad3-4e00-ea33-0922fc1c1981', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Nand Kishor'),
+  ('4dc39afe-6b9f-b8f4-0c36-029a437a92cc', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Narendra Kumar'),
+  ('0816344b-3d8f-e5b1-bb69-f29e1abf744c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Naresh Kumar'),
+  ('8883309b-28a2-4d88-b50f-8a332a94bda9', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Naveed Ahmed'),
+  ('a928fc69-d782-8232-372e-de75fcce2715', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Noor Transport'),
+  ('f1f96c24-7457-a8cf-dc37-e45e10820dc5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Om Prakash'),
+  ('5b6d6b2c-63d9-540f-8734-569d8d2d64c8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ottam Choutian'),
+  ('d4f71aca-4dac-ebd7-83bf-a065257e441e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Palan Swamy'),
+  ('38c4c9a9-e873-eaef-3f51-682571ed4b80', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Parsant Pandy'),
+  ('1e272a40-d9cc-3240-6117-642ee39ca048', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Pintu Nishad'),
+  ('1183f671-709d-1ef1-263d-2014e0abc2fd', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Pradeep Kushwaha'),
+  ('7db06d0e-e65e-ecc4-f4a8-c3fbffd35cb5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Prahlad Baberwal'),
+  ('ee01553c-0eb8-c36a-98c7-87b414be5203', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Pramod kumar'),
+  ('db2c9fe5-b79b-b6ef-f31a-fedf4efde19c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Prem Sagar'),
+  ('b55c6241-09ae-79f9-37e2-bba147c7b48c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rach Bal Singh'),
+  ('1387c27e-01a7-222c-34fd-3e476a55496f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Raginder Kumar'),
+  ('560ca23c-f03b-30bc-470f-97eebda10afe', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Raivinder Sahani'),
+  ('30907c7d-b7fd-9df8-98f7-d1c9bb1720e8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Raj Bahadur'),
+  ('806766e8-ebe1-f728-6483-ce867268dfc4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Raj Kumar'),
+  ('951a58a5-d716-a14f-2d8f-7e88dbd76ffb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rakesh Nishad'),
+  ('ed4e6233-af11-a733-f3e3-41c8a77c252b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Ashish'),
+  ('cd3ddd83-b368-c82d-e638-68c4fb4a8f2c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Avatar'),
+  ('bcd8344c-da84-97ed-dd6f-5947b6e82af4', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Ayan Bal'),
+  ('0879c254-1b68-9247-8595-505cdc8b090d', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Binod'),
+  ('febdeb6b-8a92-96cc-7b9e-63ed6945413c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Kishan Prahalad'),
+  ('53c9a6c1-2bed-b43d-a0e0-1570c8144886', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Kitu'),
+  ('12784e82-d227-0797-ed85-1fd5e9030c0e', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Nath Yadav'),
+  ('2abaae2a-eb0b-afbb-9a40-24c896da3da2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Nivash'),
+  ('cb878ac8-086c-20d6-4d98-448d83638379', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Niwas'),
+  ('d87e9ecd-9662-a300-bfaa-6960617dd7d5', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram paraveesh'),
+  ('2c35c035-82c0-1696-669c-ef405a9c3a48', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ram Saran'),
+  ('1c31881a-f88a-f58b-2e7f-603feb45b326', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ramdes'),
+  ('b5d7b02c-af0a-214b-c1a7-361c17df5934', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ramesh'),
+  ('72ccd3bc-6171-8c91-7a51-1f6a3f72a6e7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ramesh Kumar'),
+  ('256239d2-c267-ec1a-3de2-81e9a2c38de2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ranvir Singh Jhabar Mal'),
+  ('8a8a8a2c-b103-94b2-7da1-3c093edf6f8a', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rasel Mia'),
+  ('5a2bd9b7-6f80-fe96-3a34-ce4121be24d1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ravi Kumar'),
+  ('8c6fb3d2-5d96-ead0-de92-bb4611f808bc', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ravindar Nishad'),
+  ('e1c80238-0eee-453c-5de2-2b4c43b789b6', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Ravinder'),
+  ('747032df-da1e-23e3-888a-651b71c0b593', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'RK Touches Tech Service Co'),
+  ('abcbe6ac-3621-3824-5896-fe04adb49fc2', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rohitash Kumar'),
+  ('f2d4194b-a193-5874-1c25-1228e9f79137', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Rustam Ali'),
+  ('a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sadaf Al Sahil Scrap'),
+  ('8776643b-0121-95ed-4479-aeff2b370f92', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Safeer Khan'),
+  ('91c6cc86-ce82-8e96-dea5-5ba0174bac11', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sagar Vidhya'),
+  ('8e3e24e1-9880-681b-fb28-dbe0645ebf7c', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Saha Alam'),
+  ('9b1d71a3-a7ea-a8ed-ae82-4e7e4290df85', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Saif Ullah Tahir'),
+  ('c4f8bd3f-096c-69bc-714e-485a6b885a44', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sandeep Singh'),
+  ('2592ec80-7ce6-95ec-f6e6-bc27e51e3e01', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sangam Yadave'),
+  ('8bdab781-4c32-98ad-c6b8-120efad8e0cd', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sanjay Nishad'),
+  ('537b69c1-5931-7004-d63b-3f340e96e928', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Santosh Alle'),
+  ('6c587e63-6e87-7ecc-9b49-80bcacec02bc', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Satiesh Gupta'),
+  ('f54c285f-5754-6f0f-913f-809ea2d22b20', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Satveer'),
+  ('1e5bcb03-37fc-61f3-0657-6b383457cb20', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Security Room'),
+  ('ddbf40d6-7d6f-4551-ef3a-0849d80e4248', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shah Nawaz Alam'),
+  ('746c6b07-54ce-5770-84fc-83fa6515e6ec', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shahid Cargo Transport'),
+  ('566bb23f-f341-d262-a276-141755ea71ac', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shaji Sivanandan'),
+  ('5ca756a5-e145-2188-1d20-dc4c54e9ecda', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shakil Khan'),
+  ('94d3913d-b560-631e-558d-17d2ec4714bf', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shekhar Chandra'),
+  ('5bfaab55-565d-187f-bc60-b4d43997df91', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Shield Enviorment'),
+  ('c3cc208f-a085-5dd2-00b7-93f2ba83107f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sipon Miya'),
+  ('b5bc9254-e958-7a5e-2dae-c2a8833f2a6f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sobahan'),
+  ('368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sofa Mastar'),
+  ('17528dd1-186c-4878-541b-495219583d99', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sonu Nishad'),
+  ('99a5b336-32a0-efaf-d98a-73d79ee08eea', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sreenivas Srigadde'),
+  ('b7bdf238-e345-bc0b-4768-36df93cf241f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Srinivas Thotla'),
+  ('1024e495-a6de-94d8-697a-5c768169f004', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Srinivasan Asokan'),
+  ('1a63bc4f-43f4-95a6-8609-ccac82edbb57', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Subahan'),
+  ('4385224d-8d36-cff7-4d55-ed9ec457e951', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Subhan'),
+  ('466f9361-2029-f13f-879a-9d36e35df816', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Suman Bonda'),
+  ('4b5d3c60-4c35-5391-3b31-726b97a483bf', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Sunil Kumar'),
+  ('fddcc892-421d-1b8f-b4db-bf119ab69ee1', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Surender Kumar'),
+  ('0d5543fd-122f-d638-ac1e-3d43b02a7ca8', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Tariq Khan'),
+  ('00fefaa2-7d85-6cf4-bbd5-d78153edd5eb', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Technofin Tyres'),
+  ('74d3394f-0661-fedc-2b08-cb0e4ac16bb9', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Uzzal Khan'),
+  ('9a005525-4971-7809-34d5-562e0592cf9b', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Vaitaf Tech Services llc'),
+  ('b95e9b18-5561-1000-2be7-3a23806fb04f', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Vamshi Gasengi'),
+  ('de3556d7-e674-66aa-9e05-f429e251ea51', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Vijay Prakash Yadave'),
+  ('c3049391-ad32-4fbb-f1fa-a3a8b0bd05f9', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Vishnu Anil'),
+  ('e866c9e5-813f-352f-487f-6d88a25d8bdc', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Yam Bahadur/Subhan'),
+  ('6928fd2a-1ef9-42a0-9b6d-2ac0fb958514', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Yas Pal Singh'),
+  ('2939d13b-d36a-3d77-862d-5f4d995ba8b7', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Yasir Zulfiqar'),
+  ('4d0eb48b-ff8c-464f-6b04-c59a4080f285', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Yeshu Patham Seewan'),
+  ('d785be85-999e-96ef-93e5-e5ba291d8672', 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f', 'Zoynal Miah');
+
+```
+---
+
+
+## Monthly Records Seed (Real Data)
+
+```sql
+-- ============================================================
+-- SEED DATA — MONTHLY RECORDS (Jan, Feb, March — Real Excel Data)
+-- Camp 1: 822 records | Camp 2: 537 records
+-- ============================================================
+
+-- ── CAMP 1 MONTHLY RECORDS ───────────────────────────────────
+INSERT INTO monthly_records (id, room_id, camp_id, month, year, individual_id, owner_name, people_count, rent, paid, remarks) VALUES
+  ('fbd6b9c7-4523-0d37-bc2a-fa72cfe94230', 'afb9295d-0f46-c9ef-526f-b7434db9edb2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0054ff71-622f-0728-8c05-4341fb89805b', 'Mahmoud Attia', 5, 3600, 3600, NULL),
+  ('b847b0bc-d036-5143-e5ec-9a9ae9eb7dbf', '966c9cf3-97bc-40ee-c747-c39f0508e76f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1183f671-709d-1ef1-263d-2014e0abc2fd', 'Pradeep Kushwaha', 7, 4000, 4000, 'Dharam for 15 days'),
+  ('21dddfd1-a94e-5baf-03f4-1e7aadd7cc86', '639a879a-efa8-6d4d-2b0b-5d7f49c980b6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5ca756a5-e145-2188-1d20-dc4c54e9ecda', 'Shakil Khan', 6, 3600, 3600, NULL),
+  ('8143816e-70b4-016e-47e7-c895b5aa5f35', 'fb074ec8-0244-31d1-def4-927c1840cc95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7c949679-7cb9-f2eb-6f93-fef5083ae55c', 'Lohithak Shan', 6, 3800, 3800, 'Lohithak for 8 days'),
+  ('ec80a460-73d8-29d1-5909-20b329654469', '82e78c66-79c0-d935-55c1-b7806329a028', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8e3e24e1-9880-681b-fb28-dbe0645ebf7c', 'Saha Alam', 6, 3600, 3600, NULL),
+  ('fa64b249-1832-1945-a543-fd7c634bcca1', 'daa4a283-041c-679f-c20b-a0a2e09d31d6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '00fefaa2-7d85-6cf4-bbd5-d78153edd5eb', 'Technofin Tyres', 5, 3600, 3600, NULL),
+  ('6c571d6a-9054-64fe-81d7-9401f07e8f33', '5f97aa1c-ca90-cfa8-4584-1e811601892c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 5, 3600, 3600, NULL),
+  ('2e8d5ac1-c9ee-d22d-84ec-a36db4280629', 'bb3d6432-4b19-3f99-5c0a-0d6a045aa3c9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '81f1bcf5-b394-3ddb-5284-868e096f4e7d', 'Deepak Shukla', 7, 4000, 4000, NULL),
+  ('76520267-5108-0b76-5f09-eafa461c952b', 'a1be2fa1-347e-bb93-5217-ba4ba5e07cba', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5404113d-b0d9-db93-ca40-b5a8d5a46bf8', 'Mohammad Akhtar', 8, 4400, 4400, 'Mansoori for 15 dats'),
+  ('433c03b8-0bd1-6bd0-f663-e60b6b25e0ac', 'dfbd6883-fe8c-478e-7bff-931f0df1c192', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '685974ba-23a0-e7a9-d86a-f8279fd7584f', 'Mohammad Ibrahim', 7, 4000, 4000, NULL),
+  ('4835ae5d-1897-db1a-5e7c-d0a705486e22', '63b29e7b-8105-c7b8-fd4b-04512e775fc6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1c05d782-a009-4722-a829-1a6d7d39a144', 'Makana Girage', 4, 3600, 3600, 'Transfer in Mashreq on 12th March Aed 3600/-'),
+  ('71a48d45-ea1f-e11c-23b4-27f5e0c5b781', 'eddf1c6a-9f2a-8ca4-7c7d-231d0fc84b95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'eb5357f8-4516-3a27-449e-33127a35b68f', 'Al Junaibi/Hartoshi Cont', 6, 2700, 2700, 'Yearly Contract'),
+  ('3e628200-a4b7-34e5-bac8-20b44d7e0ed9', 'cb5ff1ea-0f89-4709-0fa1-0eda416d7e37', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'Amman Syed', 7, 4000, 4000, NULL),
+  ('a3c4e55a-5d38-95cd-352e-ec174dc198b5', 'bfc79d9e-b8ca-b7b2-a93d-8115f58f2f20', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'Amman Syed', 7, 4000, 4000, NULL),
+  ('e3605c5e-4a7b-977e-d227-87e16af98d8a', '3f7ce984-49e6-c584-5996-9d140c5f732e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3600, 3600, NULL),
+  ('46bc9a47-3a5f-5faf-548a-efc294e59e87', 'deb1ea24-5697-2bd6-5ae9-09d1b83c0826', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0d5543fd-122f-d638-ac1e-3d43b02a7ca8', 'Tariq Khan', 6, 3600, 3600, NULL),
+  ('495e67ef-ed8c-70a5-f0e8-d31ee2eb49c6', '891aa768-29d1-fd6b-bdf2-45144f1ecd4e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4f11f76a-d9a9-a746-b204-3361f37bba41', 'Camp Boss', 2, 0, 0, NULL),
+  ('b7716d4b-bc69-9d0b-b262-3abded088597', '484bad10-d73c-d15c-c784-d198171fe4fe', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9ede4cf0-d4d8-34f4-7cfc-908413567751', 'BGC Room', 3, 0, 0, NULL),
+  ('e06da135-0662-d639-e94d-021b4287f59b', 'aa1cef9f-24cd-fbba-71c1-5cdea5569466', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9ede4cf0-d4d8-34f4-7cfc-908413567751', 'BGC Room', 4, 0, 0, NULL),
+  ('207d5e3d-5645-f4fe-f249-c5bcdfbc0f1e', '46f91a81-5fc2-d13c-105c-1e124318f8c3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('e9c13d4f-6f50-0269-9fd3-36b1a6688db3', '28cf3a19-65cf-e1fa-044c-e3405f202aa0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8bb10110-aaf4-4fa5-0d6a-6bfc73345393', 'Dipu Yadav', 7, 4000, 4000, NULL),
+  ('8253e696-5ca0-1056-9fc3-562f1b25e251', '2fdb26bb-6ac1-907e-6e77-1d85582e0e67', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1387c27e-01a7-222c-34fd-3e476a55496f', 'Raginder Kumar', 7, 4000, 4000, NULL),
+  ('7e14fb5e-5db7-608b-80f9-fe079bd3ac79', '31cc4f09-de61-d084-2a1e-33d68ff8cae7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '113cb6e6-1dda-a5f7-8eb6-c2369e10ab3e', 'Bhem Kumar', 7, 4000, 4000, NULL),
+  ('6238d293-8559-f66d-f9a7-fe35a096eb4c', 'd40141b7-2612-53a7-74d5-77aba80a74a5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '870b4bba-60b6-b20c-0ef9-15e9adb969a6', 'Md Ali Hussain', 7, 3600, 3600, 'Received in Advance'),
+  ('78557189-f896-7e1c-0abc-144090fa4151', '1d607376-ce29-3e8d-77c2-7e35fb677bc0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '746c6b07-54ce-5770-84fc-83fa6515e6ec', 'Shahid Cargo Transport', 8, 3600, 3600, NULL),
+  ('3eb30053-5dc2-7599-754e-1796826260ec', '13bc7d26-73e3-cc8c-7067-53f6527e3b95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'Mohammad Rizwan', 6, 3600, 3600, NULL),
+  ('ac5a8219-22cd-1fdb-670f-ce73027aa385', '33ac0947-3d5f-1fe1-45dc-3d0f8a045689', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bcd8344c-da84-97ed-dd6f-5947b6e82af4', 'Ram Ayan Bal', 7, 4000, 4000, NULL),
+  ('93553b50-ec5f-724b-f522-781dc1221a87', 'e93c243b-da67-bd88-7796-c2c08b39bbd8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '26892594-a4c5-8c5e-fed3-46b7a017bdc2', 'Mohammad Ansar', 7, 3600, 3600, NULL),
+  ('ef15f6e4-7eeb-ce19-031d-6117619d63f9', '4ae83134-9b12-b7a4-4bb9-ac228d09eb91', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'cb878ac8-086c-20d6-4d98-448d83638379', 'Ram Niwas', 6, 3600, 3600, NULL),
+  ('b4f34cb7-be41-b635-847d-53bc30890263', 'ced50117-9886-a6a9-04c0-5ad7d7fb1651', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a928fc69-d782-8232-372e-de75fcce2715', 'Noor Transport', 5, 4000, 4000, NULL),
+  ('2cbf0cab-8c22-22a3-992f-c58c71f6338c', 'feddd0ad-f2d1-9ebb-09ec-b60554289e4a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 3600, 3600, NULL),
+  ('015d7ea1-3fe1-8fda-d0ee-1d61665e67e2', 'e8e55649-9eb2-0b5a-db57-ec9a33f30141', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 4000, 4000, NULL),
+  ('2aff3f1f-3b4b-2fca-376a-fc9e4c1ee51a', 'b3d55cb2-c797-f403-868e-cc4abf76de56', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 8, 3601, 3601, NULL),
+  ('7b0170a9-8917-f8cb-8a9b-68b883724847', '1d3d79ec-ea48-c6f7-a2e3-02cf946167e1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '719af14e-8cde-77da-c4c0-09ca5888350b', 'Bin Bador Heary Truck', 6, 3600, 3600, NULL),
+  ('aa4d10b6-52fe-613a-82cc-0aeba8fcf595', '6b7c6537-a0a0-6f14-12d3-8363d25466aa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 4000, 4000, NULL),
+  ('2c18d0a8-1469-8f00-5c0e-e4bda5688462', '72cdf895-c03f-3fa5-9a10-e6fa36442a0e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 6, 4400, 4400, NULL),
+  ('38e0ee53-528b-1c3a-67ac-c6add2a32d69', 'b0833955-7849-e241-c194-c284a3bcc484', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '719af14e-8cde-77da-c4c0-09ca5888350b', 'Bin Bador Heary Truck', 6, 4000, 4000, NULL),
+  ('3639bc4b-d56d-3c75-7858-65c8cf7b0080', '158f8bb1-2bc0-9fe9-0da6-eae218761043', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2939d13b-d36a-3d77-862d-5f4d995ba8b7', 'Yasir Zulfiqar', 7, 4000, 4000, 'Transfer in Mashreq on 10th March Aed 8000/2'),
+  ('484056cb-45c1-7d67-d571-8776870c92bf', '65fa4618-cb64-ea37-cea7-8efead2d311c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2abaae2a-eb0b-afbb-9a40-24c896da3da2', 'Ram Nivash', 6, 3600, 3600, 'Cheque # 1658 dated 10th March Aed 14400/-'),
+  ('7a902389-fe46-d519-22b9-751b14dbb774', '90d126ce-1219-ee3d-bd49-ee0cfb3f4122', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0748c6d4-bb5f-f967-df34-c7553ea8ef69', 'Ashok Sahani', 8, 4000, 4000, NULL),
+  ('3db27ba5-eab3-b98d-54af-2067156ea4e3', 'aeb5312e-c1c9-4d26-6586-9e7aebb2c165', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2fd21f46-a9ec-dafa-75c1-6f762c69fdad', 'Moti Lal Gupta', 7, 3600, 3600, NULL),
+  ('d93499b4-c381-d3cd-c322-f705257d713c', '92581ae3-c1a7-47e6-bde4-5dc27fa9971e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'cb878ac8-086c-20d6-4d98-448d83638379', 'Ram Niwas', 6, 3600, 3600, NULL),
+  ('f6097c99-918c-9fa0-b9f5-a88083d0ced8', 'a3955de3-b764-316a-16af-5ecb5e3d28b9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'Mohammad Rizwan', 8, 4000, 4000, 'Transfer in Mashreq on 10th March Aed 8000/2'),
+  ('10c03b17-6dfe-2f41-3d75-e988e2754c75', '6244dfa6-9b1f-8e8a-27ee-9a29c716cbc8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'Idear Star Tech. Services', 6, 4400, 4400, 'Chequ # 06 date 10th March Aed 3600/-'),
+  ('a04f9ab3-0a42-8f9f-71d2-38ad23880f54', 'fb3e8df1-4144-dbb1-4356-703cd2179a2f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ea542e0f-4767-bf79-bb48-6362fea41e0f', 'Abdul Rahman', 7, 3600, 3600, NULL),
+  ('28ccc824-36c9-5801-a73e-3469e378d7f3', 'c249f47f-74c9-068e-ffd8-631df447b97f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 6, 4400, 4400, NULL),
+  ('2d4b2b16-360f-1ae2-fbc8-579af6d91b7e', 'a29072b1-f48a-6a73-ef45-09a69d90a40e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '256239d2-c267-ec1a-3de2-81e9a2c38de2', 'Ranvir Singh Jhabar Mal', 6, 3600, 3600, 'Cheque # 850381 dated 13th March Aed 21600/6'),
+  ('79556705-f439-56d8-c9ba-a518fc775d82', '5f61d5f5-db02-e039-3991-06ae41581d59', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'cbd5c850-6e43-ef5b-b2cb-7748681483df', 'Booran Mal', 3, 3600, 3600, NULL),
+  ('f6d5306d-6cb5-9ee8-abf9-83f664ae4eae', '67ccd303-1bcd-3bd2-196c-ef3933808985', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ddbf40d6-7d6f-4551-ef3a-0849d80e4248', 'Shah Nawaz Alam', 7, 3600, 3600, NULL),
+  ('2824f4d2-128a-0624-103c-78845652af08', '8a9de750-5a18-dd8d-6073-d3bf4dd0bf67', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a5f537fe-038d-08e9-22c9-944c6cf1cfa6', 'Khushi Mohammad', 4, 3600, 3600, NULL),
+  ('f78fbe6d-d795-f9f3-d1e1-d6adbbd87453', '6079dfa5-150e-6545-c46e-847de464f656', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4702d304-a5c5-b2fb-61b6-31c6d9c23bf0', 'Morali Lal', 6, 3600, 3600, 'Cheque # 850381 dated 13th March Aed 21600/6'),
+  ('e3c0d33f-dc84-96ae-b4b9-fb38f7fca5f0', 'cb05000e-c073-a79f-a8e9-e38566730167', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f1f96c24-7457-a8cf-dc37-e45e10820dc5', 'Om Prakash', 7, 3600, 3600, NULL),
+  ('7372db5c-5772-0e22-405e-3cb6b081b8ff', '1f938aae-1ef9-148b-0b7c-615eeda451f3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '078ff57b-cf22-9993-a332-7c7dbbf967e5', 'Advanced Fibreglass Ind', 5, 3600, 3600, 'Cheque # 850381 dated 13th March Aed 21600/6'),
+  ('e6af66a9-0ae2-a34c-5fd1-3177e38537b8', '22a0e4c7-1583-ce0a-1fe3-de309d46b8a7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'e866c9e5-813f-352f-487f-6d88a25d8bdc', 'Yam Bahadur/Subhan', 7, 4000, 4000, NULL),
+  ('fd9069f7-0770-907a-b847-eef8992ebff9', '2d17d6a9-a635-de98-fa49-9a2b9906a0d7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('8a89646e-8058-cf0a-3e98-811acdb98fd8', '5857e5f3-1fbd-ebf5-f29f-027b96d57793', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'e5d1efef-14ea-c5d8-984b-7c5e4957b9a2', 'Mahandra Kumar', 5, 3600, 3600, NULL),
+  ('a99bd36d-74fa-5b5b-acd0-4065bd73f904', 'e74e5ff8-dda3-a5c3-932f-8ac8632933d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ed4e6233-af11-a733-f3e3-41c8a77c252b', 'Ram Ashish', 7, 0, 0, NULL),
+  ('73b67267-6f33-855b-c636-04772c3d12e3', '47b4b2ea-53c5-32c9-c7d5-d74e65503f6f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 3600, 3600, 'Cheque # 850381 dated 13th March Aed 21600/6'),
+  ('10fbf609-210b-dabf-f94c-fcbacc1af875', '87cfb3bc-7ca1-5596-903d-9f5fcd149980', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 7, 3600, 3600, NULL),
+  ('700ad44a-019e-cc7a-ff54-03f72b66accf', '995aeaee-23f7-6804-48a2-2a064338555a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd0cfe060-ff58-127d-4628-a5736fe7889b', 'AITS Tech Services llc', 7, 4300, 4300, NULL),
+  ('55960101-aa57-97b8-98c0-094b1500a43e', '2496c0f6-3b29-14a6-756e-79e22449fd26', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3800, 3800, 'Ishtiaq for 1 week'),
+  ('20f18ac9-d20f-bd61-4150-02b7ed4d5947', '0ab14f64-adbe-0275-46ca-c725cad9e173', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 7, 3800, 3800, 'Ali Rehman for 1 week'),
+  ('1968e420-769c-8fae-d516-ed08408b27ea', '319d061f-fdef-eaad-e85b-ae17699af306', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8a8a8a2c-b103-94b2-7da1-3c093edf6f8a', 'Rasel Mia', 6, 3600, 3600, NULL),
+  ('5710530c-ae6b-5771-5e9c-bfa6d9691232', '6b52359b-4e65-6609-2dfc-1bf9847d5f73', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2a7337c8-0c0c-1fae-97fa-926b5c9d9225', 'Bikar Singh', 6, 3600, 3600, NULL),
+  ('3334def2-1524-041e-c601-a64aaea34d4b', '05e1be15-0a9e-b4a6-3e94-77b85d2a19b8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd0cfe060-ff58-127d-4628-a5736fe7889b', 'AITS Tech Services llc', 7, 3600, 3600, NULL),
+  ('746e3ecb-5bcd-9517-5455-24d76593ace8', '0eab6420-5ada-6ddc-5b1f-7a818bfaa904', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '74d3394f-0661-fedc-2b08-cb0e4ac16bb9', 'Uzzal Khan', 8, 0, 0, NULL),
+  ('bf38b135-3cee-70af-464a-51fe311137e4', '81ada156-a7cf-3934-9c7e-7b6cc71b2c2a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bbc1e9da-f11c-bb9f-2e08-382e5572fd6f', 'Mehmoud ', 6, 4000, 4000, NULL),
+  ('e0f405a6-bc24-e407-f298-2047e4a34e23', 'f64fd266-ee23-f428-2cf2-9ae9f8185981', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0afd7c93-b7a4-24a3-03fd-64cbf59568cb', 'Goddu Ram Singh', 8, 3800, 3800, 'ONe person for 8 days'),
+  ('51ddcd21-b664-2429-99be-b2dbe871bd8e', 'c5b61355-5422-5233-3fa8-bad4bc42c8d0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b0a76c3a-8eab-a547-8b7c-46b774276c33', 'Mohammad Azad', 6, 0, 0, NULL),
+  ('49247f83-57cc-362f-de63-b121a2e422c9', '003b331e-ea4c-9c7c-e92a-dfe9cb370c36', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('3f7dba17-02e0-8a0b-1be5-63a9a4f3aa37', '5c6d3509-55a4-638b-2120-8547461e35fb', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('5c1b830e-e5d4-5160-1260-56f46705bc16', '45329fb1-f7f2-d428-a843-9fb2c6cf0a97', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '805758b3-d0c0-0dcd-5b3e-03cafe2acdaa', 'Muneer Ahmad', 6, 3600, 3600, NULL),
+  ('4f34f60f-5896-1fea-42de-798880d08bb1', '25195ea5-f406-fb3d-2c5b-67acd461f611', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 6, 3600, 3600, NULL),
+  ('3b2f1479-7f72-4f3f-b142-c1b598ca5cea', 'ef12491c-ff87-46e6-7d76-88fd40a70e24', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bc272bfc-c100-8290-2dc5-ee8a40b37094', 'Casa Co.', 6, 4800, 0, 'Wael & Elhety to discuss, finance to update accordingly'),
+  ('464035f5-23fa-6b3e-e66b-f782dccbe907', 'a371c669-bdfb-eb7a-7079-16a68b31440c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f2d4194b-a193-5874-1c25-1228e9f79137', 'Rustam Ali', 7, 3000, 3000, 'Imam/Special Discount'),
+  ('c2c38a4e-13c7-8b0b-da85-b5fb9e29ecf1', 'f48934de-ccdd-30b7-fd33-f9d66b377571', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8caeae09-9dde-6583-b729-37bb2ec6fa34', 'Mohammad Rashid', 6, 4000, 4000, NULL),
+  ('19ce1223-7724-de9e-5ec5-85b245ec3917', 'f1e53d02-2b84-9936-2918-f54e59c6f52c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ee01553c-0eb8-c36a-98c7-87b414be5203', 'Pramod kumar', 7, 4400, 4400, NULL),
+  ('f2bb8a88-86cb-6162-dd10-1abc8fbe500a', '728d7b19-65bc-fff2-a98c-14ba78bea52d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('c42e0298-cac6-4393-6d64-c7c20a2f08d2', '27082b77-0512-a810-62bc-c2f95d6a1876', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 4000, 4000, NULL),
+  ('725b080f-8459-719b-db44-8d94f71aa7e9', '910b2715-d5b4-e989-d517-b0687cebd9bc', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 5, 4000, 4000, NULL),
+  ('c754e6d7-ada8-f17d-2cbb-1c5cbcf54a50', '475d36a3-d167-9d23-87dc-0141d676b898', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 3800, 3800, 'Veeram for 8 days'),
+  ('3d1d120c-8f6a-1fe4-452e-edb5787fe6a3', 'fb0095a8-f63e-8b8c-0c3e-7c47c1f8bad9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 4400, 4400, NULL),
+  ('56e6caa6-67a3-40b3-7b02-378262d1badb', 'db405e2f-b3e4-0f27-db8b-5f9c383c1d8d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 5, 3600, 3600, NULL),
+  ('b9717d43-2fd5-0472-b553-30cdc9d6c9f9', '0cd34626-d40d-0fe9-d2e4-18a9e221886a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 5, 4000, 4000, NULL),
+  ('e4ef72e0-f1cf-19b8-6205-37dbf611541c', '60b3e8d4-283a-40aa-d2db-292e733e3d33', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '466f9361-2029-f13f-879a-9d36e35df816', 'Suman Bonda', 7, 4000, 4000, NULL),
+  ('5a7d9499-283e-d1a6-4004-92e1524e6930', '0bdd8fe2-ab92-1d18-64d1-6afc8df42c55', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bc1b26e4-0d10-b3b0-6abe-a68d28a94410', 'Ashok Kumar', 7, 4400, 4400, NULL),
+  ('f417257e-aa41-7c5e-5d1e-68be4f090c02', '687a5c33-251e-9721-018f-acda095e7c52', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '17528dd1-186c-4878-541b-495219583d99', 'Sonu Nishad', 8, 4400, 4400, 'Cheque # 10 date 10th March Aed 4400/-'),
+  ('87d82fad-b942-7f48-075a-fd1c5ed316ef', '92747442-15d5-bff9-827a-e27733f696b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd160d154-4b90-b156-29d9-4c4669c7e96f', 'Murtaza Ali', 6, 4000, 4000, NULL),
+  ('1287f027-2bc6-a257-94ff-70d037ead655', '1fabf440-aeb7-0f10-fc15-58e8b161e90a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'c41941c2-12ab-71b0-fbcb-506736e61be2', 'Leaf Optan Tech', 6, 3600, 3600, NULL),
+  ('687b2faa-6a0c-d28b-1217-edc9677bbabf', '3b671c01-16bd-775d-d22a-8c23271f810d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 4400, 4400, NULL),
+  ('c6d5e9b9-e421-11da-20ac-0d40b0147680', '9fca3235-d6b6-4b0d-8f20-ec820c3adfc3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('1d36f125-ba9c-a1c7-7602-d333f5801e2e', '3c67e7c2-1638-9868-c270-c924d843e1af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 3, 3600, 3600, NULL),
+  ('f7583a2b-ecce-c4d0-04bc-f887a9d856cc', 'c86c83b7-364e-8869-c711-6a22cf6d10d6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 4000, 4000, NULL),
+  ('e31a5e8c-2820-0036-5526-1019d2e595d5', '879072b2-016c-1890-7ccd-27745433d1d3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9b1d71a3-a7ea-a8ed-ae82-4e7e4290df85', 'Saif Ullah Tahir', 6, 3600, 3600, NULL),
+  ('ebee1514-f3bf-42f5-ef6f-e0de07f22394', '90d9146c-773a-d845-5e65-cf39a644a7f2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '49fe5c61-0909-2372-a1dc-6fa38f3fa25a', 'Banjrangi Yadave', 6, 3600, 3600, NULL),
+  ('fa197e6f-e383-ddfc-d613-fcca4d25abac', '6974accc-3e8b-0070-6864-bfce9ac327fa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '240253d8-dd6a-1e8d-de9a-e9d9211819df', 'Jay Prakash', 6, 4000, 4000, NULL),
+  ('90d012b9-28b1-e3bd-f68c-8033293a1c1d', '08bea999-e737-ad47-f873-9362fd5f5002', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('e3b9deb4-1150-04df-4180-f2f7c9ef2f6b', '0770555e-70b8-e442-34cc-fb3e97a62455', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '77f01175-9184-801f-2237-8002d3281d4c', 'Md Akash', 6, 4200, 4200, 'one person for 15 days'),
+  ('20bce941-82b0-2c4a-f216-bacf6d8ea141', '1bf13205-1a71-075f-b73c-7060d4a54a65', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('ae66e04b-529b-7141-d0b4-1bf562ee748f', 'd95c65a3-2166-7ecb-eee5-87cc84bf82c6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd785be85-999e-96ef-93e5-e5ba291d8672', 'Zoynal Miah', 7, 3600, 3600, NULL),
+  ('749fcd84-15dc-c908-52b4-2a0951aa1d40', '0025c59e-0e63-ec52-c826-da977ea24e1d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f93eed7f-710b-9cdb-b2c1-b69f88ea4b94', 'Kasco Co.', 6, 4400, 4400, NULL),
+  ('26fa8828-a68f-a9ef-519a-091d7eb805ae', 'bd7d70da-dcbf-a59d-17ba-9c6957268700', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bbc1e9da-f11c-bb9f-2e08-382e5572fd6f', 'Mehmoud', 6, 3600, 3600, NULL),
+  ('3fb52f3f-78dd-8588-551c-999609573c92', 'e36b42c2-ac25-58c9-da21-2010815c0900', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4eb119aa-8ca2-648f-4fa2-983ee323a532', 'Cleaners', 5, 3600, 3600, NULL),
+  ('8fcbe7e6-8721-e50f-02be-60343359b754', '08890c8f-fbe8-b79a-52a4-b0fcba356773', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 5, 4000, 4000, NULL),
+  ('7844d2fd-6c79-18c3-4a3a-f8050066142c', 'c042368a-3c44-6207-365a-5049039acd1d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '560ca23c-f03b-30bc-470f-97eebda10afe', 'Raivinder Sahani', 5, 4000, 4000, '2 person for 15 days'),
+  ('0936278f-c4f2-5c83-79df-639c51105501', '1815fb97-9bd6-0dbc-3127-d0a39deeede4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5a2bd9b7-6f80-fe96-3a34-ce4121be24d1', 'Ravi Kumar', 8, 3600, 3600, 'Transfer in Mashreq on 11th March Aed 3600/-'),
+  ('4cabac2f-4888-8d6c-bec4-855e77655bb0', '7b66d66e-3639-48c6-90e7-df7a195c0d64', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 6, 3600, 3600, NULL),
+  ('3d71328c-e2b1-be29-85b3-0c3f99883e88', 'ac088be4-47a4-73af-aaa1-54f8c9c13e82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 6, 3600, 3600, NULL),
+  ('7e5f34cf-8913-f94a-2a78-8dfa2b13e103', '7be371da-f089-ef95-4fa1-eaaa0b2de7ed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('62c043db-9364-d229-9a4a-c005c13cad65', 'f36b1f87-ce41-1e5f-628b-8fa8466efc02', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'c3049391-ad32-4fbb-f1fa-a3a8b0bd05f9', 'Vishnu Anil', 6, 3600, 3600, NULL),
+  ('72507683-5f04-b485-86a9-4a6d4e26e12f', '0ed0cc09-3ece-814c-97e3-8af344faa997', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8ee7c5fd-f082-2a23-aa74-93463dee465e', 'BMX Cargo Co', 4, 3600, 3600, NULL),
+  ('2ac13ea8-77cb-f45b-55c0-5aa65a7a0ca5', 'd89eb9f5-a679-6189-8a8c-adaadf73593e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1e5bcb03-37fc-61f3-0657-6b383457cb20', 'Security Room', 4, 4400, 4400, NULL),
+  ('ef00812f-b251-2bf7-afe5-da679cc48af4', '3790cd41-2b73-d45a-04ba-04165964e999', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ae013eaa-0935-e348-b3f6-5321fdf7cf1d', 'Mahendra Nishad', 7, 3600, 3600, NULL),
+  ('4f8b6a3d-5d8e-78ef-808a-7cfef208f453', '10e1683b-4de8-b90a-9be9-9bde6c3cddf8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 5, 3600, 3600, NULL),
+  ('867ef607-b262-d090-3bc1-f9a5827606a0', '120a79c7-f7fb-d1d0-7c70-36abb4e42c3f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('3d42c022-ed00-0e81-dbc8-595e792f7061', 'e2242355-c73e-fd9b-d81e-d53b72962aa4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bf12a45a-98e1-a12c-5b2b-1259f0326cea', 'Aklesh Sahani', 6, 3600, 3600, NULL),
+  ('fc4a1092-88a2-fd64-df43-78bfd829375b', '2d29da8d-36a8-b084-8ce5-67b3231c4285', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'Idear Star Tech. Services', 6, 3600, 3600, 'Mashreq cheque # 1015 date 15th March Aed 14400/3'),
+  ('8496ce8d-fbe1-fecb-da9b-18c3b82baf14', '082459d7-062c-db02-f54e-b721ff352c0e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '6c587e63-6e87-7ecc-9b49-80bcacec02bc', 'Satiesh Gupta', 8, 3600, 3600, NULL),
+  ('9012abaa-e96d-d3f9-400b-43e65dc9eb35', '6b59b050-7317-e030-421d-67429372ccbd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ead3e8e5-740a-7741-c507-bac3e32d4141', 'Mohesh Parsad', 6, 3600, 3600, NULL),
+  ('168de326-8447-1fd0-8dca-4bd6827ea733', '763e532c-bb26-24c9-dbf0-48db950f9cf2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2592ec80-7ce6-95ec-f6e6-bc27e51e3e01', 'Sangam Yadave', 7, 3600, 3600, NULL),
+  ('b6ebaa7c-648a-4ac1-192a-3e0504a1c121', '42f10c55-2925-b148-d2d5-ca5c7e072d66', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ab32edcb-3fbe-1b5b-95ca-261f80ebbcbf', 'Girijesh', 8, 4400, 4400, NULL),
+  ('b2d27073-d8d6-52fc-6150-fd79dbbedc01', 'd2b879e6-1683-15fd-9bd4-e3426c250ead', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '29c70f78-6f5e-e21e-9eb4-98c5134ebabc', 'Mohan Jumbaka', 7, 3600, 3600, NULL),
+  ('c4fe72b7-6021-cf3c-59ed-bfaa83980817', 'e459928e-d677-f5c9-f541-99cb2e1bea8d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'dfb5dba7-4dcb-7f57-70cb-b6671853eda3', 'Monesh Kumar', 7, 3600, 3600, 'Cheque # 1658 dated 10th March Aed 14400/-'),
+  ('e1e8855c-ce2e-9ecf-2fa0-334c91409ef1', '83aa3fc7-d4e1-903d-7859-fd566bfed03c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a3e4d3f8-9692-3200-e762-1cb16faafd4e', 'Deepak Nishad', 8, 4400, 4400, NULL),
+  ('45e37108-a598-7d4f-2242-deda8ee0d975', '0191cda6-6218-0d8f-982d-b42d5fd831a5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9b149ac9-224c-5915-978c-f274a47fb634', 'Ganesh Nishad', 8, 3600, 3600, 'Mashreq cheque # 1015 date 15th March Aed 14400/3'),
+  ('eeb8b09b-d640-45a6-1e8a-d420aa4ad867', '78d5c12f-b0be-8d92-6d83-2c0e0adb29e7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'e1c80238-0eee-453c-5de2-2b4c43b789b6', 'Ravinder ', 6, 3600, 3600, NULL),
+  ('1274a2e2-b883-0b57-191d-37cb1d23bd83', '6fcb3d19-4a5e-458a-f9e1-92369db8dc49', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('f0c99251-1f4e-5d9a-3d4b-0fe4ffab1900', '4dfaa332-05ec-3fd3-0233-fee27d4579f4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2a2baa9f-a0d4-76ba-2ec7-8c701f70c748', 'Amarnath Kpildev Nishad', 8, 3600, 3600, NULL),
+  ('b56057de-9d2e-d116-e83d-55d9ccdd7faf', '64f8563a-f881-957c-1e2e-0efc6bc2ad5d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '51d00f90-a6d5-80e4-8b02-a573ff15bb66', 'Ajay Nishad', 8, 3600, 3600, 'Cheque # 1658 dated 10th March Aed 14400/-'),
+  ('14ece573-2595-4137-7dd8-1ab9c91d8e22', '2eaad00b-c4ef-88e9-7fd1-aec000937fd6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3b52d104-9880-fa94-a23b-b6c22dd7949e', 'Abdul Ghafoor Fateh ', 7, 3600, 3600, NULL),
+  ('40fde3c3-38b5-228b-dc5c-37596891a2bb', 'd1aded04-6385-c623-0cbb-978ab90b1766', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5bfaab55-565d-187f-bc60-b4d43997df91', 'Shield Enviorment ', 3, 4400, 4400, NULL),
+  ('0f1dc5b7-b8b5-236e-e6e6-09785dd8a5ae', '509a2d95-378e-373f-1af5-159297871987', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0879c254-1b68-9247-8595-505cdc8b090d', 'Ram Binod', 8, 3600, 3600, NULL),
+  ('cb2d8024-8f93-a24f-ff23-65c3ace31adf', '1665d88d-6747-fa3e-c3bc-6108cd525908', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8776643b-0121-95ed-4479-aeff2b370f92', 'Safeer Khan', 6, 3850, 3850, 'Srinivas and Ariva for 15 days'),
+  ('e9744efd-af01-18e9-5d1d-5465f0b5c40d', '70e5a169-507c-8009-418b-6dadd3a35c23', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f54c285f-5754-6f0f-913f-809ea2d22b20', 'Satveer', 8, 3600, 3600, 'Cheque # 1658 dated 10th March Aed 14400/-'),
+  ('dcc608d0-2306-520c-f65f-65164367dd1b', 'fd094814-b143-edf3-d1cf-3000570f1458', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '39cb122d-dfcd-5e5c-e2d2-3f6ab04531d8', 'Mohammed Didarul', 8, 3600, 3600, NULL),
+  ('bda62e07-2d31-50fd-294f-2d1cba9354bd', '8c4a62a3-4442-a648-40b9-f1f1db325944', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 3600, 3600, 'Cheque # 850381 dated 13th March Aed 21600/6'),
+  ('98d59348-9d96-d721-3bfb-c77259bf3b9d', '38530999-d005-8917-e106-d3a41b3f8af4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7f61e2f0-4931-f106-e402-20c0a7169b56', 'Camp Office', 0, 3600, 3600, 'Mashreq cheque # 1015 date 15th March Aed 14400/3'),
+  ('0a76cdfd-ed97-8c3f-1b60-d27ac001ab74', '352d5b11-a0fb-3036-0c84-b0220cc21836', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'cd3ddd83-b368-c82d-e638-68c4fb4a8f2c', 'Ram Avatar', 6, 4000, 4000, NULL),
+  ('b76a985e-d930-c633-d8e4-d10683055cd5', 'ea2727b5-57fe-28d9-dd7a-c3dd9b001b19', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '83b474a0-08b3-4b62-1acd-9ad7b1c96d58', 'Habib Ur Rahman', 6, 3800, 3800, 'Ali Hussain for 15 days'),
+  ('b715d39c-7eeb-edd9-cec1-38ff43f40be2', '3682ec1e-8155-30fc-3bb3-a218f4426c93', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b1dc6056-9142-593f-a39a-efde72fc2e29', 'Md Rabiul Islam', 6, 4400, 4400, NULL),
+  ('3d1317bb-5384-ab24-d104-a36e8411ecbb', 'ebefaf98-88de-c1eb-6c30-782213aff93b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0aa726bf-2305-e9c4-0ada-e2031e79fc74', 'Ashwani Kumar', 6, 3600, 3600, NULL),
+  ('59917728-7d42-b260-08fb-83b3e166945b', '9c71e671-b7e8-6cb1-eafa-6ea92bd6df2c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '20d5232f-c922-9180-f749-6d612d71232c', 'Kabul City Restaurant', 9, 4000, 4000, NULL),
+  ('53035843-7953-add0-ca04-b17011e23fa2', '782e829b-3081-47fd-ae7f-6cac4f6c0c4e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8883309b-28a2-4d88-b50f-8a332a94bda9', 'Naveed Ahmed', 6, 3800, 3800, 'Md Saleem for 15 days'),
+  ('d3acaaee-b37f-1a35-b6e9-59a9a5790d49', 'a1a846bf-f9a0-a10a-bd2b-5f14a722ee82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3d4be57f-2dff-ffc2-41f0-6292ea616e5b', 'Birbal Kumar', 7, 3600, 3600, NULL),
+  ('f1fbf35e-bebc-b787-aba7-5f490017b56c', 'cded375d-0b2d-7a7a-bb74-edb5d8cc71ab', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a6620ac1-25f9-c197-48a0-45ab91bf4556', 'Goran Paswan', 8, 3600, 3600, NULL),
+  ('f000d7ea-f168-1ecc-6b37-724b1c064bfa', 'fc2f541b-b0f8-f704-43ff-9282ad5c02f2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 4000, 4000, NULL),
+  ('e5b5aa1c-d404-8349-1137-869a59a133ee', 'c91a0840-b503-08a1-4344-8e39b328dfb8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'db28b411-14ec-567f-a937-1a6708b0a5e4', 'Jay Chand', 7, 4000, 4000, NULL),
+  ('c0b969ca-9d5b-2852-1a70-93242f4db3f8', 'deaadd04-de52-2859-605e-0da9b074dd5e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9a8288af-a7ea-49d4-0d1b-ccad4e3f75f8', 'Gaurab Bharat Singh', 7, 4400, 4400, NULL),
+  ('337b8be8-2919-04ab-7a2d-ed4104d2805d', '65f55c43-9d08-404d-1940-181189b9751c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7b9bc8a8-9f67-233e-c87c-e8c85f2043f7', 'Ayyamperumal Jothi', 6, 3600, 3600, NULL),
+  ('1039dcc0-4bca-351f-47b1-d29bdbd183e1', '047fc15d-48e1-56a2-e9df-95782085c8e6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '08302e39-5f38-9f68-8577-e9ad673a85a3', 'Krishna Mohan', 8, 4000, 4000, NULL),
+  ('fdd7f373-76d6-1cfe-6a78-650af8111e93', '867313b8-c4a3-8bea-88d9-0d30b48125ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 5, 3800, 3800, 'Received in Advance'),
+  ('4df78cef-9383-4a0c-0a16-d69c0a0c11b5', '97c95579-48ea-b5a8-9d83-2c7ba4cea152', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'c3cc208f-a085-5dd2-00b7-93f2ba83107f', 'Sipon Miya', 7, 3600, 3600, NULL),
+  ('d303de15-4e48-7d32-e9da-5c7c20815fc6', 'aed257d6-dfe8-ec27-e831-4738fa4c663a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '12784e82-d227-0797-ed85-1fd5e9030c0e', 'Ram Nath Yadav', 7, 4000, 4000, NULL),
+  ('39cdf07d-3fe7-cd9e-b64d-b9ee19b923cb', 'eb6ff1b8-e1a5-fd13-aca2-f82f28f4a5ba', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '6ebbe096-03c8-1c04-d3eb-55ba3f816aeb', 'Jawala Sahani', 8, 3600, 3600, NULL),
+  ('1e486b8f-0172-9a11-583d-be775cff4236', 'a1f4bb07-7d21-ed3b-a99e-32f293040a9a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '747032df-da1e-23e3-888a-651b71c0b593', 'RK Touches Tech Service Co', 8, 4200, 4200, 'Laxman for 15 days'),
+  ('a6ba0297-6f80-3ba8-a016-a0aaff4275cc', 'dc78ad50-ecf9-95cd-a31b-a74d6f4952da', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1e272a40-d9cc-3240-6117-642ee39ca048', 'Pintu Nishad', 7, 4000, 4000, NULL),
+  ('24fb273e-6d8b-1222-eebf-ecc352162fc1', 'c7cec63f-d2e3-abc2-0fb8-264525c2509b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9bbf4c23-eb4c-4602-1635-ca45ec43f1b2', 'Kulwant Singh', 5, 3600, 3600, NULL),
+  ('43e36380-8d1a-2e58-8812-7bcfb626c834', '25376da7-841e-3c5a-3f35-25398fd35b33', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '806766e8-ebe1-f728-6483-ce867268dfc4', 'Raj Kumar', 8, 4400, 4400, NULL),
+  ('d1c85db6-f481-2325-d474-147806859483', 'd423b620-f85b-15a0-e085-03aa45346cc5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1387c27e-01a7-222c-34fd-3e476a55496f', 'Raginder Kumar', 6, 3600, 3600, NULL),
+  ('7b7f7420-373d-1753-161b-bda1758c80da', '4df68c86-8422-fad3-55f1-23324f925060', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '38c4c9a9-e873-eaef-3f51-682571ed4b80', 'Parsant Pandy', 6, 3600, 3600, NULL),
+  ('0ae4f00b-056b-996e-ba5e-3ba29f35106f', '56847132-41c6-b45e-7319-71ccb6d3da2e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9acf1d1d-7aea-a7f8-d5e9-e716c57d4098', 'Abdul Qadeer', 6, 3600, 3600, 'Cheque # 850381 dated 13th March Aed 21600/6'),
+  ('9a46152d-5197-396d-9d54-7030e2d4b3da', 'b4d4f10c-7a2b-4df8-d6d6-a1aef2a5d7bd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '595332b5-c046-acf8-dc43-2cc091c632e8', 'Lovkush Pal', 6, 3600, 3600, NULL),
+  ('4990437f-2e57-b486-7f40-5365d0085927', '3f5478c4-7859-11b9-7bd6-9793016bda9e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5b20f17e-a8a9-e634-26bd-ade88f17d58a', 'Mohammad Jayath', 6, 3600, 3600, NULL),
+  ('471192e3-27ed-88e2-242b-8e5e202cef97', '5c431d5f-21e1-9574-0fb7-d013514c436d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '91c6cc86-ce82-8e96-dea5-5ba0174bac11', 'Sagar Vidhya', 6, 3800, 3800, 'Received in Advance'),
+  ('9cfc303c-46f1-d2a0-2e83-6936922e2bcc', 'b23f974d-8e9e-c229-8119-611ab6b3a6fa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ae3f9216-c1ce-564f-4cd3-23c4afba84ce', 'Kadhif Ali', 6, 3600, 3600, 'ADCB Chque # 568 date 18th Aed 3600/-'),
+  ('15ed7ca2-5598-8dbb-0082-c5af0831aa95', '9e690210-2e67-88ed-4eb3-f068e6738bdd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '20d5232f-c922-9180-f749-6d612d71232c', 'Kabul City Restaurant', 9, 4200, 4200, NULL),
+  ('254539b0-862c-8ab5-da5c-24561e7f84dd', '6bc15325-a467-0c4f-5180-f36a2d7c70d8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '273cf788-1029-59ee-c642-a8048beec2ae', 'Goverdhan', 6, 3600, 3600, NULL),
+  ('0f618d57-2ed4-a2d1-746d-2584f3d96252', '8a10720a-c64e-dfcb-d449-5fc69658692d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd06d6c47-106a-2bf7-d198-eeb0d97474eb', 'Lukman Naser', 7, 4000, 4000, NULL),
+  ('c2da71ca-187d-0f24-fffa-e3f005fd5a6f', '1baeae71-583b-ee7f-23da-a168aea44e5b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'aeefcacb-2e8e-5d5a-5e65-1749993c650a', 'Govind Sahani', 8, 3600, 3600, NULL),
+  ('07b84a43-fed5-eef3-583d-ce0247d6b562', 'cf072f7e-b703-a2aa-8b2c-5f14b33334d0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 5, 3600, 3600, 'Cheque # 683 dated 10th March Aed 10800/3'),
+  ('c5da5df8-d820-4651-6795-750ab548ca3b', '3429bbcd-e39d-46ce-5389-13a4c3bbfbf1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '9a005525-4971-7809-34d5-562e0592cf9b', 'Vaitaf Tech Services llc', 4, 3800, 3800, 'Received in Advance'),
+  ('d273c473-fa95-6751-1636-fb8481a164db', 'd0eba62a-508a-80d1-1486-8b7ad5a72dcf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f259a7c2-31b3-d335-3f35-fa1a06851348', 'Harbajan Siongh', 6, 3600, 3600, 'Cheque # 683 dated 10th March Aed 10800/3'),
+  ('d0606ee3-5ca1-8feb-d4d8-3032b5cfa11a', '43b47b3d-906c-acb0-9780-008bb6ec3ebc', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'c5be0fe8-d927-432b-bee1-9bf77171e18a', 'Bhagwati Prashad', 5, 3600, 3600, NULL),
+  ('1d8c64ba-c5f8-d791-7825-f6cc30fadb7d', '92e6d6fd-c967-77d8-2cc1-24b0ac8fad6c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47ab4d89-bbf8-64a6-17e2-2255562e60cb', 'Kailash Chander Bhagwana', 7, 3600, 3600, 'Cheque # 683 dated 10th March Aed 10800/3'),
+  ('d17fe3f8-de81-cd4b-9dc8-1eddaee881d2', '3ee924de-7298-851c-d1f4-e05d53dc9039', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3800, 3800, 'Received in Advance'),
+  ('13fe77ba-2b18-425a-e496-80b0ca75cfcd', '800a1b31-6514-23a7-d4ec-eabce5c781f8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8c6fb3d2-5d96-ead0-de92-bb4611f808bc', 'Ravindar Nishad', 6, 4200, 4200, 'Suman for 8 days'),
+  ('da24c02f-86cb-1b5b-8a41-7e49b6ee7021', '518369ee-947d-2fef-bd4b-de0863af5a6c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 4000, 4000, NULL),
+  ('5712e405-b621-a1e6-99e5-0ff56ba1a178', 'c3621ca8-8b9e-f239-2925-936844258502', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '609b1b99-b7b8-4b2d-668b-5b96d5aab8ff', 'Mohammad Tariq', 7, 4400, 4400, NULL),
+  ('659a4022-9457-c9e3-723c-e31533705533', 'f61a86d8-cc2e-bf71-48eb-71e5eec1e842', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'c4f8bd3f-096c-69bc-714e-485a6b885a44', 'Sandeep Singh', 6, 3600, 3600, NULL),
+  ('a27edfa3-cb80-a2c0-0a9d-5330f099009a', '8142522d-3c8d-7297-b7d1-2a13769ad658', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5b6d6b2c-63d9-540f-8734-569d8d2d64c8', 'Ottam Choutian', 6, 3800, 3800, 'Janak Sharma foro 8 days'),
+  ('79ff7732-2872-c97b-107f-409efda80d2a', '5aed8914-b486-d914-c082-d8ecaf68d98c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4fbf7bfe-c846-a479-de17-eebc054b709c', 'Mohan Lal', 7, 3600, 3600, NULL),
+  ('8df2c87f-b6d9-ecae-2920-a50a8b0a41be', '2de01cbd-d3c4-bdbb-1cdd-278dc632a0a6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'dcf9efeb-84d0-6bd9-5c9b-e81043b771c3', 'Mohammad Shakeel', 6, 3600, 3600, NULL),
+  ('e5329af9-63f7-24e7-09ae-5297d6bd2634', '2be026e5-f73a-fb07-cd65-2e287bc9dfd8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4b5d3c60-4c35-5391-3b31-726b97a483bf', 'Sunil Kumar', 5, 3600, 3600, NULL),
+  ('95a2f130-c622-0b15-dd3d-db43dd9f33df', 'e2239e34-24c1-d02f-7e13-4203619c58b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '46e7a7f8-158d-2219-09db-e65fb19247c5', 'Meva Lal', 7, 3600, 3600, NULL),
+  ('325efe2f-5525-57b9-78c7-ce8b11cff4a4', 'fe4026d8-c0a1-707d-cc2f-6cd7d25a2793', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'de5ee086-228e-537b-787f-8c50e602fbb9', 'Bhubinder Singh', 6, 3600, 3600, NULL),
+  ('28505710-7231-fa0d-cc50-4ab2a433e58f', '02e56c2b-ba5a-ff5a-c415-f3074a96593f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '706de5e7-6ee4-03d9-dcb3-a8b054567ea2', 'Baljit Singh', 5, 3600, 3600, NULL),
+  ('fe5a7365-fcd5-c34f-9c0c-5e50e0aba596', '7f92ba46-9620-170e-3285-0dad1d3cea21', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd87e9ecd-9662-a300-bfaa-6960617dd7d5', 'Ram paraveesh', 7, 4400, 4400, NULL),
+  ('29e03c67-6250-e468-88f4-eb4223d65864', 'ff7aba55-1332-1df9-a61c-db0842c6e1bd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'fddcc892-421d-1b8f-b4db-bf119ab69ee1', 'Surender Kumar', 6, 3600, 3600, NULL),
+  ('23e98bb3-c789-d0e6-6341-58237ba9b3c4', 'c44faf6b-a4b7-49f0-76ea-edd23cc91635', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3851cc69-7f11-7b18-bf3e-2d4f0a526f59', 'Manik Md', 7, 4000, 4000, NULL),
+  ('0b7f0099-d49b-9e27-983f-2f9afde81a99', '14a9a0e1-abdd-7dce-7a26-717ca845c8ae', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1a63bc4f-43f4-95a6-8609-ccac82edbb57', 'Subahan ', 6, 4400, 4400, NULL),
+  ('d9315b63-ef89-a986-064b-d4db80defb61', 'c6f926d0-02e3-899c-0b84-7ca2f14a962a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b7bdf238-e345-bc0b-4768-36df93cf241f', 'Srinivas Thotla', 6, 4000, 4000, NULL),
+  ('dfc6cceb-09d3-b952-58fb-feedc20ae99d', '7c6ceadc-1f6e-e656-2e93-eb5f0e0cfe88', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '94d3913d-b560-631e-558d-17d2ec4714bf', 'Shekhar Chandra', 8, 4000, 4000, NULL),
+  ('f2637855-b272-4535-aef4-eed1d73d73a5', 'c5811b91-7291-429e-37f6-fcf8a1f0f804', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ce0add42-0bcf-03d1-4349-8559c39503e5', 'Md. Arfat', 6, 4400, 4400, NULL),
+  ('d154b661-d9e8-1fb2-4ed2-4422758118cf', '4a14ca0d-63c2-8914-9025-69980ec6d959', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '72ccd3bc-6171-8c91-7a51-1f6a3f72a6e7', 'Ramesh Kumar', 6, 4400, 4400, NULL),
+  ('df2bc7f7-5739-baa0-074c-9096088622c9', '663cbb86-bb75-70d9-d4a2-6bdf2c1d6db1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4646a30a-39f2-fecd-bd4b-b3a9c1059103', 'Faisal Ud Din', 7, 3800, 3800, 'Ravi for 10 days'),
+  ('606e7049-5e4e-08ff-a37d-6016537d9716', 'ab31a872-9600-055e-593d-9d26fd4029fd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5b0a8148-06ba-91f5-84bf-dc3879c7a8db', 'Babu Lal', 6, 3600, 3600, NULL),
+  ('83e7b9b5-6112-9cb4-18d2-291f0c4ece0d', '83e28e95-a5a4-d75f-ae39-4f96c74e561a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5a7638cb-da73-2ae2-1e1e-4f845bff63a7', 'Angreez Singh', 5, 4400, 4400, NULL),
+  ('9b094b8e-d753-9456-b2a6-20c0ec7571ec', 'ffd3bcca-4c6a-137e-915a-7f0ba2916764', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1fc5be36-3ad3-4e00-ea33-0922fc1c1981', 'Nand Kishor', 5, 4400, 4400, NULL),
+  ('5e9893c8-348c-ebd0-5446-2004393c87d6', 'f47e7f7e-c689-5506-216b-4511b456a7d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'fddcc892-421d-1b8f-b4db-bf119ab69ee1', 'Surender Kumar', 6, 4000, 4000, NULL),
+  ('09742f88-d0c8-a128-820a-2fede0bd57ed', 'c73045aa-a330-fe60-5b28-b69784d50bf4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '13394146-0147-164f-22fd-b0a4368eb0a3', 'Gangadhar Gunda', 6, 3600, 3600, 'Transfer in DIB on 11th March Aed 3600/-'),
+  ('1b877cbe-cc73-3ded-9f3f-3281a87ce223', '36f726b4-cd46-5f6b-487b-496470ad1839', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'd4f71aca-4dac-ebd7-83bf-a065257e441e', 'Palan Swamy', 6, 4400, 4400, NULL),
+  ('2796864b-217d-47cb-39f4-b3f33d882b43', 'c87e0938-998f-0173-bfa5-eb1f27452bc7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3654b579-b7a6-6d09-56de-9caedc826ee6', 'Mehmood', 6, 3800, 3800, 'Mohammad for 15 days'),
+  ('d256f40c-1361-e456-3153-44fd483e27a8', '382825ab-5ef8-d3a2-c0a6-2f22d27f0a27', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b5bc9254-e958-7a5e-2dae-c2a8833f2a6f', 'Sobahan ', 8, 4400, 4400, NULL),
+  ('6564aab2-a8bf-104e-15bc-087d2d1effef', 'd83df73a-6c78-7e6a-5b76-13fc544c2e53', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1024e495-a6de-94d8-697a-5c768169f004', 'Srinivasan Asokan', 6, 4400, 4400, NULL),
+  ('ff152f4c-9bda-03fc-3426-e6ed6c40e5aa', '8a68e564-c2f7-496a-eb51-de4044da05d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 4400, 4400, NULL),
+  ('7422be78-4b74-b47a-7a68-4cb574991c34', '9fc9eacf-1ddc-f6aa-d005-52a919bfc00a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3800, 3800, 'Satosh yadav for 15 days'),
+  ('8e2c8fe6-a0c5-14f9-ea43-1f27821d44e4', 'dcb8740c-9cb1-4061-1e85-04559caa3edf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b5d7b02c-af0a-214b-c1a7-361c17df5934', 'Ramesh  ', 5, 3600, 3600, NULL),
+  ('2e2ce5c0-eb75-d6bc-6253-fa06b3bdd406', 'cd137f67-442b-cbd9-7a9f-145368034af0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '92f819a8-53ef-990d-888d-2a2fd9fa58ca', 'Mubarak Ali Khan', 6, 3800, 3800, 'Lovkush pal for 15 days'),
+  ('31e09193-9f8c-f474-0af4-159a1fbcf198', '4425dbb2-cc46-3d35-e73e-accf350758be', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b55c6241-09ae-79f9-37e2-bba147c7b48c', 'Rach Bal Singh', 6, 4000, 4000, NULL),
+  ('06b7508d-3748-4d69-d85d-83a19ce89adb', '91ca9e43-b4e4-c9ad-cbb7-715a40cccadd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4d0eb48b-ff8c-464f-6b04-c59a4080f285', 'Yeshu Patham Seewan', 7, 3600, 3600, 'Cheque # 02 dated 15th March Aed 3600/-'),
+  ('97219435-d5c1-e7aa-6b34-b7878e2d416c', 'ca80c65a-57ab-9752-d53f-aa793f457d4d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 4, 3600, 3600, NULL),
+  ('7e8906c4-2a6b-a8ad-2759-77cb1d30a296', '1371b730-741c-5d7c-d5b8-022245fb50d7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '1c31881a-f88a-f58b-2e7f-603feb45b326', 'Ramdes', 4, 4800, 0, 'Wael & Elhety to discuss, finance to update accordingly'),
+  ('0ab9f0ba-530a-db37-93e6-b456ad91b1ab', '9e907398-a6cf-3f30-c246-05addcbfe3a4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'c4b10f23-71a0-dc1d-db10-78a6b8b3c65c', 'Maruthu Kaiyan', 7, 3600, 3600, NULL),
+  ('fb641c5c-f6f2-9d8b-beba-d19843d22052', '8070a010-0abd-712b-6908-de72e55bc66d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 3600, NULL),
+  ('cdca0d38-a5be-2c52-7aad-b17e278087e0', '402a37ca-d99c-1ee0-488c-5a95c34105c7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 5, 4400, 4400, NULL),
+  ('44f50ecd-cfd4-f2d6-a4e1-601316fd645a', '431b9631-6d78-2db3-c0ed-7eaa15195c4b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3800, 3800, 'Received in Advance'),
+  ('15db5099-e238-965f-8019-e9404153c14a', '486e9107-7611-bbe4-2cc1-84c2c8a09a82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '63190fd3-4b04-7abe-b94b-432447ca06ce', 'Asaithambi Kuppusamy', 7, 3600, 3600, NULL),
+  ('95d52f28-2560-5671-4f2e-239e55943306', '7b6facb4-ea65-bdd5-9098-4babcd04d3c3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5958ed1f-beee-13c6-e993-237f7f8450d4', 'Apu Haidar', 7, 3600, 3600, NULL),
+  ('ef8ff849-bd08-5a73-1f63-bb087be68451', '6d497f97-37fe-6b5f-4939-007898d5a310', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '38bbf442-a02b-e33e-3981-9cadb30311b1', 'Balwan Nishad', 7, 3600, 3600, NULL),
+  ('7d9fed91-b0f6-d38b-a649-29c872908f7e', 'cafd4367-889f-b6e4-0dcf-62159654badf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4b8e13bb-b775-7b26-4f7e-8c78f99a3264', 'Mitlesh Yadave', 7, 3800, 3800, 'one person for 15 days'),
+  ('0af46bf6-9931-6455-63ae-0633ce48ba25', '21ac2c11-a1e0-52db-e64d-882c994c16a3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'abcbe6ac-3621-3824-5896-fe04adb49fc2', 'Rohitash Kumar', 6, 3600, 3600, NULL),
+  ('13179b89-1788-1b49-6eeb-38105c55b6be', 'f7fc872b-b4ec-45b9-c102-84d6ae76078e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '477f150f-2cb4-6695-37bb-bb09a39ed2e3', 'Aditya Sahani', 8, 4000, 4000, 'Ravinder & Sonu for 15 days'),
+  ('ef10c4fb-4a0b-3bf0-1387-c254add557ee', '5005b1ec-edfe-42ad-63e1-f40744a2a8ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3e8b7a53-fd6d-af83-2cc3-1865edb8c0da', 'Dalip Hanuman', 6, 4400, 4400, NULL),
+  ('1bb45b61-5ab5-c59a-48eb-db26686430eb', '675f27a7-898e-975e-247c-a5f7fab8794c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '566bb23f-f341-d262-a276-141755ea71ac', 'Shaji Sivanandan', 6, 4000, 4000, NULL),
+  ('3aef2b9d-7272-db92-d622-4976cbc50045', 'ca05e632-adab-e125-a5c0-42497455e67b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0816344b-3d8f-e5b1-bb69-f29e1abf744c', 'Naresh Kumar', 7, 3600, 3600, NULL),
+  ('7fbf3d0a-c51c-141e-d1fb-5b5d16f28842', '46dcf4d0-a164-1186-8503-ab679a97a980', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b36a8107-39f7-6aee-d79f-d74d6c178863', 'Jabar Qasim', 6, 3600, 3600, NULL),
+  ('e5cc1eb0-07d1-cb94-2825-571a517e7e4a', '7713d2e1-2470-e152-cfe0-1a1297462f82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '537b69c1-5931-7004-d63b-3f340e96e928', 'Santosh Alle', 6, 4000, 4000, NULL),
+  ('445affdf-d48d-0ba0-bc37-0186941435b4', '232d9f8d-8ab4-eab7-d75a-71b663a0e262', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '03d9a09b-e0e7-5d3b-ccf9-0a29dda5ba1b', 'K Nizamuddin', 7, 3800, 3800, 'Md Shakeel for 15 days'),
+  ('4d4d91ce-b6b4-2b55-9879-91aa93b7f03b', 'e67c73b1-897a-e295-9ac6-831557fd6cac', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '531639cb-09b2-5bee-6cdb-4b6b9218f7a1', 'Banam Buld Mtr Trd llc', 6, 3600, 3600, NULL),
+  ('a9b783e3-6d47-243b-f3e4-b259b36e1907', '698146dc-884f-82a7-0266-093fe8a40395', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '53c9a6c1-2bed-b43d-a0e0-1570c8144886', 'Ram Kitu', 7, 3600, 3600, NULL),
+  ('505f6a56-1eb5-8828-21cc-4f26a2c46da0', 'eab9abc9-db1e-001b-6d6a-37f22c3a9d25', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 3600, NULL),
+  ('2e64eba5-0159-b553-b7bd-6548b468115a', '5f744488-28e2-f0e1-80de-a93aa398534c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '531639cb-09b2-5bee-6cdb-4b6b9218f7a1', 'Banam Buld Mtr Trd llc', 5, 4000, 4000, NULL),
+  ('5b4e7d4e-58d1-4d25-1506-eb14c000c9b9', '88c38b23-1a32-c9ca-b0b1-b99af8ce9dde', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('152ff284-6eec-6689-6a7f-6581433b72e8', '65aa2461-ce5b-4e3b-8ecc-4d7caf09e3ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 3600, NULL),
+  ('d12e0ce1-02cf-2308-d084-da4304e4480b', 'e8e00493-d214-691e-492d-8135afe7384a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 4000, 4000, NULL),
+  ('90d54b30-ee3c-f340-7f9b-f1efcb1b3705', 'd347a97d-2a6a-f212-b1b7-4802e4c2699a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7a0456e3-00c7-2b7e-b9b1-8052039a419f', 'Arumurkan', 8, 3600, 3600, NULL),
+  ('192cff53-2936-b634-34e2-338f5476fc22', '90bc5b8d-f0e9-33a7-d49d-587e12a2e816', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '7db06d0e-e65e-ecc4-f4a8-c3fbffd35cb5', 'Prahlad Baberwal', 4, 3600, 3600, NULL),
+  ('54f64266-f711-3d1a-6732-7e8294e655e1', '5eaa632d-3a06-7ace-9c2b-18fc3a4eb879', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('7f3f885c-d8a6-780d-6f96-3c1a1c9ca343', '36d1af28-1a3f-01d6-7945-2a4b62ba9433', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0c2d47ee-2dd9-4a74-6f69-c522618a2320', 'Mohammad Galib', 8, 4000, 4000, NULL),
+  ('da84c9fd-aa82-f3c3-5e7a-bbb5ee46f902', '6cd974dd-a343-810d-5b55-bf77af15a967', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '531639cb-09b2-5bee-6cdb-4b6b9218f7a1', 'Banam Buld Mtr Trd llc', 4, 4000, 4000, NULL),
+  ('368dc9b3-29c9-862b-3f66-2c00ee9f7a9d', '1f4f2054-b723-b524-85ed-244afb1a26f1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 5, 4000, 4000, NULL),
+  ('6b0aef80-81fe-506a-13d3-07d777b0e4d4', 'a18ee8ad-d676-e2cd-8b49-7e801dfeefa8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 4000, 4000, NULL),
+  ('262d9c48-6d17-957e-fc2b-d9a5864c13bc', '4ec112ac-fad8-7436-4c76-f1506016fd92', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '339f315a-67a7-0ed8-7343-a757be722b4a', 'Gangir Trading', 6, 3600, 3600, NULL),
+  ('fb20802e-dc85-261e-0d1a-68dcaa160bea', 'a3be8b89-d857-498d-0791-884248a1c926', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 4400, 4400, NULL),
+  ('dab321f3-5c2b-a653-b5cb-1f6c15f7f771', '725b6593-ba44-2ac9-e08e-3e4a38a063a3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'bee8793c-cbc2-a3b4-7cd7-2237dfa4be0a', 'Asif Khalid', 6, 3600, 3600, NULL),
+  ('7b61dde6-c91a-1f6b-4154-00e552ef3ccd', '314c0af2-fb6f-6c3d-e17a-8c0760337136', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'ed4e6233-af11-a733-f3e3-41c8a77c252b', 'Ram Ashish', 8, 3600, 3600, NULL),
+  ('a2dc35dd-4710-5953-8e15-21cac672e34c', 'c383c90a-6ac9-0803-f112-5f501332609f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4dc39afe-6b9f-b8f4-0c36-029a437a92cc', 'Narendra Kumar', 6, 4000, 4000, NULL),
+  ('c0250227-741e-f7f4-ea3d-19956cb8252a', '9e941bc3-1e9c-f03a-652e-8143126edf0f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '99a5b336-32a0-efaf-d98a-73d79ee08eea', 'Sreenivas Srigadde', 5, 3600, 3600, NULL),
+  ('5756d84f-ddac-f7de-d152-3ced8d8ddc87', '33277479-c5b2-2962-8d54-8afb06ab2362', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 4000, 4000, 'Srinivas & Naveen for 15 days'),
+  ('ca0aace6-2bfa-b061-a102-01e644f69402', 'f77a0cf6-a7fe-89a2-89f3-a67b49c0884a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '246f3f06-52d1-bc92-0e54-8ccf5f7324f2', 'Mohammad Alau Din', 6, 4000, 4000, NULL),
+  ('9a64bdd0-1acc-5c6c-0abe-369f9e767fcf', '1274a665-bd96-a087-1080-2a04ab77b716', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 4, 3600, 3600, 'Mashreq cheque # 1015 date 15th March Aed 14400/3'),
+  ('fa167875-b59c-216a-8eed-1508416689a5', 'da324106-f4b6-72f0-b763-8e9639981796', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '531639cb-09b2-5bee-6cdb-4b6b9218f7a1', 'Banam Buld Mtr Trd llc', 6, 4000, 4000, NULL),
+  ('0eedb222-ceac-1f84-1472-6b319f758601', '30857481-044a-dcd7-3d7b-cf31b410fc9d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3604d8a9-f659-4efd-9168-e48c0572b0d0', 'Nalesh Achehal', 8, 4400, 4400, NULL),
+  ('6f57480f-dd96-8429-cf64-6cdd7ac55fe4', '42a24dc6-b4b9-6073-ea5b-60859a40d8ad', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a2f0b399-caa3-c6fd-235a-b205fdd4d222', 'Murari Lal Ram', 7, 4000, 4000, NULL),
+  ('0c780395-8f38-3c52-1fa0-6fd7c15063f8', 'e50b800c-ce0b-fd45-7717-2e6ffd050e6f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'e5a4480a-7232-8ed2-a54a-42dbc3db2b00', 'Mohammad Sharful', 6, 3600, 3600, NULL),
+  ('1d5a42b7-eb03-7d46-5009-dc6478fa7c10', 'b0701635-a3c6-2985-7c17-da559ca85242', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 5, 3600, 3600, 'Received in Advance'),
+  ('3d32359c-a456-2a82-8d8d-9efdbc0fbd6c', '4fe7f532-9a66-bd81-64da-55ee4442418a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'febdeb6b-8a92-96cc-7b9e-63ed6945413c', 'Ram Kishan Prahalad ', 7, 4000, 4000, NULL),
+  ('230949c5-95b6-1c67-56a7-8112ca7d40aa', '941d3e98-5e23-f23f-ad5c-a9dff0437423', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 1, 3600, 3600, 'Received in Advance'),
+  ('6d6809c7-1bce-b2ec-0d5c-4f69b76c6ffe', 'b827147e-5928-e390-3d49-4687dbc2556e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '0247fa11-8b9b-528e-e01f-c23d5beb99d4', 'Banwari Lal', 7, 4000, 4000, NULL),
+  ('1a39be4e-6985-cf13-4ed6-def7785647fc', '64eac004-12dc-d288-0404-5733c080302f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 3600, NULL),
+  ('4f3d170b-e486-ae55-e8c2-82c763c01b7c', '31f5a7c7-13f2-d168-6458-e0efffa6eaee', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '6928fd2a-1ef9-42a0-9b6d-2ac0fb958514', 'Yas Pal Singh', 4, 3600, 3600, NULL),
+  ('053067ad-f774-4d5f-51d7-5d8ed7da3f14', '1d4c1ca3-79f5-9ac1-a710-43ea1c70d2db', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '3040e896-778d-e80a-bcfa-15f26eee9c05', 'Mohammad Saleem', 7, 4000, 4000, NULL),
+  ('feb25476-a5d8-50a0-deac-0c69ce518662', '48ca3a71-f155-09bf-3357-395393c2f505', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '297ce70e-d88f-6f29-1854-e510f2602ee2', 'Carpentors Technicals LLC', 7, 4200, 4200, 'Mahesh kumar for 15 days'),
+  ('510cd777-5ebe-0771-03af-60b3a49dada2', '354d86f0-21cb-dafe-a3f1-2accb348999d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b95e9b18-5561-1000-2be7-3a23806fb04f', 'Vamshi Gasengi', 7, 3800, 3800, 'Suresh for 15 days'),
+  ('66b887be-075a-81a4-a316-2d3eefd38240', 'abeb21cc-39e0-c669-40ee-964e7b3de370', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '4409bee7-4cb0-9e53-8f48-c46e29387f55', 'Irfan Ali', 6, 3600, 3600, NULL),
+  ('36f46b83-040b-918f-62cf-6f81412059e1', 'e299747f-6e1a-f198-0924-7053a6e424e5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '075fbe4a-97c0-273e-e648-67e8500b3406', 'Balwinder Singh', 6, 3600, 3600, NULL),
+  ('c27097e3-9ba1-97a6-2861-6048db850843', '352ed3f3-3f1d-9f4b-10ac-0b8dca1e0b48', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'a80a7a8f-a4f2-b36c-4ffb-e5841b22df94', 'Guman Khan', 6, 3600, 3600, NULL),
+  ('1f04cf12-ea04-198d-2954-e7b110c30633', '28982004-3bc4-1964-e0c1-0a6605a17278', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '951a58a5-d716-a14f-2d8f-7e88dbd76ffb', 'Rakesh Nishad ', 7, 4200, 4200, 'Ratesh Nishad for 15 days'),
+  ('fcf05708-ddb0-c5d2-6d49-524177812235', 'bde2f5cf-5ff2-a977-99bc-2f0f028684a1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '30907c7d-b7fd-9df8-98f7-d1c9bb1720e8', 'Raj Bahadur', 7, 4000, 4000, NULL),
+  ('568c03ec-f52e-a0ad-349b-90f39a1ca3e0', 'ba40c1be-4276-3815-69ab-2a1f6160e064', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '2c35c035-82c0-1696-669c-ef405a9c3a48', 'Ram Saran', 8, 4400, 4400, NULL),
+  ('ef1bde9d-92de-49e2-c5e7-bb4aa27e7289', '792206f9-1146-facf-432e-2b7a3b1cfe13', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, '8bdab781-4c32-98ad-c6b8-120efad8e0cd', 'Sanjay Nishad', 7, 4000, 4000, NULL),
+  ('2d45a442-2e5a-0c05-da75-60fbe9e0b845', 'bca8fbbb-e84c-1554-3666-c42fc83fb399', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'de3556d7-e674-66aa-9e05-f429e251ea51', 'Vijay Prakash Yadave', 6, 3600, 3600, NULL),
+  ('f9205f7c-fbf8-972b-b6e5-9610df6b64f1', '7078bf03-8c60-6ab7-d542-bba7214141ea', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'b8cc9f74-52af-bcc3-0df8-e18d430fd337', 'Daulat Sahani', 7, 4000, 4000, '2 person for 15 days'),
+  ('f10d4705-0507-4c48-1eb9-8e935da27534', '9909495b-f777-53fd-4136-d5b334a161b7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 3, 2026, 'db2c9fe5-b79b-b6ef-f31a-fedf4efde19c', 'Prem Sagar', 8, 4400, 4400, NULL),
+  ('df9d02d7-c5e9-50bd-cf8c-fec86fa01e18', 'afb9295d-0f46-c9ef-526f-b7434db9edb2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0054ff71-622f-0728-8c05-4341fb89805b', 'Mahmoud Attia', 6, 3600, 3600, NULL),
+  ('3c20a4ab-4451-1ffe-5959-df0acbf1388d', '966c9cf3-97bc-40ee-c747-c39f0508e76f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1183f671-709d-1ef1-263d-2014e0abc2fd', 'Pradeep Kushwaha', 7, 3900, 3900, 'Monoj  for 15 days '),
+  ('2503aef8-1b43-c8a0-aeb1-74eb1dfddb82', '639a879a-efa8-6d4d-2b0b-5d7f49c980b6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5ca756a5-e145-2188-1d20-dc4c54e9ecda', 'Shakil Khan', 6, 3600, 3600, NULL),
+  ('4a5a91c2-7d69-9d99-5033-18e64ee6e803', 'fb074ec8-0244-31d1-def4-927c1840cc95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7c949679-7cb9-f2eb-6f93-fef5083ae55c', 'Lohithak Shan', 6, 3600, 3600, NULL),
+  ('73910836-82ec-842e-d453-63a0a3138510', '82e78c66-79c0-d935-55c1-b7806329a028', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8e3e24e1-9880-681b-fb28-dbe0645ebf7c', 'Saha Alam', 5, 3600, 3600, NULL),
+  ('8fcc6d0e-71c3-bb58-4f6c-c4ed9e1c1bde', 'daa4a283-041c-679f-c20b-a0a2e09d31d6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '00fefaa2-7d85-6cf4-bbd5-d78153edd5eb', 'Technofin Tyres', 5, 3600, 3600, NULL),
+  ('fd181735-a230-e0ba-3620-1bacbf75a3be', '5f97aa1c-ca90-cfa8-4584-1e811601892c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Mohammad Rabiul', 6, 3600, 3600, NULL),
+  ('b143cb14-a0f9-a7ea-f1d6-831d5895f437', 'bb3d6432-4b19-3f99-5c0a-0d6a045aa3c9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Shayam Naryan', 7, 4000, 4000, NULL),
+  ('5ce24958-f1ff-1d77-e79a-d39cafd35116', 'a1be2fa1-347e-bb93-5217-ba4ba5e07cba', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Akhtar', 8, 4400, 4400, NULL),
+  ('170acc18-6e5e-3d09-0e64-efc310408feb', 'dfbd6883-fe8c-478e-7bff-931f0df1c192', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '685974ba-23a0-e7a9-d86a-f8279fd7584f', 'Mohammad Ibrahim', 7, 4000, 4000, NULL),
+  ('d60719ac-d1e2-5959-9f63-22a67a534d7a', '63b29e7b-8105-c7b8-fd4b-04512e775fc6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Gursewak Sing', 6, 3600, 3600, NULL),
+  ('a1148c4f-9478-853e-f6b4-4c2064b36855', 'eddf1c6a-9f2a-8ca4-7c7d-231d0fc84b95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'eb5357f8-4516-3a27-449e-33127a35b68f', 'Al Junaibi/Hartoshi Cont', 6, 2700, 2700, 'Yearly Contract'),
+  ('55c310f5-e36e-b053-9672-744c7d49370f', 'cb5ff1ea-0f89-4709-0fa1-0eda416d7e37', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'Amman Syed', 6, 3600, 3600, NULL),
+  ('9276e164-8da1-636c-cfe9-6b0911b1c458', 'bfc79d9e-b8ca-b7b2-a93d-8115f58f2f20', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'Amman Syed', 7, 4000, 4000, NULL),
+  ('69360d71-4944-ab01-9390-b87089052b48', '3f7ce984-49e6-c584-5996-9d140c5f732e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3600, 3600, NULL),
+  ('44dbbf7b-5fe5-debd-7df0-60b585cbbb81', 'deb1ea24-5697-2bd6-5ae9-09d1b83c0826', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0d5543fd-122f-d638-ac1e-3d43b02a7ca8', 'Tariq Khan', 6, 3600, 3600, NULL),
+  ('eb0f539b-dd47-8335-f906-a0ffbccbc5d5', '891aa768-29d1-fd6b-bdf2-45144f1ecd4e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4f11f76a-d9a9-a746-b204-3361f37bba41', 'Camp Boss', 2, 0, 0, NULL),
+  ('dbf412a8-6575-8211-2dd9-590d2d1015cc', '484bad10-d73c-d15c-c784-d198171fe4fe', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9ede4cf0-d4d8-34f4-7cfc-908413567751', 'BGC Room', 3, 0, 0, NULL),
+  ('d4d3f00f-323a-41e7-eb15-0931e8e4b8ae', 'aa1cef9f-24cd-fbba-71c1-5cdea5569466', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9ede4cf0-d4d8-34f4-7cfc-908413567751', 'BGC Room', 4, 0, 0, NULL),
+  ('7f8313d4-2819-2758-7e48-ec3ddc351c16', '46f91a81-5fc2-d13c-105c-1e124318f8c3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('509d4eee-4ecf-de05-f1e9-60b2cc4dc96f', '28cf3a19-65cf-e1fa-044c-e3405f202aa0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Santosh kumar', 6, 3600, 3600, NULL),
+  ('0611ba30-f7d2-6ac9-28c8-d2f8ac7c6901', '2fdb26bb-6ac1-907e-6e77-1d85582e0e67', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1387c27e-01a7-222c-34fd-3e476a55496f', 'Raginder Kumar', 8, 4400, 4400, 'Advance Aed 900/-'),
+  ('a2a0e4e8-4154-3822-424b-eb81d27c6454', '31cc4f09-de61-d084-2a1e-33d68ff8cae7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '113cb6e6-1dda-a5f7-8eb6-c2369e10ab3e', 'Bhem Kumar', 8, 4400, 4400, NULL),
+  ('ef7b9991-3e41-3139-1ba7-9de4b9a3d0b9', 'd40141b7-2612-53a7-74d5-77aba80a74a5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '870b4bba-60b6-b20c-0ef9-15e9adb969a6', 'Md Ali Hussain', 8, 4400, 4400, NULL),
+  ('271b9fd6-6c4a-c4d8-f6a1-1184eaa06bc1', '1d607376-ce29-3e8d-77c2-7e35fb677bc0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '746c6b07-54ce-5770-84fc-83fa6515e6ec', 'Shahid Cargo Transport', 8, 4400, 4400, NULL),
+  ('46e55b29-3dce-1402-6b8a-03c9c88e972f', '13bc7d26-73e3-cc8c-7067-53f6527e3b95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'Mohammad Rizwan', 7, 4000, 4000, NULL),
+  ('14b7deed-8e7e-a8e1-b430-1063961cf55a', '33ac0947-3d5f-1fe1-45dc-3d0f8a045689', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Wakil Singh Chauhan', 7, 4000, 4000, NULL),
+  ('d324e151-afd4-cda1-be79-dcb1088d7c98', 'e93c243b-da67-bd88-7796-c2c08b39bbd8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Gulam Murtaza', 8, 4400, 4400, 'Yasir for 21 days'),
+  ('9a0f0fbd-5a85-7733-b9c7-9f33da5e7803', '4ae83134-9b12-b7a4-4bb9-ac228d09eb91', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b5d7b02c-af0a-214b-c1a7-361c17df5934', 'Ramesh', 7, 4000, 4000, NULL),
+  ('759ba3f5-d70a-2c29-43ef-aace65c80ca1', 'ced50117-9886-a6a9-04c0-5ad7d7fb1651', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '609b1b99-b7b8-4b2d-668b-5b96d5aab8ff', 'Mohammad Tariq', 8, 4200, 4200, 'Umar for 15 days '),
+  ('319cef03-a148-b127-8b32-821d63168856', 'feddd0ad-f2d1-9ebb-09ec-b60554289e4a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 6, 3600, 3600, NULL),
+  ('d72ac502-d48f-d14f-6ce7-0eaba27e9993', 'e8e55649-9eb2-0b5a-db57-ec9a33f30141', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 6, 3600, 3600, NULL),
+  ('7323d748-177d-9f53-c82c-c17ad62f7e25', 'b3d55cb2-c797-f403-868e-cc4abf76de56', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 3800, 3800, 'Abdul Ghaffar for 15 days'),
+  ('95bcf3f6-9a7b-785b-cebc-61a6157d9087', '1d3d79ec-ea48-c6f7-a2e3-02cf946167e1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Inderjit Singh Ajith Singh', 6, 3600, 3600, NULL),
+  ('c6fe4b2e-d4b9-97ad-1644-50d7c3e1bdb1', '6b7c6537-a0a0-6f14-12d3-8363d25466aa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 3800, 3800, 'Rasheed  for 15 days '),
+  ('4b7274bd-fd22-105b-a5d5-7e4a7deffd34', '72cdf895-c03f-3fa5-9a10-e6fa36442a0e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Half Million Technical Services', 5, 3800, 3800, 'Adance Received'),
+  ('0e5a86f4-7b7c-668e-a46a-4b3cc3d93f81', 'b0833955-7849-e241-c194-c284a3bcc484', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Lakbinder Singh', 5, 3600, 3600, NULL),
+  ('18290f81-39de-2ea3-7b74-c19d56007f6a', '158f8bb1-2bc0-9fe9-0da6-eae218761043', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Yasir', 8, 4400, 4400, NULL),
+  ('47be90ed-9d21-7322-a6c9-3c51fa9dd6e4', '65fa4618-cb64-ea37-cea7-8efead2d311c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '2abaae2a-eb0b-afbb-9a40-24c896da3da2', 'Ram Nivash', 7, 4000, 4000, NULL),
+  ('68c36c7c-d450-27d3-671e-600c8cb6cbe9', '90d126ce-1219-ee3d-bd49-ee0cfb3f4122', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0748c6d4-bb5f-f967-df34-c7553ea8ef69', 'Ashok Sahani', 8, 4300, 4300, 'Jitender  for 15 days '),
+  ('0f80ddfd-1e0f-e685-9a4d-3238d8cb2ee5', 'aeb5312e-c1c9-4d26-6586-9e7aebb2c165', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '2fd21f46-a9ec-dafa-75c1-6f762c69fdad', 'Moti Lal Gupta', 8, 4400, 4400, NULL),
+  ('bf1baac3-26d9-5316-f74a-2ce27bda0da3', '92581ae3-c1a7-47e6-bde4-5dc27fa9971e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'cb878ac8-086c-20d6-4d98-448d83638379', 'Ram Niwas', 6, 3600, 3600, NULL),
+  ('d15baa80-e0ed-a7e6-2ddc-431714a8411d', 'a3955de3-b764-316a-16af-5ecb5e3d28b9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'Mohammad Rizwan', 7, 4000, 4000, NULL),
+  ('0fd87098-d36f-c8b5-a45c-4a1a58c1cc8c', '6244dfa6-9b1f-8e8a-27ee-9a29c716cbc8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'Idear Star Tech. Services', 6, 3600, 3600, 'Cheque # 136 dated 10th Jan Aed 7200/2'),
+  ('38c8acdc-4fb1-d349-91d5-bf477162b0a6', 'fb3e8df1-4144-dbb1-4356-703cd2179a2f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'ea542e0f-4767-bf79-bb48-6362fea41e0f', 'Abdul Rahman', 6, 3800, 3800, 'Abdul Rahman for 15 days'),
+  ('7a05854d-7b09-59ee-8f11-f8ced81f00fa', 'c249f47f-74c9-068e-ffd8-631df447b97f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 5, 3300, 3300, 'Yearly Contract'),
+  ('d83bf5b1-93cb-9142-be55-bb0d1c72e704', 'a29072b1-f48a-6a73-ef45-09a69d90a40e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '256239d2-c267-ec1a-3de2-81e9a2c38de2', 'Ranvir Singh Jhabar Mal', 6, 3600, 3600, NULL),
+  ('fa0407ca-2d57-70bd-8970-013c585779a8', '5f61d5f5-db02-e039-3991-06ae41581d59', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'cbd5c850-6e43-ef5b-b2cb-7748681483df', 'Booran Mal', 6, 3600, 3600, NULL),
+  ('2319ff93-c597-76a0-ac0d-80a40d4657b1', '67ccd303-1bcd-3bd2-196c-ef3933808985', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3900, 3900, NULL),
+  ('28d1ae06-431c-924f-5845-28d8dbab6bd5', '8a9de750-5a18-dd8d-6073-d3bf4dd0bf67', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a5f537fe-038d-08e9-22c9-944c6cf1cfa6', 'Khushi Mohammad', 7, 4000, 4000, NULL),
+  ('8fba8b9b-4036-73c6-54cb-e911eafb283b', '6079dfa5-150e-6545-c46e-847de464f656', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Surendra Singh', 7, 4000, 4000, NULL),
+  ('e83d9640-094b-9abf-fa2b-e166a477e8bf', 'cb05000e-c073-a79f-a8e9-e38566730167', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Manjit Sigh', 6, 3600, 3600, NULL),
+  ('0dda65e1-e758-1ad5-4e98-b0839c69a6c6', '1f938aae-1ef9-148b-0b7c-615eeda451f3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '078ff57b-cf22-9993-a332-7c7dbbf967e5', 'Advanced Fibreglass Ind', 6, 3600, 3600, NULL),
+  ('95474409-e1ce-4983-c31f-e606960b00b0', '22a0e4c7-1583-ce0a-1fe3-de309d46b8a7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'e866c9e5-813f-352f-487f-6d88a25d8bdc', 'Yam Bahadur/Subhan', 6, 4000, 4000, NULL),
+  ('260bcdb8-2b70-ebb8-e388-7e0d7706e0f7', '2d17d6a9-a635-de98-fa49-9a2b9906a0d7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Sobhan Manpower', 6, 3600, 3600, NULL),
+  ('3299f6d4-ff6b-ed5a-e784-5722d0fc390a', '5857e5f3-1fbd-ebf5-f29f-027b96d57793', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'e5d1efef-14ea-c5d8-984b-7c5e4957b9a2', 'Mahandra Kumar', 6, 3600, 3600, NULL),
+  ('bae93c35-3531-a725-b9f3-7f85945828c4', 'e74e5ff8-dda3-a5c3-932f-8ac8632933d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'ed4e6233-af11-a733-f3e3-41c8a77c252b', 'Ram Ashish', 6, 3600, 3600, NULL),
+  ('ce08797c-091c-2173-d3a9-2825e1d879c2', '47b4b2ea-53c5-32c9-c7d5-d74e65503f6f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 4400, 4400, NULL),
+  ('63b3cddf-a456-a8b2-cb05-9a9467f3cc09', '87cfb3bc-7ca1-5596-903d-9f5fcd149980', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 7, 4000, 4000, NULL),
+  ('718c4d92-5fdd-afb3-22a4-0ff7f7acf0fa', '995aeaee-23f7-6804-48a2-2a064338555a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Sheikh Munez', 7, 4000, 4000, NULL),
+  ('2f7f7af2-aeb7-5af7-6fc9-703bf54f1816', '2496c0f6-3b29-14a6-756e-79e22449fd26', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('e7b8d20f-158a-cdca-3831-3a815d3912e3', '0ab14f64-adbe-0275-46ca-c725cad9e173', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '078ff57b-cf22-9993-a332-7c7dbbf967e5', 'Advanced Fibreglass Ind', 6, 3600, 3600, NULL),
+  ('9aab2133-d24d-e166-4255-28622f123995', '319d061f-fdef-eaad-e85b-ae17699af306', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8a8a8a2c-b103-94b2-7da1-3c093edf6f8a', 'Rasel Mia', 6, 3600, 3600, NULL),
+  ('236ac8b5-90e2-ae03-80d5-4ae7b3af2575', '6b52359b-4e65-6609-2dfc-1bf9847d5f73', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '2a7337c8-0c0c-1fae-97fa-926b5c9d9225', 'Bikar Singh', 6, 3600, 3600, NULL),
+  ('a85d05ab-ba50-9c09-f71f-a4ad9f5ba38a', '05e1be15-0a9e-b4a6-3e94-77b85d2a19b8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Sheikh Munez', 5, 3600, 3600, NULL),
+  ('4e9da9ac-27a5-ceea-35cc-fca880b61b69', '0eab6420-5ada-6ddc-5b1f-7a818bfaa904', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '74d3394f-0661-fedc-2b08-cb0e4ac16bb9', 'Uzzal Khan', 8, 4400, 4400, 'Cheque # 02 Dated 15th Jan Aed 4400/-'),
+  ('bec10446-c210-32dc-1af2-ca42491ade10', '81ada156-a7cf-3934-9c7e-7b6cc71b2c2a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Hanoy Ibrahim', 6, 3800, 3800, NULL),
+  ('52e974ad-2afc-8f92-5009-c1323ed3fd9a', 'f64fd266-ee23-f428-2cf2-9ae9f8185981', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0afd7c93-b7a4-24a3-03fd-64cbf59568cb', 'Goddu Ram Singh', 8, 4400, 4400, NULL),
+  ('4ec5f3b2-0c0b-8a84-973c-8f94b73eaf56', 'c5b61355-5422-5233-3fa8-bad4bc42c8d0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b0a76c3a-8eab-a547-8b7c-46b774276c33', 'Mohammad Azad', 6, 3600, 3600, NULL),
+  ('cf08cfa6-d086-c4a5-a7ca-994d2cd3e128', '003b331e-ea4c-9c7c-e92a-dfe9cb370c36', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('540faf9d-cb37-a84b-fb32-16ddd155290a', '5c6d3509-55a4-638b-2120-8547461e35fb', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('6695eb16-11dc-280e-82cb-bab51258477b', '45329fb1-f7f2-d428-a843-9fb2c6cf0a97', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3654b579-b7a6-6d09-56de-9caedc826ee6', 'Mehmood', 6, 3900, 3900, 'Transfer on 2nd Jan in DIB Aed 1300/-'),
+  ('ac9ea2f4-4a5d-e076-5cb3-4502958c05bf', '25195ea5-f406-fb3d-2c5b-67acd461f611', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Half Million Technical Services', 6, 3800, 3800, 'Adance Received'),
+  ('9ca73305-f155-0a19-c09d-a2d72ebd0904', 'ef12491c-ff87-46e6-7d76-88fd40a70e24', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'The Bugiders Market Trd llc', 6, 3600, 3600, NULL),
+  ('1ebaa037-4685-2ebe-f52b-c73a0c70ca1f', 'a371c669-bdfb-eb7a-7079-16a68b31440c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'f2d4194b-a193-5874-1c25-1228e9f79137', 'Rustam Ali', 7, 4000, 4000, NULL),
+  ('43da11fb-a63a-be85-d469-dbd83a332387', 'f48934de-ccdd-30b7-fd33-f9d66b377571', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Rasheed Ahmed', 6, 3600, 3600, NULL),
+  ('3a58febb-0bea-5181-3247-d016093e7fe4', 'f1e53d02-2b84-9936-2918-f54e59c6f52c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'ee01553c-0eb8-c36a-98c7-87b414be5203', 'Pramod kumar', 8, 4400, 4400, NULL),
+  ('2433f57e-6ce8-d8f1-41c8-815d85c181b1', '728d7b19-65bc-fff2-a98c-14ba78bea52d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('8a768b74-ac63-9d21-bd59-3fe4ff7ceaba', '27082b77-0512-a810-62bc-c2f95d6a1876', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 3600, 3600, 'Cheque # 673 dated 10th Jan, 2026 Aed 10800/3'),
+  ('5f9991db-7e28-f5f9-e47e-09678921f9b4', '910b2715-d5b4-e989-d517-b0687cebd9bc', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Half Million Technical Services', 6, 3800, 3800, 'Adance Received'),
+  ('e19d6573-2e8e-ebf5-961e-867f26d4d61a', '475d36a3-d167-9d23-87dc-0141d676b898', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 3600, 3600, 'Cheque # 673 dated 10th Jan, 2026 Aed 10800/3'),
+  ('7720b0ab-de9e-5e9e-39f6-37408408a23c', 'fb0095a8-f63e-8b8c-0c3e-7c47c1f8bad9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('d97a6d72-9ed3-fadb-5d26-85e131801445', 'db405e2f-b3e4-0f27-db8b-5f9c383c1d8d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 3600, 3600, 'Cheque # 673 dated 10th Jan, 2026 Aed 10800/3'),
+  ('08427840-c407-3d1e-45ef-356f841eaa6b', '0cd34626-d40d-0fe9-d2e4-18a9e221886a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Half Million Technical Services', 5, 3800, 3800, 'Adance Received'),
+  ('c9193167-d679-d373-0634-ce95981f8df6', '60b3e8d4-283a-40aa-d2db-292e733e3d33', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '466f9361-2029-f13f-879a-9d36e35df816', 'Suman Bonda', 8, 4300, 4300, 'Bhanu for 15 days '),
+  ('0dc4bd27-92ea-cb98-dc23-c55a9846d686', '0bdd8fe2-ab92-1d18-64d1-6afc8df42c55', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Jossi Singh', 6, 3600, 3600, NULL),
+  ('33f061b9-52eb-aca7-a6d5-9a54128f8b5d', '687a5c33-251e-9721-018f-acda095e7c52', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '17528dd1-186c-4878-541b-495219583d99', 'Sonu Nishad', 7, 4000, 4000, NULL),
+  ('11701abd-acba-55e7-24ce-4a8ba8749c13', '92747442-15d5-bff9-827a-e27733f696b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd160d154-4b90-b156-29d9-4c4669c7e96f', 'Murtaza Ali', 8, 4400, 4400, NULL),
+  ('f59a2a03-1645-306d-6d56-537bc794f30c', '1fabf440-aeb7-0f10-fc15-58e8b161e90a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Vinod Kumar Yadav', 7, 4000, 4000, NULL),
+  ('0fe6e597-0228-90db-5884-799654dc450d', '3b671c01-16bd-775d-d22a-8c23271f810d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 3, 3600, 3600, NULL),
+  ('91bfbff3-0aac-41ca-6f64-8b6d8deba2e8', '9fca3235-d6b6-4b0d-8f20-ec820c3adfc3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('1f0491ae-8968-0e22-b0e9-f6897fe0d38b', '3c67e7c2-1638-9868-c270-c924d843e1af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 3600, NULL),
+  ('d08d72bc-06a5-fe4a-2651-2bbca017255e', 'c86c83b7-364e-8869-c711-6a22cf6d10d6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('adb8015d-4a4d-37ab-b627-93245ba0b97a', '879072b2-016c-1890-7ccd-27745433d1d3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9b1d71a3-a7ea-a8ed-ae82-4e7e4290df85', 'Saif Ullah Tahir', 6, 3600, 3600, NULL),
+  ('9a8e4bcc-cd26-ee76-8612-496fe5b30c6b', '90d9146c-773a-d845-5e65-cf39a644a7f2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '49fe5c61-0909-2372-a1dc-6fa38f3fa25a', 'Banjrangi Yadave', 6, 3600, 3150, NULL),
+  ('0d4a1573-9f52-cce2-31cb-9cda2b45037b', '6974accc-3e8b-0070-6864-bfce9ac327fa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ranjeet Kumar', 6, 4000, 4000, NULL),
+  ('e66afed1-3948-b1e0-1769-6d98c6180ff1', '08bea999-e737-ad47-f873-9362fd5f5002', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('5352cd04-4b40-facf-68b6-928f82378f2c', '0770555e-70b8-e442-34cc-fb3e97a62455', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Bhuwan Ghimire', 6, 3600, 3600, NULL),
+  ('edfac7ed-c977-5b13-b246-93a5716c1ea6', '1bf13205-1a71-075f-b73c-7060d4a54a65', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('29256492-06dd-8e07-f1e0-7081900ecbf6', 'd95c65a3-2166-7ecb-eee5-87cc84bf82c6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Zainal', 7, 4000, 4000, NULL),
+  ('816e4537-8246-5416-9f8b-d1c0da912ab2', '0025c59e-0e63-ec52-c826-da977ea24e1d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Moayad Al Batran', 7, 3900, 3600, 'Narendra for 15 days '),
+  ('2ee34c3a-858d-a313-6d55-0042378ac2e4', 'bd7d70da-dcbf-a59d-17ba-9c6957268700', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'bbc1e9da-f11c-bb9f-2e08-382e5572fd6f', 'Mehmoud', 6, 3600, 3600, NULL),
+  ('e5aaf113-e2fa-41b9-5bb5-1d59ca2d070f', 'e36b42c2-ac25-58c9-da21-2010815c0900', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4eb119aa-8ca2-648f-4fa2-983ee323a532', 'Cleaners', 5, 0, 0, NULL),
+  ('0e2dccda-27bd-4281-4f56-cea31016ba2a', '08890c8f-fbe8-b79a-52a4-b0fcba356773', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('ed1bbbe3-b0e4-05d0-8284-51dde4559915', 'c042368a-3c44-6207-365a-5049039acd1d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ramesh Prajapati', 7, 4000, 4000, NULL),
+  ('157f38ea-e1d8-ebf1-e0a4-93c1938c5197', '1815fb97-9bd6-0dbc-3127-d0a39deeede4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5a2bd9b7-6f80-fe96-3a34-ce4121be24d1', 'Ravi Kumar', 8, 4400, 4400, NULL),
+  ('33c80ab2-de54-3191-9dec-78e6746deb9a', '7b66d66e-3639-48c6-90e7-df7a195c0d64', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 6, 3600, 3600, NULL),
+  ('c0e77555-3a02-2f76-46fc-b2b3cd37ca97', 'ac088be4-47a4-73af-aaa1-54f8c9c13e82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 7, 4000, 4000, NULL),
+  ('522a5f5b-7baa-bd98-5d1c-b4c347e99ba4', '7be371da-f089-ef95-4fa1-eaaa0b2de7ed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('5a734d3d-3d5c-4dde-d934-0489e9ff6a9c', 'f36b1f87-ce41-1e5f-628b-8fa8466efc02', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ram Naresh', 7, 4000, 4000, NULL),
+  ('546e0d76-6e42-547f-7e5b-5c07d99a533c', '0ed0cc09-3ece-814c-97e3-8af344faa997', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8ee7c5fd-f082-2a23-aa74-93463dee465e', 'BMX Cargo Co', 6, 3600, 3600, NULL),
+  ('ec7871df-8749-3559-5fda-369c9f10bf0d', 'd89eb9f5-a679-6189-8a8c-adaadf73593e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1e5bcb03-37fc-61f3-0657-6b383457cb20', 'Security Room', 4, 0, 0, NULL),
+  ('14ba9314-6e75-46da-70f6-3feb1e932b31', '3790cd41-2b73-d45a-04ba-04165964e999', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'ae013eaa-0935-e348-b3f6-5321fdf7cf1d', 'Mahendra Nishad', 7, 4000, 4000, NULL),
+  ('350ed4f2-8317-94b6-5a5e-8e8af74f2d0c', '10e1683b-4de8-b90a-9be9-9bde6c3cddf8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 6, 3600, 3600, NULL),
+  ('2098ea0c-511a-8a05-9dc5-12ec9ef9b371', '120a79c7-f7fb-d1d0-7c70-36abb4e42c3f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 8, 4400, 4400, NULL),
+  ('f27fc540-13a9-41c9-8400-119b758cd1dc', 'e2242355-c73e-fd9b-d81e-d53b72962aa4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'bf12a45a-98e1-a12c-5b2b-1259f0326cea', 'Aklesh Sahani', 6, 3600, 3600, NULL),
+  ('5e8cf023-88a5-4a3e-40f9-1253d78b5a14', '2d29da8d-36a8-b084-8ce5-67b3231c4285', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'Idear Star Tech. Services', 7, 4000, 4000, 'Cheque # 136 dated 10th Jan Aed 7200/2'),
+  ('31b50ae1-5f59-7bc4-692e-b7a593cbc91d', '082459d7-062c-db02-f54e-b721ff352c0e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ramesis Yadav', 8, 4400, 4400, NULL),
+  ('49fa9810-4ee4-d39b-843f-1e09920df3de', '6b59b050-7317-e030-421d-67429372ccbd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'ead3e8e5-740a-7741-c507-bac3e32d4141', 'Mohesh Parsad', 7, 4000, 4000, NULL),
+  ('0c13d654-549b-273b-f6aa-ed7b79d5a608', '763e532c-bb26-24c9-dbf0-48db950f9cf2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '2592ec80-7ce6-95ec-f6e6-bc27e51e3e01', 'Sangam Yadave', 6, 3600, 3600, NULL),
+  ('c5347649-aecd-a39b-27e8-65fc462e9d0a', '42f10c55-2925-b148-d2d5-ca5c7e072d66', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'ab32edcb-3fbe-1b5b-95ca-261f80ebbcbf', 'Girijesh', 8, 4300, 4300, 'Dinesh for 15 days '),
+  ('d026b52e-e467-8f2f-9105-520369d63129', 'd2b879e6-1683-15fd-9bd4-e3426c250ead', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '29c70f78-6f5e-e21e-9eb4-98c5134ebabc', 'Mohan Jumbaka', 7, 4000, 4000, NULL),
+  ('ece487a0-2e2c-5d88-3b83-9cd88a3e72d9', 'e459928e-d677-f5c9-f541-99cb2e1bea8d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'dfb5dba7-4dcb-7f57-70cb-b6671853eda3', 'Monesh Kumar', 8, 4400, 4400, NULL),
+  ('94b22121-a1aa-14f5-49d4-86fdf986032f', '83aa3fc7-d4e1-903d-7859-fd566bfed03c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a3e4d3f8-9692-3200-e762-1cb16faafd4e', 'Deepak Nishad', 8, 4400, 4400, NULL),
+  ('2947fb3e-d873-f63b-8680-1b1315019903', '0191cda6-6218-0d8f-982d-b42d5fd831a5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9b149ac9-224c-5915-978c-f274a47fb634', 'Ganesh Nishad', 7, 4000, 4000, NULL),
+  ('51911f58-2db7-28ef-4f43-72d3fbf945f1', '78d5c12f-b0be-8d92-6d83-2c0e0adb29e7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'e1c80238-0eee-453c-5de2-2b4c43b789b6', 'Ravinder ', 7, 4000, 4000, NULL),
+  ('b1ec5dbf-e7c6-d561-5a77-f7c3f89ebddd', '6fcb3d19-4a5e-458a-f9e1-92369db8dc49', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 3600, NULL),
+  ('217edf8e-84db-e2c5-c4a2-0a38df342ba8', '4dfaa332-05ec-3fd3-0233-fee27d4579f4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '2a2baa9f-a0d4-76ba-2ec7-8c701f70c748', 'Amarnath Kpildev Nishad', 6, 3600, 3600, NULL),
+  ('76c50ffc-8561-fae1-7ea0-8176bf4a1a9f', '64f8563a-f881-957c-1e2e-0efc6bc2ad5d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '51d00f90-a6d5-80e4-8b02-a573ff15bb66', 'Ajay Nishad', 8, 4400, 4400, NULL),
+  ('2808c10d-94f6-6250-68c7-bf63320ebe53', '2eaad00b-c4ef-88e9-7fd1-aec000937fd6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3b52d104-9880-fa94-a23b-b6c22dd7949e', 'Abdul Ghafoor Fateh ', 7, 4000, 4000, NULL),
+  ('e133bb33-7092-da83-e2df-991b5d622df7', 'd1aded04-6385-c623-0cbb-978ab90b1766', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5bfaab55-565d-187f-bc60-b4d43997df91', 'Shield Enviorment ', 5, 3600, 3600, NULL),
+  ('037fb061-0963-423e-4891-66c2be7dbe2b', '509a2d95-378e-373f-1af5-159297871987', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Dinesh Nishad', 8, 4400, 4400, NULL),
+  ('180c0c8d-025c-9e2f-4aab-dadd99d75f0f', '1665d88d-6747-fa3e-c3bc-6108cd525908', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8776643b-0121-95ed-4479-aeff2b370f92', 'Safeer Khan', 6, 3600, 3600, NULL),
+  ('5df8620e-a8ff-06d0-e2b9-79b2071a953e', '70e5a169-507c-8009-418b-6dadd3a35c23', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'f54c285f-5754-6f0f-913f-809ea2d22b20', 'Satveer', 8, 4250, 4250, 'Satvir for 13 days'),
+  ('32079d3b-78b7-c85a-c9a1-f1bf3524545b', 'fd094814-b143-edf3-d1cf-3000570f1458', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '39cb122d-dfcd-5e5c-e2d2-3f6ab04531d8', 'Mohammed Didarul', 8, 4400, 4400, NULL),
+  ('f51e5e06-48ae-09e5-2e8a-8351392b2927', '8c4a62a3-4442-a648-40b9-f1f1db325944', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 4400, 4400, NULL),
+  ('e7d7d645-7825-85e4-4021-a286374dd8a4', '38530999-d005-8917-e106-d3a41b3f8af4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7f61e2f0-4931-f106-e402-20c0a7169b56', 'Camp Office', 0, 0, 0, NULL),
+  ('2c5d6590-b0c7-e30e-2f7f-12986e69e16c', '352d5b11-a0fb-3036-0c84-b0220cc21836', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Kailash Jangir', 6, 3600, 3600, NULL),
+  ('41b08cf1-4b00-20f9-e2d5-4dfee840c6f7', 'ea2727b5-57fe-28d9-dd7a-c3dd9b001b19', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Rais Ahmad', 6, 3600, 3600, NULL),
+  ('730c2266-d204-1409-6ec0-86c306610bf0', '3682ec1e-8155-30fc-3bb3-a218f4426c93', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b1dc6056-9142-593f-a39a-efde72fc2e29', 'Md Rabiul Islam', 6, 3600, 3600, NULL),
+  ('8540a6c3-e91d-1c25-63a1-7bc7106737c2', 'ebefaf98-88de-c1eb-6c30-782213aff93b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0aa726bf-2305-e9c4-0ada-e2031e79fc74', 'Ashwani Kumar', 7, 4000, 4000, NULL),
+  ('c5bceab0-6b37-0d8c-25c0-f80214a7a4a1', '9c71e671-b7e8-6cb1-eafa-6ea92bd6df2c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '20d5232f-c922-9180-f749-6d612d71232c', 'Kabul City Restaurant', 3, 3600, 3600, NULL),
+  ('f5053262-290f-1869-f9b6-a4850d1ae4a0', '782e829b-3081-47fd-ae7f-6cac4f6c0c4e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8883309b-28a2-4d88-b50f-8a332a94bda9', 'Naveed Ahmed', 5, 3200, 3200, 'Imam/Special Discount'),
+  ('78ebb616-6b98-b050-609d-122fa7cb41a0', 'a1a846bf-f9a0-a10a-bd2b-5f14a722ee82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3d4be57f-2dff-ffc2-41f0-6292ea616e5b', 'Birbal Kumar', 8, 4400, 4400, NULL),
+  ('aaf46aeb-c181-54fd-dde8-d7046cc0fc3f', 'cded375d-0b2d-7a7a-bb74-edb5d8cc71ab', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a6620ac1-25f9-c197-48a0-45ab91bf4556', 'Goran Paswan', 7, 4000, 4000, NULL),
+  ('4d19ce52-89ec-0318-8289-9f9ac40404b5', 'fc2f541b-b0f8-f704-43ff-9282ad5c02f2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 7, 4000, 4000, NULL),
+  ('e7e5f654-c32e-cddd-fb99-af13312d2518', 'c91a0840-b503-08a1-4344-8e39b328dfb8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'db28b411-14ec-567f-a937-1a6708b0a5e4', 'Jay Chand', 8, 4400, 4400, NULL),
+  ('88d4f145-79dd-2572-abec-14aa035da908', 'deaadd04-de52-2859-605e-0da9b074dd5e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '9a8288af-a7ea-49d4-0d1b-ccad4e3f75f8', 'Gaurab Bharat Singh', 6, 3600, 3600, NULL),
+  ('5a48aa22-7df5-5edb-b28d-90de2e33a217', '65f55c43-9d08-404d-1940-181189b9751c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7b9bc8a8-9f67-233e-c87c-e8c85f2043f7', 'Ayyamperumal Jothi', 6, 3600, 3600, NULL),
+  ('707c735c-8c36-8f84-9977-b070083b30da', '047fc15d-48e1-56a2-e9df-95782085c8e6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '08302e39-5f38-9f68-8577-e9ad673a85a3', 'Krishna Mohan', 8, 4400, 4400, NULL),
+  ('075141c4-12fc-619e-fef9-033ca87c8f9c', '867313b8-c4a3-8bea-88d9-0d30b48125ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('1266687c-dead-9e13-40a8-944de050bd54', '97c95579-48ea-b5a8-9d83-2c7ba4cea152', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Sipon Mjya', 7, 4000, 4000, NULL),
+  ('8ba6babd-8ff2-43b4-7c0e-747d1541c8af', 'aed257d6-dfe8-ec27-e831-4738fa4c663a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '12784e82-d227-0797-ed85-1fd5e9030c0e', 'Ram Nath Yadav', 7, 4000, 4000, NULL),
+  ('13e1858c-1648-82f3-b2d8-db767f12b4d2', 'eb6ff1b8-e1a5-fd13-aca2-f82f28f4a5ba', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Jawala', 8, 4400, 4400, NULL),
+  ('10b501f5-44e6-5702-e4d4-58425e98f57b', 'a1f4bb07-7d21-ed3b-a99e-32f293040a9a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ravi Kant', 8, 4400, 4400, NULL),
+  ('a9429056-4b12-eb6a-edba-5a2201cad91f', 'dc78ad50-ecf9-95cd-a31b-a74d6f4952da', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1e272a40-d9cc-3240-6117-642ee39ca048', 'Pintu Nishad', 8, 4400, 4400, NULL),
+  ('aa8e541b-d082-504c-6276-15522db54d4c', 'c7cec63f-d2e3-abc2-0fb8-264525c2509b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Yadwinder singh', 7, 4200, 4200, 'Sarwan for 15 days '),
+  ('374f2a32-1a46-7edf-9c87-6d79b851ec75', '25376da7-841e-3c5a-3f35-25398fd35b33', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Subash Shudary', 6, 3600, 3600, NULL),
+  ('0d2c124d-e233-c84e-85fc-50fbef560053', 'd423b620-f85b-15a0-e085-03aa45346cc5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1387c27e-01a7-222c-34fd-3e476a55496f', 'Raginder Kumar', 6, 3600, 3600, NULL),
+  ('3ffd9077-a9df-ca67-5d12-9f5166383275', '4df68c86-8422-fad3-55f1-23324f925060', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '38c4c9a9-e873-eaef-3f51-682571ed4b80', 'Parsant Pandy', 8, 4300, 4300, 'sumer for 15 days'),
+  ('0ed6d958-dfe8-5af7-9c3d-b97f7c84197e', '56847132-41c6-b45e-7319-71ccb6d3da2e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Shahid', 8, 4400, 4400, NULL),
+  ('3df13c96-3d75-be3e-846b-a0fd9c078353', 'b4d4f10c-7a2b-4df8-d6d6-a1aef2a5d7bd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Lavkush Pal', 7, 4000, 4000, NULL),
+  ('5a2286e8-6f97-e79c-fb74-79b030fe198f', '3f5478c4-7859-11b9-7bd6-9793016bda9e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Kaja Maideen Jainul Aribu', 8, 4400, 4400, 'Mani Kandan for 21 days'),
+  ('fd33cbd8-bc54-8cd7-2895-76da69375741', '5c431d5f-21e1-9574-0fb7-d013514c436d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '91c6cc86-ce82-8e96-dea5-5ba0174bac11', 'Sagar Vidhya', 8, 4400, 4400, NULL),
+  ('ac9af497-9550-d767-406a-e19903a58751', 'b23f974d-8e9e-c229-8119-611ab6b3a6fa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Mohamad Usaman Ali', 7, 4000, 4000, NULL),
+  ('7dc4ec97-f9e0-02db-46aa-8b6b10d01dfc', '9e690210-2e67-88ed-4eb3-f068e6738bdd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Mohammad Wali', 3, 3600, 3600, NULL),
+  ('fd0a8f7a-c604-8416-8e23-1b7e3ec78979', '6bc15325-a467-0c4f-5180-f36a2d7c70d8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Hajrat Ali Tabbalwale', 7, 4000, 4000, NULL),
+  ('bfa516e8-67c2-9af4-332f-8284dd105b55', '8a10720a-c64e-dfcb-d449-5fc69658692d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Faisal Shahzad', 7, 4000, 4000, NULL),
+  ('02d442ac-8e21-2f7b-bce5-7ece88d68558', '1baeae71-583b-ee7f-23da-a168aea44e5b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'aeefcacb-2e8e-5d5a-5e65-1749993c650a', 'Govind Sahani', 7, 4250, 4250, 'Govind for 13 days'),
+  ('9f16b458-31df-33ac-ed38-f2ff0cf0890e', 'cf072f7e-b703-a2aa-8b2c-5f14b33334d0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Half Million Technical Services', 6, 3800, 3800, 'Adance Received'),
+  ('f35df6e0-a33b-955d-3f61-e4ebddb6164f', '3429bbcd-e39d-46ce-5389-13a4c3bbfbf1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Vaitaf Tech Services', 4, 3600, 3600, 'Cheque # 1 dated 5th Jan Aed 3600/-'),
+  ('ec2e3b86-da16-f572-c80b-9f42aa696012', 'd0eba62a-508a-80d1-1486-8b7ad5a72dcf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Viveka Nand', 7, 4000, 4000, NULL),
+  ('f5c09b1a-30ff-bc56-8346-f4b8517e68f4', '43b47b3d-906c-acb0-9780-008bb6ec3ebc', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'c5be0fe8-d927-432b-bee1-9bf77171e18a', 'Bhagwati Prashad', 6, 3600, 3600, NULL),
+  ('9d54e9c9-2559-a250-a974-aff21ea1a6bc', '92e6d6fd-c967-77d8-2cc1-24b0ac8fad6c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47ab4d89-bbf8-64a6-17e2-2255562e60cb', 'Kailash Chander Bhagwana', 6, 3600, 3600, NULL),
+  ('8fefa92f-bdb3-8546-b8d9-b09bf36995d1', '3ee924de-7298-851c-d1f4-e05d53dc9039', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('9f5e477a-f81e-40ca-91e0-451437628494', '800a1b31-6514-23a7-d4ec-eabce5c781f8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '8c6fb3d2-5d96-ead0-de92-bb4611f808bc', 'Ravindar Nishad', 8, 4400, 4400, NULL),
+  ('36540793-3463-5701-47df-8768a1095f34', '518369ee-947d-2fef-bd4b-de0863af5a6c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Mohammad Wali', 4, 3600, 3600, NULL),
+  ('b714068f-1209-c690-86de-01f79fb5934e', 'c3621ca8-8b9e-f239-2925-936844258502', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '609b1b99-b7b8-4b2d-668b-5b96d5aab8ff', 'Mohammad Tariq', 6, 3600, 3600, NULL),
+  ('dac3c2b7-574e-5bf9-f963-995c4542e6df', 'f61a86d8-cc2e-bf71-48eb-71e5eec1e842', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'c4f8bd3f-096c-69bc-714e-485a6b885a44', 'Sandeep Singh', 6, 3600, 3600, NULL),
+  ('bdf9ad85-9fcb-9652-0d5b-3fa1b4f86aaf', '8142522d-3c8d-7297-b7d1-2a13769ad658', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Anup Kumar', 7, 4000, 4000, NULL),
+  ('82457a07-a96a-cb14-57cb-7cda793a82a6', '5aed8914-b486-d914-c082-d8ecaf68d98c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Johanpreet Singh', 7, 3900, 3900, 'Mohan for 15 days '),
+  ('176d324f-9a5e-e5f0-446b-3b1104d01c3a', '2de01cbd-d3c4-bdbb-1cdd-278dc632a0a6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'dcf9efeb-84d0-6bd9-5c9b-e81043b771c3', 'Mohammad Shakeel', 7, 4000, 4000, NULL),
+  ('ecbb9c95-ebf1-b96c-dc37-e66d8b6fd34a', '2be026e5-f73a-fb07-cd65-2e287bc9dfd8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4b5d3c60-4c35-5391-3b31-726b97a483bf', 'Sunil Kumar', 6, 3800, 3800, 'Sanjaya  for 15 days '),
+  ('954903eb-73f6-66c7-075b-523557dede0b', 'e2239e34-24c1-d02f-7e13-4203619c58b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '46e7a7f8-158d-2219-09db-e65fb19247c5', 'Meva Lal', 8, 4400, 4400, NULL),
+  ('dec31fd2-da2e-9561-378c-4a995ee0a8b7', 'fe4026d8-c0a1-707d-cc2f-6cd7d25a2793', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Manindra Sing', 5, 3600, 3600, NULL),
+  ('8447848b-a285-d2c1-3c52-2e38966c4f9b', '02e56c2b-ba5a-ff5a-c415-f3074a96593f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '706de5e7-6ee4-03d9-dcb3-a8b054567ea2', 'Baljit Singh', 6, 3800, 3800, 'Lakhvir for 15 days '),
+  ('5542e429-216b-abcb-47f2-90741ea8ce46', '7f92ba46-9620-170e-3285-0dad1d3cea21', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'd87e9ecd-9662-a300-bfaa-6960617dd7d5', 'Ram paraveesh', 8, 4400, 4400, NULL),
+  ('b1c70911-87aa-cfdb-5507-57902c3675fd', 'ff7aba55-1332-1df9-a61c-db0842c6e1bd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Sanjy kumar', 7, 3900, 3900, 'Surender for 15 days '),
+  ('91cde896-717d-3a10-7de4-1a9b9517931c', 'c44faf6b-a4b7-49f0-76ea-edd23cc91635', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3851cc69-7f11-7b18-bf3e-2d4f0a526f59', 'Manik Md', 8, 4400, 4400, NULL),
+  ('3e13a18b-42ac-1850-27a8-e157f0f5f081', '14a9a0e1-abdd-7dce-7a26-717ca845c8ae', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1a63bc4f-43f4-95a6-8609-ccac82edbb57', 'Subahan ', 6, 3600, 3600, NULL),
+  ('d5d9b41b-8761-5ac0-6030-8d824e53d29a', 'c6f926d0-02e3-899c-0b84-7ca2f14a962a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ranjith Rajreddy', 6, 3600, 3600, NULL),
+  ('8edf4e6d-4137-5ab9-5a0e-90c37acb182b', '7c6ceadc-1f6e-e656-2e93-eb5f0e0cfe88', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '94d3913d-b560-631e-558d-17d2ec4714bf', 'Shekhar Chandra', 7, 4200, 4200, 'Ram Avadesh for 15 days '),
+  ('c88692f3-5157-a222-2cea-f5ddc7eb52df', 'c5811b91-7291-429e-37f6-fcf8a1f0f804', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Silambo Hassan', 6, 3600, 3600, NULL),
+  ('9c96ce2e-94f8-b7e9-f133-0bb26279d348', '4a14ca0d-63c2-8914-9025-69980ec6d959', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '72ccd3bc-6171-8c91-7a51-1f6a3f72a6e7', 'Ramesh Kumar', 6, 3600, 3600, NULL),
+  ('be13deb7-5d3a-c44e-2a8d-66241d69f359', '663cbb86-bb75-70d9-d4a2-6bdf2c1d6db1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3654b579-b7a6-6d09-56de-9caedc826ee6', 'Mehmood', 6, 3600, 3600, NULL),
+  ('29440a15-c4a8-1885-5eee-bd1c75edf983', 'ab31a872-9600-055e-593d-9d26fd4029fd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5b0a8148-06ba-91f5-84bf-dc3879c7a8db', 'Babu Lal', 7, 4000, 4000, NULL),
+  ('8046f491-8df4-325f-3b68-e524b7998a27', '83e28e95-a5a4-d75f-ae39-4f96c74e561a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5a7638cb-da73-2ae2-1e1e-4f845bff63a7', 'Angreez Singh', 6, 3600, 3600, NULL),
+  ('c43626ce-63da-e4fc-1f7a-fe91cbe5e9ca', 'ffd3bcca-4c6a-137e-915a-7f0ba2916764', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Vinod kumar', 5, 3600, 3600, NULL),
+  ('d03e68c6-6191-1258-91d8-2d2b24999f67', 'f47e7f7e-c689-5506-216b-4511b456a7d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ramratan Gordhan', 8, 4400, 4400, NULL),
+  ('6f609d5a-6235-3865-0199-872985a5bc42', 'c73045aa-a330-fe60-5b28-b69784d50bf4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '13394146-0147-164f-22fd-b0a4368eb0a3', 'Gangadhar Gunda', 6, 3600, 3600, NULL),
+  ('d85599dd-efcc-8f3d-622c-6dcd1b03f312', '36f726b4-cd46-5f6b-487b-496470ad1839', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Rajiv Raveendran Pillai', 6, 3600, 3600, NULL),
+  ('ca29d14d-ee77-30b1-efa9-53a311219a7d', 'c87e0938-998f-0173-bfa5-eb1f27452bc7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3654b579-b7a6-6d09-56de-9caedc826ee6', 'Mehmood', 6, 3600, 3600, NULL),
+  ('6ced3254-106b-7bad-3053-f6b42408c55d', '382825ab-5ef8-d3a2-c0a6-2f22d27f0a27', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b5bc9254-e958-7a5e-2dae-c2a8833f2a6f', 'Sobahan ', 8, 4400, 4400, NULL),
+  ('396dd64a-26b8-b3f8-1669-7b39a4159d9a', 'd83df73a-6c78-7e6a-5b76-13fc544c2e53', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '1024e495-a6de-94d8-697a-5c768169f004', 'Srinivasan Asokan', 6, 3600, 3600, NULL),
+  ('0efcca8d-7ee1-bda7-341d-31fc4501c221', '8a68e564-c2f7-496a-eb51-de4044da05d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('fdd9615f-ca04-98d8-9fa8-fc136cee7315', '9fc9eacf-1ddc-f6aa-d005-52a919bfc00a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('ca5e146c-e6ea-1c5e-370d-301b75085ff8', 'dcb8740c-9cb1-4061-1e85-04559caa3edf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Jugal Jangir', 8, 3900, 3900, 'Ramesh for 15 days'),
+  ('2919c241-9a66-2cd6-191a-2013621608ee', 'cd137f67-442b-cbd9-7a9f-145368034af0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '92f819a8-53ef-990d-888d-2a2fd9fa58ca', 'Mubarak Ali Khan', 7, 4000, 4000, NULL),
+  ('9c06cde7-018d-1c5e-1170-4777e3c7fff3', '4425dbb2-cc46-3d35-e73e-accf350758be', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b55c6241-09ae-79f9-37e2-bba147c7b48c', 'Rach Bal Singh', 6, 3600, 3600, NULL),
+  ('4e0620a5-e48d-b673-13eb-e4a5387ac158', '91ca9e43-b4e4-c9ad-cbb7-715a40cccadd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4d0eb48b-ff8c-464f-6b04-c59a4080f285', 'Yeshu Patham Seewan', 7, 4000, 4000, NULL),
+  ('6cb18a6f-c1f5-5d8c-6b97-8fdcf8b081e6', 'ca80c65a-57ab-9752-d53f-aa793f457d4d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('4bf6b2b5-c44a-b4a3-e7e5-8dd9a4384457', '1371b730-741c-5d7c-d5b8-022245fb50d7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'kamlesh Kumar', 6, 3600, 3600, NULL),
+  ('8c328266-ec1a-23e1-fc77-2cecdff95ee2', '9e907398-a6cf-3f30-c246-05addcbfe3a4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'c4b10f23-71a0-dc1d-db10-78a6b8b3c65c', 'Maruthu Kaiyan', 5, 3800, 3800, 'Barathi for 1 weeks'),
+  ('5c0bca38-60f0-d202-b327-fda159cab552', '8070a010-0abd-712b-6908-de72e55bc66d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('b3d2d96f-fe2d-e4ac-c6e6-dedfff19e245', '402a37ca-d99c-1ee0-488c-5a95c34105c7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3600, 3600, NULL),
+  ('32afa94b-89ee-4ffa-60b0-8cfb1d4f7aa6', '431b9631-6d78-2db3-c0ed-7eaa15195c4b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3600, 3600, NULL),
+  ('08452640-846f-365b-adda-d665be47ae32', '486e9107-7611-bbe4-2cc1-84c2c8a09a82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '63190fd3-4b04-7abe-b94b-432447ca06ce', 'Asaithambi Kuppusamy', 7, 4000, 4000, NULL),
+  ('2e8b18a7-eee7-b8bd-0ab7-02e9a1ebe4f0', '7b6facb4-ea65-bdd5-9098-4babcd04d3c3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5958ed1f-beee-13c6-e993-237f7f8450d4', 'Apu Haidar', 7, 4000, 4000, NULL),
+  ('9e19678c-86eb-d1b9-1255-ceb051c5fe4f', '6d497f97-37fe-6b5f-4939-007898d5a310', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Roshan Lal', 8, 4400, 4400, NULL),
+  ('5f3c661c-1c99-dcae-6b53-5ddea51467a6', 'cafd4367-889f-b6e4-0dcf-62159654badf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Manoj', 6, 4000, 4000, NULL),
+  ('4ea73560-9a56-d9cc-c6d7-f788eb032e68', '21ac2c11-a1e0-52db-e64d-882c994c16a3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'abcbe6ac-3621-3824-5896-fe04adb49fc2', 'Rohitash Kumar', 6, 3600, 3600, NULL),
+  ('47a75152-4ab0-6715-81bd-02a7f6bf337d', 'f7fc872b-b4ec-45b9-c102-84d6ae76078e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ritesh Kumar', 6, 3600, 3600, NULL),
+  ('4b6e7ac5-c51f-bfeb-2399-ae1b6ffd0759', '5005b1ec-edfe-42ad-63e1-f40744a2a8ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3e8b7a53-fd6d-af83-2cc3-1865edb8c0da', 'Dalip Hanuman', 5, 3600, 3600, NULL),
+  ('cc51189b-b9e9-e4b5-0c7c-edbdf924d678', '675f27a7-898e-975e-247c-a5f7fab8794c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '566bb23f-f341-d262-a276-141755ea71ac', 'Shaji Sivanandan', 6, 3600, 3600, NULL),
+  ('3c7c7b23-3ba7-2ec5-ce58-58f15be3452c', 'ca05e632-adab-e125-a5c0-42497455e67b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Rafiq Ali', 8, 4400, 4400, NULL),
+  ('17ba71c2-3d3a-5426-a662-5bcd11f4337f', '46dcf4d0-a164-1186-8503-ab679a97a980', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b36a8107-39f7-6aee-d79f-d74d6c178863', 'Jabar Qasim', 8, 4400, 4400, NULL),
+  ('fa14839b-421c-37fc-e46e-86b807f3f08f', '7713d2e1-2470-e152-cfe0-1a1297462f82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '537b69c1-5931-7004-d63b-3f340e96e928', 'Santosh Alle', 7, 4000, 4000, NULL),
+  ('68223ab8-53c4-3a12-fbca-c687fe34fd53', '232d9f8d-8ab4-eab7-d75a-71b663a0e262', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '03d9a09b-e0e7-5d3b-ccf9-0a29dda5ba1b', 'K Nizamuddin', 7, 4000, 4000, NULL),
+  ('621a9bc5-03e6-dac8-591d-75ab8c12b8e8', 'e67c73b1-897a-e295-9ac6-831557fd6cac', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Kuldeep Singh', 6, 3600, 3600, NULL),
+  ('07a00c42-260a-2209-5550-62dee42dce7a', '698146dc-884f-82a7-0266-093fe8a40395', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Rajesh Kumar', 8, 4400, 4400, NULL),
+  ('ae330cbf-b502-123a-be49-6fd34c207fdc', 'eab9abc9-db1e-001b-6d6a-37f22c3a9d25', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 3600, NULL),
+  ('a3d77c41-a216-a77f-b117-9f5b7198e1ad', '5f744488-28e2-f0e1-80de-a93aa398534c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Kuldeep Singh', 6, 3600, 3600, NULL),
+  ('c1a5d943-2198-8e80-431a-d76529e6065b', '88c38b23-1a32-c9ca-b0b1-b99af8ce9dde', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('2d151acc-e8bf-5c1a-5d90-3ef644f31c05', '65aa2461-ce5b-4e3b-8ecc-4d7caf09e3ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('c3727e6b-af66-5737-df5c-c732d7160bdc', 'e8e00493-d214-691e-492d-8135afe7384a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('bb36d8b8-1b64-8926-9d36-0bec480ebf22', 'd347a97d-2a6a-f212-b1b7-4802e4c2699a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7a0456e3-00c7-2b7e-b9b1-8052039a419f', 'Arumurkan', 7, 4400, 4400, NULL),
+  ('c597d0d3-cfe7-886b-0384-2e85ae5783e4', '90bc5b8d-f0e9-33a7-d49d-587e12a2e816', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '7db06d0e-e65e-ecc4-f4a8-c3fbffd35cb5', 'Prahlad Baberwal', 6, 3800, 3800, 'Mukesh  for 15 days '),
+  ('79cb65bd-2ab6-17dc-2325-5b7131302944', '5eaa632d-3a06-7ace-9c2b-18fc3a4eb879', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('8d10b847-61f1-c470-5dc2-56f264cbe7c2', '36d1af28-1a3f-01d6-7945-2a4b62ba9433', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0c2d47ee-2dd9-4a74-6f69-c522618a2320', 'Mohammad Galib', 8, 4200, 4200, 'Farhan for 15 days '),
+  ('62dfcaf8-8a10-5c78-24e5-50d216a87bf4', '6cd974dd-a343-810d-5b55-bf77af15a967', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Kuldeep Singh', 6, 3600, 3600, NULL),
+  ('475a40ac-fe39-8ee7-c816-cb7a3e57f6e0', '1f4f2054-b723-b524-85ed-244afb1a26f1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('2e7007f2-b9d6-95f5-50c4-05a5b4889e0c', 'a18ee8ad-d676-e2cd-8b49-7e801dfeefa8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('042fcb0d-5a57-bc88-bc12-d4b0ca555564', '4ec112ac-fad8-7436-4c76-f1506016fd92', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '339f315a-67a7-0ed8-7343-a757be722b4a', 'Gangir Trading', 5, 3600, 3600, NULL),
+  ('70f4f72b-3b2a-a928-2e34-f9aab7b8e903', 'a3be8b89-d857-498d-0791-884248a1c926', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('63d2a881-1a2a-7372-8461-6df186c4a5f0', '725b6593-ba44-2ac9-e08e-3e4a38a063a3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'bee8793c-cbc2-a3b4-7cd7-2237dfa4be0a', 'Asif Khalid', 8, 4400, 4400, NULL),
+  ('5e00e338-1732-1b56-0e3e-f526e1173209', '314c0af2-fb6f-6c3d-e17a-8c0760337136', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Jagnath', 8, 4400, 4400, NULL),
+  ('848beafa-5fd5-593e-849d-a44222b528de', 'c383c90a-6ac9-0803-f112-5f501332609f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Hutaraj Dahal', 6, 3600, 3600, NULL),
+  ('789c0afa-fb4b-bdb1-269f-14ef0893c562', '9e941bc3-1e9c-f03a-652e-8143126edf0f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '99a5b336-32a0-efaf-d98a-73d79ee08eea', 'Sreenivas Srigadde', 6, 3800, 3800, 'Arun for 15 days'),
+  ('2296be00-25f2-0007-4e18-8218301c0303', '33277479-c5b2-2962-8d54-8afb06ab2362', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('91e132bd-62e0-5618-8726-c3d06b63031b', 'f77a0cf6-a7fe-89a2-89f3-a67b49c0884a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '246f3f06-52d1-bc92-0e54-8ccf5f7324f2', 'Mohammad Alau Din', 6, 3600, 3600, NULL),
+  ('a7934a70-0ca3-7619-acf1-0db517b904f9', '1274a665-bd96-a087-1080-2a04ab77b716', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('9f037c12-0161-7588-8610-f91cd962a687', 'da324106-f4b6-72f0-b763-8e9639981796', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'kuldeep Singh', 6, 3600, 3600, NULL),
+  ('7ad2c681-dd74-297b-c683-51f015a9d093', '30857481-044a-dcd7-3d7b-cf31b410fc9d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '3604d8a9-f659-4efd-9168-e48c0572b0d0', 'Nalesh Achehal', 7, 4000, 4000, 'Anil for 21 days'),
+  ('61a6d44e-383d-be65-a86a-7c4d3772a946', '42a24dc6-b4b9-6073-ea5b-60859a40d8ad', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'a2f0b399-caa3-c6fd-235a-b205fdd4d222', 'Murari Lal Ram', 7, 4000, 4000, NULL),
+  ('eb91c01a-fffd-e1d6-8b9a-6f8af334718f', 'e50b800c-ce0b-fd45-7717-2e6ffd050e6f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Novir Ali', 6, 3600, 3600, NULL),
+  ('89f22651-8a2e-5540-d210-05a94e834608', 'b0701635-a3c6-2985-7c17-da559ca85242', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 6, 3300, 3300, 'Yearly Contract'),
+  ('fd0b8b7d-ff61-a086-bc5e-984fa6fad05e', '4fe7f532-9a66-bd81-64da-55ee4442418a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'febdeb6b-8a92-96cc-7b9e-63ed6945413c', 'Ram Kishan Prahalad ', 7, 4000, 4000, NULL),
+  ('763aaf8b-8826-c641-bb9f-5a8432164036', '941d3e98-5e23-f23f-ad5c-a9dff0437423', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 1, 3300, 3300, 'Yearly Contract'),
+  ('484fc58f-4cd2-c885-ec74-f9e09e9ed3c7', 'b827147e-5928-e390-3d49-4687dbc2556e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '0247fa11-8b9b-528e-e01f-c23d5beb99d4', 'Banwari Lal', 8, 4300, 4300, 'Rakesh for 21 days'),
+  ('3c9cfd93-f859-9395-0295-dbc379497c1a', '64eac004-12dc-d288-0404-5733c080302f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 3600, NULL),
+  ('a076831e-c292-4391-69c6-53933661d40e', '31f5a7c7-13f2-d168-6458-e0efffa6eaee', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '6928fd2a-1ef9-42a0-9b6d-2ac0fb958514', 'Yas Pal Singh', 6, 3600, 3600, NULL),
+  ('7c880444-77bb-266a-7f35-adecec7a9009', '1d4c1ca3-79f5-9ac1-a710-43ea1c70d2db', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Khaja Mohammad ', 7, 4000, 4000, NULL),
+  ('8e1533fd-0975-8fd7-1d61-0604089d5479', '48ca3a71-f155-09bf-3357-395393c2f505', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '297ce70e-d88f-6f29-1854-e510f2602ee2', 'Carpentors Technicals LLC', 7, 4000, 4000, NULL),
+  ('8f4ec2e2-3716-5c62-8848-ee76f0d63324', '354d86f0-21cb-dafe-a3f1-2accb348999d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'b95e9b18-5561-1000-2be7-3a23806fb04f', 'Vamshi Gasengi', 7, 4000, 4000, NULL),
+  ('8db88dfb-e104-1005-8e3e-4cc2132a34de', 'abeb21cc-39e0-c669-40ee-964e7b3de370', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '4409bee7-4cb0-9e53-8f48-c46e29387f55', 'Irfan Ali', 6, 3600, 3600, NULL),
+  ('c8387d46-4c3a-8d22-ec4c-22f2c93b423d', 'e299747f-6e1a-f198-0924-7053a6e424e5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '075fbe4a-97c0-273e-e648-67e8500b3406', 'Balwinder Singh', 7, 4000, 4000, NULL),
+  ('4097379b-aef6-4873-6576-79c56ca6f8a7', '352ed3f3-3f1d-9f4b-10ac-0b8dca1e0b48', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Tofiq', 7, 4000, 4000, 'Vikash for 21 days'),
+  ('da691f11-e19b-bbd3-26c3-a2c50908cb1a', '28982004-3bc4-1964-e0c1-0a6605a17278', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, '951a58a5-d716-a14f-2d8f-7e88dbd76ffb', 'Rakesh Nishad ', 8, 4400, 4400, NULL),
+  ('18500e0e-7c85-30c0-c2b5-618ae52bfa3d', 'bde2f5cf-5ff2-a977-99bc-2f0f028684a1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ram Bhawan yadave', 7, 4000, 4000, NULL),
+  ('b73129d8-3240-24ae-c424-477341378207', 'ba40c1be-4276-3815-69ab-2a1f6160e064', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Ram Karan', 8, 4400, 4400, NULL),
+  ('734e3445-721d-f84e-e9ff-8d3932244598', '792206f9-1146-facf-432e-2b7a3b1cfe13', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Sanjay Kumar', 7, 4000, 4000, NULL),
+  ('f854c2e4-9701-66e2-448f-0e27987d245e', 'bca8fbbb-e84c-1554-3666-c42fc83fb399', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, 'de3556d7-e674-66aa-9e05-f429e251ea51', 'Vijay Prakash Yadave', 8, 3900, 3900, 'Vijay for 13 days'),
+  ('4a226a35-6185-2c90-5eba-02bcd7a81755', '7078bf03-8c60-6ab7-d542-bba7214141ea', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Daulaf Sahani', 7, 4000, 4000, NULL),
+  ('63f5d3dd-c2f4-0cc7-bd93-dfb84a552937', '9909495b-f777-53fd-4136-d5b334a161b7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 1, 2026, NULL, 'Rajvir', 8, 4400, 4400, 'Ajit Kumar for 21 days'),
+  ('2ba607ec-45fe-519c-9a3f-08cb66e7b7c7', 'afb9295d-0f46-c9ef-526f-b7434db9edb2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0054ff71-622f-0728-8c05-4341fb89805b', 'Mahmoud Attia', 6, 3600, 2950, NULL),
+  ('7edabd59-dfb7-568a-7fee-4ae23b70c613', '966c9cf3-97bc-40ee-c747-c39f0508e76f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1183f671-709d-1ef1-263d-2014e0abc2fd', 'Pradeep Kushwaha', 8, 4400, 1800, NULL),
+  ('6ab5271e-ac5b-98e0-6dd6-843c551e45b0', '639a879a-efa8-6d4d-2b0b-5d7f49c980b6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5ca756a5-e145-2188-1d20-dc4c54e9ecda', 'Shakil Khan', 6, 3600, 3600, NULL),
+  ('038ade6e-593c-b473-8a4f-d38247d3206f', 'fb074ec8-0244-31d1-def4-927c1840cc95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7c949679-7cb9-f2eb-6f93-fef5083ae55c', 'Lohithak Shan', 7, 3800, 2400, NULL),
+  ('bc87f777-a3c8-158f-ef77-dc18c83d5169', '82e78c66-79c0-d935-55c1-b7806329a028', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8e3e24e1-9880-681b-fb28-dbe0645ebf7c', 'Saha Alam', 6, 3600, 0, NULL),
+  ('94ffbdbb-806d-2582-76ee-44403a79839f', 'daa4a283-041c-679f-c20b-a0a2e09d31d6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '00fefaa2-7d85-6cf4-bbd5-d78153edd5eb', 'Technofin Tyres', 6, 3600, 600, NULL),
+  ('f0c7da9a-24e5-20ea-06b1-28934f782c07', '5f97aa1c-ca90-cfa8-4584-1e811601892c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Mohammad Rabiul', 6, 3600, 3600, NULL),
+  ('486f6be5-c9be-8541-046a-4140cd5d7501', 'bb3d6432-4b19-3f99-5c0a-0d6a045aa3c9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Shayam Naryan', 7, 4000, 4000, NULL),
+  ('3966cb38-80b8-cce0-7a38-b1c03e9d5c0a', 'a1be2fa1-347e-bb93-5217-ba4ba5e07cba', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5404113d-b0d9-db93-ca40-b5a8d5a46bf8', 'Mohammad Akhtar', 7, 4000, 4000, NULL),
+  ('356dcbc9-92df-d800-8bf9-153849510125', 'dfbd6883-fe8c-478e-7bff-931f0df1c192', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '685974ba-23a0-e7a9-d86a-f8279fd7584f', 'Mohammad Ibrahim', 7, 4000, 4000, NULL),
+  ('c3222da4-af56-4f05-daa9-4634d17700d2', '63b29e7b-8105-c7b8-fd4b-04512e775fc6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Gursewak Sing', 5, 3600, 3600, NULL),
+  ('91965ed3-bc69-18ce-bd43-2cc6b147b0c7', 'eddf1c6a-9f2a-8ca4-7c7d-231d0fc84b95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'eb5357f8-4516-3a27-449e-33127a35b68f', 'Al Junaibi/Hartoshi Cont', 6, 2700, 2700, 'Yearly Contract'),
+  ('ca2d4482-6948-632f-ab6c-dbb1415ca66e', 'cb5ff1ea-0f89-4709-0fa1-0eda416d7e37', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'Amman Syed', 7, 4000, 4000, NULL),
+  ('b9a48451-cc0b-d0e7-a624-77b2f1923a2d', 'bfc79d9e-b8ca-b7b2-a93d-8115f58f2f20', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7e84ede0-1d3b-2808-f0cf-084d601a7af4', 'Amman Syed', 7, 4000, 3000, NULL),
+  ('9d26e0c1-b49e-7cad-1874-dee1b24b426b', '3f7ce984-49e6-c584-5996-9d140c5f732e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 5, 3600, 3600, NULL),
+  ('8dd61b15-44dd-4b36-8747-0b8edeee424c', 'deb1ea24-5697-2bd6-5ae9-09d1b83c0826', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0d5543fd-122f-d638-ac1e-3d43b02a7ca8', 'Tariq Khan', 6, 3600, 3100, NULL),
+  ('19269338-9908-bdd8-9a2a-845fa97a4f7d', '891aa768-29d1-fd6b-bdf2-45144f1ecd4e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4f11f76a-d9a9-a746-b204-3361f37bba41', 'Camp Boss', 2, 0, 0, NULL),
+  ('f9c5a687-d5bc-b455-a7e8-18fb810494a3', '484bad10-d73c-d15c-c784-d198171fe4fe', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9ede4cf0-d4d8-34f4-7cfc-908413567751', 'BGC Room', 3, 0, 0, NULL),
+  ('294630bc-88ef-3826-4c10-0f50bf7649b1', 'aa1cef9f-24cd-fbba-71c1-5cdea5569466', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9ede4cf0-d4d8-34f4-7cfc-908413567751', 'BGC Room', 4, 0, 0, NULL),
+  ('4d047d8b-6bd7-a30d-70f5-8690d4978d50', '46f91a81-5fc2-d13c-105c-1e124318f8c3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 7, 3600, 0, NULL),
+  ('bce6a451-a55c-1f98-2dca-b19b8d687e2a', '28cf3a19-65cf-e1fa-044c-e3405f202aa0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Santosh kumar', 6, 3600, 3400, NULL),
+  ('ccf85b4d-7344-8421-6515-709c0e99364d', '2fdb26bb-6ac1-907e-6e77-1d85582e0e67', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1387c27e-01a7-222c-34fd-3e476a55496f', 'Raginder Kumar', 8, 4400, 4400, NULL),
+  ('977add98-06a0-796e-a3d7-bd5ac4c51a72', '31cc4f09-de61-d084-2a1e-33d68ff8cae7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '113cb6e6-1dda-a5f7-8eb6-c2369e10ab3e', 'Bhem Kumar', 7, 4000, 4000, NULL),
+  ('9bd1b20d-e805-ffad-9f61-ed4e214925b1', 'd40141b7-2612-53a7-74d5-77aba80a74a5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '870b4bba-60b6-b20c-0ef9-15e9adb969a6', 'Md Ali Hussain', 8, 4400, 3800, NULL),
+  ('973d52a0-7153-3d2f-a775-b21d25c9ab48', '1d607376-ce29-3e8d-77c2-7e35fb677bc0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '746c6b07-54ce-5770-84fc-83fa6515e6ec', 'Shahid Cargo Transport', 8, 4400, 4400, NULL),
+  ('61519bab-e203-6778-92fe-1f9bc279c1ac', '13bc7d26-73e3-cc8c-7067-53f6527e3b95', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'Mohammad Rizwan', 7, 4000, 4000, NULL),
+  ('592f75f1-ad40-d36f-2d7f-356991e64571', '33ac0947-3d5f-1fe1-45dc-3d0f8a045689', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Wakil Singh Chauhan', 7, 4000, 4000, NULL),
+  ('f67d0fd2-57c0-071c-bf75-a19f78f6dfc0', 'e93c243b-da67-bd88-7796-c2c08b39bbd8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Gulam Murtaza', 8, 4400, 3850, NULL),
+  ('a8967169-45c0-0351-3a37-72e89341d698', '4ae83134-9b12-b7a4-4bb9-ac228d09eb91', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b5d7b02c-af0a-214b-c1a7-361c17df5934', 'Ramesh', 6, 3600, 0, NULL),
+  ('61f0bc49-1099-ba5b-aa78-2c32ddaddd35', 'ced50117-9886-a6a9-04c0-5ad7d7fb1651', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Mohammad Ishtiaq', 8, 4400, 4400, NULL),
+  ('6a2620ba-64b7-04b9-1bd9-8358e08f6e61', 'feddd0ad-f2d1-9ebb-09ec-b60554289e4a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 4000, 4000, NULL),
+  ('d5f0a9b0-97bb-9a92-1dae-672e42478973', 'e8e55649-9eb2-0b5a-db57-ec9a33f30141', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 4000, 4000, NULL),
+  ('8d582f52-d8cf-51ee-8a58-853cd5ffa3d3', 'b3d55cb2-c797-f403-868e-cc4abf76de56', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 8, 4400, 4400, NULL),
+  ('18d86dbf-e625-53f1-1217-edf20761d8a9', '1d3d79ec-ea48-c6f7-a2e3-02cf946167e1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Inderjit Singh Ajith Singh', 6, 3600, 3600, NULL),
+  ('f2c280a0-be4a-728d-bc76-2bc8ec363db0', '6b7c6537-a0a0-6f14-12d3-8363d25466aa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '32772088-32e9-8dcd-d950-e7c8a9b188bb', 'Gulam Murtaza Transport', 7, 4000, 4000, NULL),
+  ('0f50e0fb-4eb1-6c53-4c77-82d44f265a4a', '72cdf895-c03f-3fa5-9a10-e6fa36442a0e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 4, 3800, 3800, NULL),
+  ('113e1bb7-c26b-3878-b229-9c6ba28590f1', 'b0833955-7849-e241-c194-c284a3bcc484', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '719af14e-8cde-77da-c4c0-09ca5888350b', 'Bin Bador Heary Truck', 6, 3600, 0, NULL),
+  ('cfd0eb7c-94a3-3f3c-a7f5-ebfdd99db878', '158f8bb1-2bc0-9fe9-0da6-eae218761043', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Yasir', 7, 4400, 4000, NULL),
+  ('f455ccd4-b208-324a-dad1-be3db847c2f3', '65fa4618-cb64-ea37-cea7-8efead2d311c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '2abaae2a-eb0b-afbb-9a40-24c896da3da2', 'Ram Nivash', 7, 4000, 4000, NULL),
+  ('231c916b-5cf1-a921-2bca-72615b778fd0', '90d126ce-1219-ee3d-bd49-ee0cfb3f4122', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0748c6d4-bb5f-f967-df34-c7553ea8ef69', 'Ashok Sahani', 7, 4000, 4000, NULL),
+  ('981f46fb-a0d6-4bb7-e09f-0fe42227b332', 'aeb5312e-c1c9-4d26-6586-9e7aebb2c165', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '2fd21f46-a9ec-dafa-75c1-6f762c69fdad', 'Moti Lal Gupta', 7, 4000, 4000, NULL),
+  ('a215a48a-e264-315e-7597-5801faa15b99', '92581ae3-c1a7-47e6-bde4-5dc27fa9971e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'cb878ac8-086c-20d6-4d98-448d83638379', 'Ram Niwas', 6, 3600, 0, NULL),
+  ('4204c762-ba7b-d5e0-ea42-8a65b443fb0a', 'a3955de3-b764-316a-16af-5ecb5e3d28b9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9ced532d-9d8a-51e4-37da-a6b8c1ffd827', 'Mohammad Rizwan', 7, 4000, 4000, NULL),
+  ('0b30fe90-d63f-f0a7-ba07-df34093658a0', '6244dfa6-9b1f-8e8a-27ee-9a29c716cbc8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'Idear Star Tech. Services', 6, 3600, 3600, NULL),
+  ('4d77347c-71e1-3c14-320c-c48295d1b233', 'fb3e8df1-4144-dbb1-4356-703cd2179a2f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ea542e0f-4767-bf79-bb48-6362fea41e0f', 'Abdul Rahman', 6, 3600, 0, NULL),
+  ('3887a8b2-0f49-b5e9-925e-95a906c9cb80', 'c249f47f-74c9-068e-ffd8-631df447b97f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 6, 3600, 3600, NULL),
+  ('ca3c3171-2f26-c35b-f0ea-50df6660a44b', 'a29072b1-f48a-6a73-ef45-09a69d90a40e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '256239d2-c267-ec1a-3de2-81e9a2c38de2', 'Ranvir Singh Jhabar Mal', 6, 3600, 3600, NULL),
+  ('0ac02e10-80d7-d13e-84f4-d2592e1b1d29', '5f61d5f5-db02-e039-3991-06ae41581d59', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'cbd5c850-6e43-ef5b-b2cb-7748681483df', 'Booran Mal', 6, 4000, 4000, NULL),
+  ('9c8ac9c5-5548-6830-fd48-5578f2e0e91e', '67ccd303-1bcd-3bd2-196c-ef3933808985', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3900, 3900, NULL),
+  ('d80ece80-5d3d-49ee-05dc-0d996d630303', '8a9de750-5a18-dd8d-6073-d3bf4dd0bf67', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a5f537fe-038d-08e9-22c9-944c6cf1cfa6', 'Khushi Mohammad', 6, 3600, 3600, NULL),
+  ('c8ab33dd-7265-91f5-fe9d-3be169c8da8b', '6079dfa5-150e-6545-c46e-847de464f656', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Surendra Singh', 7, 4000, 3400, NULL),
+  ('cc56d8f6-f2bb-f837-ed76-985f79e14fa1', 'cb05000e-c073-a79f-a8e9-e38566730167', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Manjit Sigh', 7, 4000, 3600, NULL),
+  ('1a09fb88-cff6-0785-0029-5bc4d9a12639', '1f938aae-1ef9-148b-0b7c-615eeda451f3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '078ff57b-cf22-9993-a332-7c7dbbf967e5', 'Advanced Fibreglass Ind', 6, 3600, 2100, NULL),
+  ('10651d30-9fd3-ad9f-5630-db7c29e6b30f', '22a0e4c7-1583-ce0a-1fe3-de309d46b8a7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'e866c9e5-813f-352f-487f-6d88a25d8bdc', 'Yam Bahadur/Subhan', 7, 4000, 3000, NULL),
+  ('7a1d3054-5016-8cc0-00a6-9f1bcab0a844', '2d17d6a9-a635-de98-fa49-9a2b9906a0d7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Sobhan Manpower', 5, 3600, 3600, NULL),
+  ('5b816333-1079-33d9-5bbf-554f338d42aa', '5857e5f3-1fbd-ebf5-f29f-027b96d57793', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'e5d1efef-14ea-c5d8-984b-7c5e4957b9a2', 'Mahandra Kumar', 6, 3600, 2800, NULL),
+  ('ee6a36e1-beee-6897-8cf4-0130359c8071', 'e74e5ff8-dda3-a5c3-932f-8ac8632933d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ed4e6233-af11-a733-f3e3-41c8a77c252b', 'Ram Ashish', 7, 4000, 4000, NULL),
+  ('90b51a80-c4ff-c367-c62e-c656d72e02e2', '47b4b2ea-53c5-32c9-c7d5-d74e65503f6f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 7, 4000, 4000, NULL),
+  ('509c35ea-bddd-b397-58c5-971eb8e6cb3b', '87cfb3bc-7ca1-5596-903d-9f5fcd149980', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 7, 4000, 4000, NULL),
+  ('24995d30-59bc-9203-0458-2e0b680cb8c7', '995aeaee-23f7-6804-48a2-2a064338555a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd0cfe060-ff58-127d-4628-a5736fe7889b', 'AITS Tech Services llc', 7, 4000, 4000, NULL),
+  ('f4071d0d-55d4-23cb-295e-b020b06142bd', '2496c0f6-3b29-14a6-756e-79e22449fd26', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 5, 3600, 3600, NULL),
+  ('ef9cbaf4-b632-d32f-406e-720fa786b507', '0ab14f64-adbe-0275-46ca-c725cad9e173', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 5, 3600, 3600, NULL),
+  ('3039fb58-d6cf-0fa7-6da9-9b389c59e38f', '319d061f-fdef-eaad-e85b-ae17699af306', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8a8a8a2c-b103-94b2-7da1-3c093edf6f8a', 'Rasel Mia', 6, 3600, 3600, NULL),
+  ('f5a3edcb-df4e-60fe-510d-92d9a2a14002', '6b52359b-4e65-6609-2dfc-1bf9847d5f73', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '2a7337c8-0c0c-1fae-97fa-926b5c9d9225', 'Bikar Singh', 5, 3600, 3600, NULL),
+  ('1fd65d28-d753-4c34-9026-9c65bf4b76bb', '05e1be15-0a9e-b4a6-3e94-77b85d2a19b8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd0cfe060-ff58-127d-4628-a5736fe7889b', 'AITS Tech Services llc', 5, 4000, 4000, NULL),
+  ('d930352a-135e-78f1-1bd2-f4f3fcd20a47', '0eab6420-5ada-6ddc-5b1f-7a818bfaa904', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '74d3394f-0661-fedc-2b08-cb0e4ac16bb9', 'Uzzal Khan', 8, 4400, 4400, NULL),
+  ('5fb80836-c574-532b-4046-cbe741d03467', '81ada156-a7cf-3934-9c7e-7b6cc71b2c2a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Hanoy Ibrahim', 6, 3600, 2900, NULL),
+  ('0aab036d-f6ed-3b16-76b4-1c61a46080e6', 'f64fd266-ee23-f428-2cf2-9ae9f8185981', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0afd7c93-b7a4-24a3-03fd-64cbf59568cb', 'Goddu Ram Singh', 8, 4400, 4400, NULL),
+  ('12d6c558-b8cb-0fdf-e0db-fdd186fe7887', 'c5b61355-5422-5233-3fa8-bad4bc42c8d0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b0a76c3a-8eab-a547-8b7c-46b774276c33', 'Mohammad Azad', 6, 3600, 0, NULL),
+  ('8b568149-f4f7-b035-1376-874e8c3dec5e', '003b331e-ea4c-9c7c-e92a-dfe9cb370c36', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('615f7d73-c65c-9592-d619-f86375b821bb', '5c6d3509-55a4-638b-2120-8547461e35fb', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 0, NULL),
+  ('6279be24-4ebc-55d6-bc86-ac515fcee518', '45329fb1-f7f2-d428-a843-9fb2c6cf0a97', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3654b579-b7a6-6d09-56de-9caedc826ee6', 'Mehmood', 6, 3600, 2900, NULL),
+  ('ab1ff46d-c980-1af9-0d55-7c47029646a0', '25195ea5-f406-fb3d-2c5b-67acd461f611', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 6, 3800, 3800, NULL),
+  ('0b57c2d9-0a3b-f2a9-6072-815d2b655663', 'ef12491c-ff87-46e6-7d76-88fd40a70e24', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'The Bugiders Market Trd llc', 6, 3600, 0, NULL),
+  ('049cf077-be79-22e9-d137-2597772e0aa0', 'a371c669-bdfb-eb7a-7079-16a68b31440c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'f2d4194b-a193-5874-1c25-1228e9f79137', 'Rustam Ali', 8, 4400, 4400, NULL),
+  ('6caeb90e-9890-fd1c-74e8-c204e525940d', 'f48934de-ccdd-30b7-fd33-f9d66b377571', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Rasheed Ahmed', 7, 3800, 0, NULL),
+  ('d4a99b3d-21a4-4db7-c397-45ef0c2604a3', 'f1e53d02-2b84-9936-2918-f54e59c6f52c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ee01553c-0eb8-c36a-98c7-87b414be5203', 'Pramod kumar', 8, 4400, 4400, NULL),
+  ('c140eee7-3f36-a711-f8b0-5d7e6fe146cb', '728d7b19-65bc-fff2-a98c-14ba78bea52d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('697a9e7c-8d4e-9b06-6b62-6bba8a0ee1a7', '27082b77-0512-a810-62bc-c2f95d6a1876', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 3600, 3600, NULL),
+  ('f91d6ab5-e140-5483-c74d-3609aa8a68d6', '910b2715-d5b4-e989-d517-b0687cebd9bc', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 6, 3800, 3800, NULL),
+  ('3bef9470-ee29-48ec-5841-a1ed045e134c', '475d36a3-d167-9d23-87dc-0141d676b898', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 6, 3600, 3600, NULL),
+  ('87c8fffa-ccab-11f9-ea00-0c2a8a05474c', 'fb0095a8-f63e-8b8c-0c3e-7c47c1f8bad9', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 0, NULL),
+  ('63171103-c54b-dcc2-c342-13489e812714', 'db405e2f-b3e4-0f27-db8b-5f9c383c1d8d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '368aa21b-e6a1-2ea9-423d-e308d9c0f8cd', 'Sofa Mastar', 5, 3600, 3600, NULL),
+  ('965818d0-44eb-2931-3d3b-ae97a9e148f0', '0cd34626-d40d-0fe9-d2e4-18a9e221886a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 6, 3800, 3800, NULL),
+  ('57d52d28-3970-49e8-f9ec-9b6c6f71c4ef', '60b3e8d4-283a-40aa-d2db-292e733e3d33', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '466f9361-2029-f13f-879a-9d36e35df816', 'Suman Bonda', 8, 4200, 2200, NULL),
+  ('5344bb7f-e27d-c9c9-b227-5280e7b121bc', '0bdd8fe2-ab92-1d18-64d1-6afc8df42c55', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'bc1b26e4-0d10-b3b0-6abe-a68d28a94410', 'Ashok Kumar', 7, 4000, 4000, NULL),
+  ('984c40c5-ba58-9031-a009-fe6f386cf513', '687a5c33-251e-9721-018f-acda095e7c52', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '17528dd1-186c-4878-541b-495219583d99', 'Sonu Nishad', 8, 4400, 4400, NULL),
+  ('63f21eef-7829-1eb9-fb71-025b2b5a7607', '92747442-15d5-bff9-827a-e27733f696b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd160d154-4b90-b156-29d9-4c4669c7e96f', 'Murtaza Ali', 7, 4000, 3500, NULL),
+  ('7c01922f-18c2-6198-c50f-03839861fa5d', '1fabf440-aeb7-0f10-fc15-58e8b161e90a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Vinod Kumar Yadav', 6, 4000, 0, NULL),
+  ('7050ffe5-d31e-e387-1379-b88f31490672', '3b671c01-16bd-775d-d22a-8c23271f810d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 0, NULL),
+  ('3b300157-7531-b62b-de47-36f1d7272a5e', '9fca3235-d6b6-4b0d-8f20-ec820c3adfc3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('21ecad2a-9d17-8197-1306-58cfe976e239', '3c67e7c2-1638-9868-c270-c924d843e1af', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 4, 3600, 0, NULL),
+  ('47232217-a6b3-4960-c5c1-c325e0f0d6e8', 'c86c83b7-364e-8869-c711-6a22cf6d10d6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('301440df-4196-e682-c3a9-d0d764ebb92b', '879072b2-016c-1890-7ccd-27745433d1d3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9b1d71a3-a7ea-a8ed-ae82-4e7e4290df85', 'Saif Ullah Tahir', 6, 3600, 3600, NULL),
+  ('acb0c886-dd79-0a3c-d686-41ad64a89599', '90d9146c-773a-d845-5e65-cf39a644a7f2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '49fe5c61-0909-2372-a1dc-6fa38f3fa25a', 'Banjrangi Yadave', 7, 4000, 4000, NULL),
+  ('1a21f486-2459-1e14-4e81-8a494857a32a', '6974accc-3e8b-0070-6864-bfce9ac327fa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ranjeet Kumar', 8, 4400, 4000, NULL),
+  ('96b3bd5a-c699-7f7d-3ca8-42c5d7ecd469', '08bea999-e737-ad47-f873-9362fd5f5002', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('eb431f31-587b-e4f3-2b02-794926569cff', '0770555e-70b8-e442-34cc-fb3e97a62455', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Bhuwan Ghimire', 6, 3600, 1200, NULL),
+  ('ce095e38-3478-2f91-f613-1e22bc6c7896', '1bf13205-1a71-075f-b73c-7060d4a54a65', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('72f4a06d-a39f-38e4-544d-df5f31b6f526', 'd95c65a3-2166-7ecb-eee5-87cc84bf82c6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd785be85-999e-96ef-93e5-e5ba291d8672', 'Zoynal Miah', 7, 4000, 4000, NULL),
+  ('f2d9ca0d-39e7-7774-5daf-3d49f76dfd8c', '0025c59e-0e63-ec52-c826-da977ea24e1d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Moayad Al Batran', 6, 3600, 3600, NULL),
+  ('59550172-2961-4b31-dd3e-32be89585c2f', 'bd7d70da-dcbf-a59d-17ba-9c6957268700', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'bbc1e9da-f11c-bb9f-2e08-382e5572fd6f', 'Mehmoud', 6, 3600, 3600, NULL),
+  ('ad9effd8-24b4-5dd0-106c-96874b207ea3', 'e36b42c2-ac25-58c9-da21-2010815c0900', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4eb119aa-8ca2-648f-4fa2-983ee323a532', 'Cleaners', 5, 0, 0, NULL),
+  ('f42d2c4e-d6ef-5a4c-ad1c-160ff59278c7', '08890c8f-fbe8-b79a-52a4-b0fcba356773', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 6, 3600, 3600, NULL),
+  ('6e1af26b-081f-0d5f-2108-e3735f9de180', 'c042368a-3c44-6207-365a-5049039acd1d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ramesh Prajapati', 6, 3600, 3600, NULL),
+  ('ecf88424-048a-40f6-7084-e01d5e9fc151', '1815fb97-9bd6-0dbc-3127-d0a39deeede4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5a2bd9b7-6f80-fe96-3a34-ce4121be24d1', 'Ravi Kumar', 8, 4400, 0, NULL),
+  ('ba50633a-8718-c852-c256-77cb04e06e38', '7b66d66e-3639-48c6-90e7-df7a195c0d64', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 6, 3600, 3600, NULL),
+  ('6b0c8268-d2d1-314b-a28b-5e9bf58ba881', 'ac088be4-47a4-73af-aaa1-54f8c9c13e82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 5, 3600, 3600, NULL),
+  ('3c0e9c0d-e8c2-2b10-a52d-3139f0ebef56', '7be371da-f089-ef95-4fa1-eaaa0b2de7ed', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('17553f31-75cd-ae16-7b74-950e87ba3627', 'f36b1f87-ce41-1e5f-628b-8fa8466efc02', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ram Naresh', 7, 4000, 3600, NULL),
+  ('fcead2f3-26c2-85af-dca5-c341c4cd359d', '0ed0cc09-3ece-814c-97e3-8af344faa997', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8ee7c5fd-f082-2a23-aa74-93463dee465e', 'BMX Cargo Co', 5, 3600, 3600, NULL),
+  ('e672d5c6-d5d0-ed07-37f0-4e44a5729023', 'd89eb9f5-a679-6189-8a8c-adaadf73593e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1e5bcb03-37fc-61f3-0657-6b383457cb20', 'Security Room', 4, 0, 0, NULL),
+  ('06716f2e-87fe-9702-ce75-7d58ea6470d0', '3790cd41-2b73-d45a-04ba-04165964e999', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ae013eaa-0935-e348-b3f6-5321fdf7cf1d', 'Mahendra Nishad', 8, 4400, 3200, NULL),
+  ('40ad11f5-aacf-ee4d-9122-e5657917fcd7', '10e1683b-4de8-b90a-9be9-9bde6c3cddf8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a39db82f-ba1b-da3e-8e94-16db48b8bcda', 'Sadaf Al Sahil Scrap', 6, 3600, 3600, NULL),
+  ('50f8acba-0544-2644-89ae-8e279e052536', '120a79c7-f7fb-d1d0-7c70-36abb4e42c3f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 8, 4400, 0, NULL),
+  ('efa0ba23-15b3-d678-59c5-b00409933c76', 'e2242355-c73e-fd9b-d81e-d53b72962aa4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'bf12a45a-98e1-a12c-5b2b-1259f0326cea', 'Aklesh Sahani', 6, 3600, 3600, NULL),
+  ('8ee16ab3-9a12-1af6-543f-90ea15798770', '2d29da8d-36a8-b084-8ce5-67b3231c4285', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8387c3e4-270d-23b1-68d8-aea98bdde9e4', 'Idear Star Tech. Services', 7, 4000, 4000, NULL),
+  ('e71c2eb0-549b-06e1-77b3-2a87d0a5b18f', '082459d7-062c-db02-f54e-b721ff352c0e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ramesis Yadav', 8, 4400, 4400, NULL),
+  ('b468e4c0-ba68-f1d3-c6be-d89a5e2cdcc1', '6b59b050-7317-e030-421d-67429372ccbd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ead3e8e5-740a-7741-c507-bac3e32d4141', 'Mohesh Parsad', 7, 4000, 0, NULL),
+  ('f5f22413-e7fa-ca0b-4bb8-065f838750b4', '763e532c-bb26-24c9-dbf0-48db950f9cf2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '2592ec80-7ce6-95ec-f6e6-bc27e51e3e01', 'Sangam Yadave', 7, 4000, 4000, NULL),
+  ('46332881-fecd-bca3-7247-221757798bd2', '42f10c55-2925-b148-d2d5-ca5c7e072d66', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ab32edcb-3fbe-1b5b-95ca-261f80ebbcbf', 'Girijesh', 8, 4400, 4400, NULL),
+  ('b70b5ae2-bb0d-1514-d684-8f289623f1a9', 'd2b879e6-1683-15fd-9bd4-e3426c250ead', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '29c70f78-6f5e-e21e-9eb4-98c5134ebabc', 'Mohan Jumbaka', 7, 4000, 3500, NULL),
+  ('12f89720-d539-4952-2ace-77333adec160', 'e459928e-d677-f5c9-f541-99cb2e1bea8d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'dfb5dba7-4dcb-7f57-70cb-b6671853eda3', 'Monesh Kumar', 8, 4400, 4400, NULL),
+  ('292a5fcf-202e-58e9-e60a-ff74da6e4978', '83aa3fc7-d4e1-903d-7859-fd566bfed03c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a3e4d3f8-9692-3200-e762-1cb16faafd4e', 'Deepak Nishad', 8, 4400, 0, NULL),
+  ('350e920e-8a05-62c2-90dd-8d127bbaccb0', '0191cda6-6218-0d8f-982d-b42d5fd831a5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9b149ac9-224c-5915-978c-f274a47fb634', 'Ganesh Nishad', 8, 4400, 4400, NULL),
+  ('31ced48a-7549-bba9-9839-5c1477521ead', '78d5c12f-b0be-8d92-6d83-2c0e0adb29e7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'e1c80238-0eee-453c-5de2-2b4c43b789b6', 'Ravinder ', 7, 4000, 4000, NULL),
+  ('b28009a5-e2a3-4b21-1d65-afe449a42586', '6fcb3d19-4a5e-458a-f9e1-92369db8dc49', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd2341d53-6234-a681-222b-79266264f87d', 'Acrilic Land', 6, 3600, 0, NULL),
+  ('c2f24ce4-3da1-fb3b-a658-e45a63505f81', '4dfaa332-05ec-3fd3-0233-fee27d4579f4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '2a2baa9f-a0d4-76ba-2ec7-8c701f70c748', 'Amarnath Kpildev Nishad', 8, 4400, 0, NULL),
+  ('d2f58542-3ba1-c8fd-3097-03108323dba2', '64f8563a-f881-957c-1e2e-0efc6bc2ad5d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '51d00f90-a6d5-80e4-8b02-a573ff15bb66', 'Ajay Nishad', 8, 4400, 0, NULL),
+  ('58fc940d-cc27-4882-f42f-9d0cb5a61bcb', '2eaad00b-c4ef-88e9-7fd1-aec000937fd6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3b52d104-9880-fa94-a23b-b6c22dd7949e', 'Abdul Ghafoor Fateh ', 7, 4000, 4000, NULL),
+  ('2cdcfd7f-bf52-bef6-8070-f17d16b252f0', 'd1aded04-6385-c623-0cbb-978ab90b1766', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5bfaab55-565d-187f-bc60-b4d43997df91', 'Shield Enviorment ', 3, 3600, 0, NULL),
+  ('7e664bf8-d3fd-0faa-8226-251c7c0ca0d0', '509a2d95-378e-373f-1af5-159297871987', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Dinesh Nishad', 8, 4400, 3300, NULL),
+  ('8888513b-783b-bea9-a441-b346e46db15a', '1665d88d-6747-fa3e-c3bc-6108cd525908', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8776643b-0121-95ed-4479-aeff2b370f92', 'Safeer Khan', 6, 3600, 3600, NULL),
+  ('e08b64b6-d2e8-2245-9154-3c23fbac354d', '70e5a169-507c-8009-418b-6dadd3a35c23', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'f54c285f-5754-6f0f-913f-809ea2d22b20', 'Satveer', 8, 4400, 4400, NULL),
+  ('1f4286b9-0940-a7b7-094a-4d84089cc979', 'fd094814-b143-edf3-d1cf-3000570f1458', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '39cb122d-dfcd-5e5c-e2d2-3f6ab04531d8', 'Mohammed Didarul', 6, 4000, 3800, NULL),
+  ('8ab3d4e2-2052-8bf5-2e22-00d242f89bd0', '8c4a62a3-4442-a648-40b9-f1f1db325944', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 4400, 4400, NULL),
+  ('aff22371-37e6-a785-6494-3f8b295dd6ba', '38530999-d005-8917-e106-d3a41b3f8af4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7f61e2f0-4931-f106-e402-20c0a7169b56', 'Camp Office', 0, 0, 0, NULL),
+  ('206c6f66-b9d3-c506-cba5-15beb5ef7d5c', '352d5b11-a0fb-3036-0c84-b0220cc21836', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Kailash Jangir', 6, 3600, 0, NULL),
+  ('8b2abe4a-7a08-4d46-e6b9-cd071dabbd00', 'ea2727b5-57fe-28d9-dd7a-c3dd9b001b19', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Rais Ahmad', 6, 3600, 3400, NULL),
+  ('7efbaf12-e112-1930-2c25-0d1f637a556a', '3682ec1e-8155-30fc-3bb3-a218f4426c93', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b1dc6056-9142-593f-a39a-efde72fc2e29', 'Md Rabiul Islam', 5, 3600, 3600, NULL),
+  ('43246a2f-4e5d-4107-9db1-9a27f3a05d5e', 'ebefaf98-88de-c1eb-6c30-782213aff93b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0aa726bf-2305-e9c4-0ada-e2031e79fc74', 'Ashwani Kumar', 6, 3600, 3600, NULL),
+  ('5717c493-5cf1-f318-71f0-a01111c96910', '9c71e671-b7e8-6cb1-eafa-6ea92bd6df2c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '20d5232f-c922-9180-f749-6d612d71232c', 'Kabul City Restaurant', 6, 3600, 0, NULL),
+  ('fa4e7d6f-444d-94a0-623b-d70be77774d1', '782e829b-3081-47fd-ae7f-6cac4f6c0c4e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8883309b-28a2-4d88-b50f-8a332a94bda9', 'Naveed Ahmed', 6, 3000, 3000, 'Imam/Special Discount'),
+  ('6e254e47-36e3-8dcb-6bf1-5fb98238c96f', 'a1a846bf-f9a0-a10a-bd2b-5f14a722ee82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3d4be57f-2dff-ffc2-41f0-6292ea616e5b', 'Birbal Kumar', 8, 4400, 4400, NULL),
+  ('bab8c26e-500d-cc78-f675-2abbff5edd0d', 'cded375d-0b2d-7a7a-bb74-edb5d8cc71ab', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a6620ac1-25f9-c197-48a0-45ab91bf4556', 'Goran Paswan', 8, 4400, 4000, NULL),
+  ('07f07f16-bd5c-0b79-70a1-e65350889251', 'fc2f541b-b0f8-f704-43ff-9282ad5c02f2', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('b489f542-21b0-ff1f-49c1-7447ee283550', 'c91a0840-b503-08a1-4344-8e39b328dfb8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'db28b411-14ec-567f-a937-1a6708b0a5e4', 'Jay Chand', 8, 4400, 4000, NULL),
+  ('f68fe0f1-5e8d-025f-ab01-c6c108cec785', 'deaadd04-de52-2859-605e-0da9b074dd5e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9a8288af-a7ea-49d4-0d1b-ccad4e3f75f8', 'Gaurab Bharat Singh', 7, 4000, 4000, NULL),
+  ('dc32c956-ca1b-fa88-84fe-c80457e155b7', '65f55c43-9d08-404d-1940-181189b9751c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7b9bc8a8-9f67-233e-c87c-e8c85f2043f7', 'Ayyamperumal Jothi', 6, 3600, 0, NULL),
+  ('34855fae-37fb-0567-8f55-546761af9928', '047fc15d-48e1-56a2-e9df-95782085c8e6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '08302e39-5f38-9f68-8577-e9ad673a85a3', 'Krishna Mohan', 8, 4400, 4400, NULL),
+  ('ad0c7e76-86e4-a831-641f-fc7ab7bda515', '867313b8-c4a3-8bea-88d9-0d30b48125ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('469683e4-e7d2-c96b-bc1a-2184b45b2b33', '97c95579-48ea-b5a8-9d83-2c7ba4cea152', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'c3cc208f-a085-5dd2-00b7-93f2ba83107f', 'Sipon Miya', 7, 4000, 4000, NULL),
+  ('2d84f12c-627c-cc3a-6327-7508efecf737', 'aed257d6-dfe8-ec27-e831-4738fa4c663a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '12784e82-d227-0797-ed85-1fd5e9030c0e', 'Ram Nath Yadav', 7, 4000, 4000, NULL),
+  ('a05c101f-9d53-097f-0c64-6907e4bf52d0', 'eb6ff1b8-e1a5-fd13-aca2-f82f28f4a5ba', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '6ebbe096-03c8-1c04-d3eb-55ba3f816aeb', 'Jawala Sahani', 8, 4400, 4400, NULL),
+  ('62403f47-5765-d66c-a79c-553aa857e364', 'a1f4bb07-7d21-ed3b-a99e-32f293040a9a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '747032df-da1e-23e3-888a-651b71c0b593', 'RK Touches Tech Service Co', 8, 4400, 4400, NULL),
+  ('abee5355-ba7f-4d91-60c8-1ff378242422', 'dc78ad50-ecf9-95cd-a31b-a74d6f4952da', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1e272a40-d9cc-3240-6117-642ee39ca048', 'Pintu Nishad', 7, 4400, 4000, NULL),
+  ('a0c58232-3fe3-3960-f5d2-d20564dcba46', 'c7cec63f-d2e3-abc2-0fb8-264525c2509b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Yadwinder singh', 7, 3800, 3800, NULL),
+  ('c9893b30-600d-0791-cca5-94c72533d9dc', '25376da7-841e-3c5a-3f35-25398fd35b33', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Subash Shudary', 8, 4400, 0, NULL),
+  ('7d7079c9-cbe9-e67d-48c9-5bd7a192bad4', 'd423b620-f85b-15a0-e085-03aa45346cc5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1387c27e-01a7-222c-34fd-3e476a55496f', 'Raginder Kumar', 6, 3600, 3600, NULL),
+  ('1f615df2-0226-f14e-61c3-89b0ffa9346e', '4df68c86-8422-fad3-55f1-23324f925060', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '38c4c9a9-e873-eaef-3f51-682571ed4b80', 'Parsant Pandy', 8, 4200, 4200, NULL),
+  ('d7022637-942f-5b59-3a61-96436b5fb6d6', '56847132-41c6-b45e-7319-71ccb6d3da2e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9acf1d1d-7aea-a7f8-d5e9-e716c57d4098', 'Abdul Qadeer', 7, 4000, 4000, NULL),
+  ('69ffd5e0-5694-b2fc-1082-60fa51783972', 'b4d4f10c-7a2b-4df8-d6d6-a1aef2a5d7bd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Lavkush Pal', 7, 4000, 4000, NULL),
+  ('d961457f-59ef-725f-2b23-595c5a8a9a5b', '3f5478c4-7859-11b9-7bd6-9793016bda9e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Kaja Maideen Jainul Aribu', 7, 4000, 4000, NULL),
+  ('920dcae9-4972-c239-98a5-c176ab658f7c', '5c431d5f-21e1-9574-0fb7-d013514c436d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '91c6cc86-ce82-8e96-dea5-5ba0174bac11', 'Sagar Vidhya', 8, 4400, 0, NULL),
+  ('fecc26f0-9506-d864-4f89-615b335d2c93', 'b23f974d-8e9e-c229-8119-611ab6b3a6fa', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Mohamad Usaman Ali', 7, 4000, 4000, NULL),
+  ('3cb9c814-8ea9-f45e-31e7-adeb69994da9', '9e690210-2e67-88ed-4eb3-f068e6738bdd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '20d5232f-c922-9180-f749-6d612d71232c', 'Kabul City Restaurant', 8, 4400, 0, NULL),
+  ('b2aa5088-d779-9e1e-ff04-e3f58b1daff0', '6bc15325-a467-0c4f-5180-f36a2d7c70d8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Hajrat Ali Tabbalwale', 7, 4000, 3500, NULL),
+  ('91a39fbd-c881-1d1a-23fb-f50bc35c04de', '8a10720a-c64e-dfcb-d449-5fc69658692d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Faisal Shahzad', 7, 4000, 0, NULL),
+  ('7825e8e9-26d0-4519-d148-5be5e6e40b12', '1baeae71-583b-ee7f-23da-a168aea44e5b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'aeefcacb-2e8e-5d5a-5e65-1749993c650a', 'Govind Sahani', 8, 4400, 4400, NULL),
+  ('eb50793e-0edb-6846-cb52-d234d0da2089', 'cf072f7e-b703-a2aa-8b2c-5f14b33334d0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a8d824e5-a5ae-cb6f-5c37-3d52b873ec4a', 'Half Million Tech Services llc', 5, 3800, 3800, NULL),
+  ('5f9a53c1-fe5d-fb97-4feb-fc3e7d487124', '3429bbcd-e39d-46ce-5389-13a4c3bbfbf1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '9a005525-4971-7809-34d5-562e0592cf9b', 'Vaitaf Tech Services llc', 4, 3600, 3600, NULL),
+  ('cf62e771-ca54-519a-f1fe-b39c9ca27360', 'd0eba62a-508a-80d1-1486-8b7ad5a72dcf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Viveka Nand', 7, 4000, 2700, NULL),
+  ('cf3d3a1d-5100-2946-f29d-d215705f3014', '43b47b3d-906c-acb0-9780-008bb6ec3ebc', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'c5be0fe8-d927-432b-bee1-9bf77171e18a', 'Bhagwati Prashad', 5, 3600, 3600, NULL),
+  ('1f5a7770-c262-3e80-d160-45c723c10572', '92e6d6fd-c967-77d8-2cc1-24b0ac8fad6c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47ab4d89-bbf8-64a6-17e2-2255562e60cb', 'Kailash Chander Bhagwana', 8, 4400, 4200, NULL),
+  ('ab2cb359-f8f1-220e-8b23-915743f0403a', '3ee924de-7298-851c-d1f4-e05d53dc9039', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('1f2b94cc-ef86-39b0-8acc-499c172e7ac5', '800a1b31-6514-23a7-d4ec-eabce5c781f8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '8c6fb3d2-5d96-ead0-de92-bb4611f808bc', 'Ravindar Nishad', 8, 4400, 4400, NULL),
+  ('4312deb2-b104-c5ba-e1db-06daa133063c', '518369ee-947d-2fef-bd4b-de0863af5a6c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 8, 4400, 4400, NULL),
+  ('3af13eb1-8367-661e-db41-f4337f60d80a', 'c3621ca8-8b9e-f239-2925-936844258502', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '609b1b99-b7b8-4b2d-668b-5b96d5aab8ff', 'Mohammad Tariq', 7, 4000, 4000, NULL),
+  ('86661e42-a80b-35bd-9f93-a1dbd2970185', 'f61a86d8-cc2e-bf71-48eb-71e5eec1e842', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'c4f8bd3f-096c-69bc-714e-485a6b885a44', 'Sandeep Singh', 6, 3600, 3600, NULL),
+  ('dfc5f512-3c21-cc24-2f83-e036de34dbe5', '8142522d-3c8d-7297-b7d1-2a13769ad658', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Anup Kumar', 6, 3600, 1500, NULL),
+  ('311cca81-3da9-f4c5-08e5-3452ea36b3ed', '5aed8914-b486-d914-c082-d8ecaf68d98c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Johanpreet Singh', 8, 4200, 0, NULL),
+  ('23f645fd-4690-b5aa-f8fb-bd71c7ae7de5', '2de01cbd-d3c4-bdbb-1cdd-278dc632a0a6', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'dcf9efeb-84d0-6bd9-5c9b-e81043b771c3', 'Mohammad Shakeel', 7, 4000, 4000, NULL),
+  ('48e16c32-1f1b-176b-c455-266a6fb64217', '2be026e5-f73a-fb07-cd65-2e287bc9dfd8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4b5d3c60-4c35-5391-3b31-726b97a483bf', 'Sunil Kumar', 7, 4000, 3800, NULL),
+  ('cb13cf40-6794-223d-3276-220cf6455fa9', 'e2239e34-24c1-d02f-7e13-4203619c58b5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '46e7a7f8-158d-2219-09db-e65fb19247c5', 'Meva Lal', 8, 4400, 3800, NULL),
+  ('a30e6bd8-2954-c8cc-0b1a-d53c19ff3c2a', 'fe4026d8-c0a1-707d-cc2f-6cd7d25a2793', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Manindra Sing', 6, 3600, 3600, NULL),
+  ('c4cf144b-e6c9-9d53-bc2e-af749c5e8e8a', '02e56c2b-ba5a-ff5a-c415-f3074a96593f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '706de5e7-6ee4-03d9-dcb3-a8b054567ea2', 'Baljit Singh', 6, 3600, 3600, NULL),
+  ('65fbf388-a33a-332c-0879-b5f900d36fa4', '7f92ba46-9620-170e-3285-0dad1d3cea21', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'd87e9ecd-9662-a300-bfaa-6960617dd7d5', 'Ram paraveesh', 7, 4000, 4000, NULL),
+  ('b05e41ee-c08b-9d23-eb18-6d04d2ee1edf', 'ff7aba55-1332-1df9-a61c-db0842c6e1bd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Varinder Kumar', 7, 4000, 3800, NULL),
+  ('6cb2d26e-c56f-b0da-d268-cfad1370e654', 'c44faf6b-a4b7-49f0-76ea-edd23cc91635', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3851cc69-7f11-7b18-bf3e-2d4f0a526f59', 'Manik Md', 7, 4000, 4000, NULL),
+  ('61b7d423-aef3-2951-01eb-202d0e5262bd', '14a9a0e1-abdd-7dce-7a26-717ca845c8ae', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1a63bc4f-43f4-95a6-8609-ccac82edbb57', 'Subahan ', 6, 3600, 3600, NULL),
+  ('ca8d525b-52d6-eaf9-9d58-2ae185a24f38', 'c6f926d0-02e3-899c-0b84-7ca2f14a962a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ranjith Rajreddy', 6, 3600, 3600, NULL),
+  ('bd11f95a-e4a5-ec70-7e61-8da5de6b7a51', '7c6ceadc-1f6e-e656-2e93-eb5f0e0cfe88', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '94d3913d-b560-631e-558d-17d2ec4714bf', 'Shekhar Chandra', 7, 4400, 0, NULL),
+  ('6ea12c0f-99f8-8e1c-b6f1-df0773f26a45', 'c5811b91-7291-429e-37f6-fcf8a1f0f804', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'ce0add42-0bcf-03d1-4349-8559c39503e5', 'Md. Arfat', 7, 4000, 3600, NULL),
+  ('b658db0a-5081-6d74-6af0-b5fbe950d47c', '4a14ca0d-63c2-8914-9025-69980ec6d959', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '72ccd3bc-6171-8c91-7a51-1f6a3f72a6e7', 'Ramesh Kumar', 6, 3600, 3600, NULL),
+  ('478f71e2-ce4b-0e45-c19e-a2ffa70912dc', '663cbb86-bb75-70d9-d4a2-6bdf2c1d6db1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4646a30a-39f2-fecd-bd4b-b3a9c1059103', 'Faisal Ud Din', 7, 4000, 2300, NULL),
+  ('b03a9cfb-73ad-2098-55cb-f2e8ac2b79bc', 'ab31a872-9600-055e-593d-9d26fd4029fd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5b0a8148-06ba-91f5-84bf-dc3879c7a8db', 'Babu Lal', 8, 4400, 4400, NULL),
+  ('7868f483-0282-aaa6-0b8b-566fa5070e9d', '83e28e95-a5a4-d75f-ae39-4f96c74e561a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5a7638cb-da73-2ae2-1e1e-4f845bff63a7', 'Angreez Singh', 6, 3600, 1200, NULL),
+  ('20209c19-d39e-77ad-091e-44495da37004', 'ffd3bcca-4c6a-137e-915a-7f0ba2916764', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Vinod kumar', 5, 3600, 3600, NULL),
+  ('55cec837-d614-5410-544f-5e499b64344a', 'f47e7f7e-c689-5506-216b-4511b456a7d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ramratan Gordhan', 8, 4400, 4000, NULL),
+  ('db38da9b-8b60-9c7d-ee5e-7e93954666af', 'c73045aa-a330-fe60-5b28-b69784d50bf4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '13394146-0147-164f-22fd-b0a4368eb0a3', 'Gangadhar Gunda', 6, 3600, 3600, NULL),
+  ('299cb11f-eb35-481f-1776-938a014c85b4', '36f726b4-cd46-5f6b-487b-496470ad1839', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Rajiv Raveendran Pillai', 6, 3600, 2800, NULL),
+  ('456e649e-22c8-e4db-a8d2-07657c9ac558', 'c87e0938-998f-0173-bfa5-eb1f27452bc7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3654b579-b7a6-6d09-56de-9caedc826ee6', 'Mehmood', 6, 3600, 2900, NULL),
+  ('f3c3a749-93a7-18fa-840f-6be85812e79f', '382825ab-5ef8-d3a2-c0a6-2f22d27f0a27', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b5bc9254-e958-7a5e-2dae-c2a8833f2a6f', 'Sobahan ', 8, 4400, 4400, NULL),
+  ('9fdfcf25-d482-2bbd-1b45-8329c599b875', 'd83df73a-6c78-7e6a-5b76-13fc544c2e53', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '1024e495-a6de-94d8-697a-5c768169f004', 'Srinivasan Asokan', 6, 3600, 3600, NULL),
+  ('0c820e2b-e91c-ebc0-ab20-b1cf443fa954', '8a68e564-c2f7-496a-eb51-de4044da05d4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('4b3889bd-0980-fe03-7531-ccc15526047a', '9fc9eacf-1ddc-f6aa-d005-52a919bfc00a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('d44b685a-eba7-a5d8-30b9-a8e20150895f', 'dcb8740c-9cb1-4061-1e85-04559caa3edf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Jugal Jangir', 6, 4000, 0, NULL),
+  ('1a419e89-8cc7-13f6-758d-912b20d6a829', 'cd137f67-442b-cbd9-7a9f-145368034af0', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '92f819a8-53ef-990d-888d-2a2fd9fa58ca', 'Mubarak Ali Khan', 6, 3600, 3600, NULL),
+  ('b52007f8-d256-96b7-f9f8-859b24ac2ae0', '4425dbb2-cc46-3d35-e73e-accf350758be', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b55c6241-09ae-79f9-37e2-bba147c7b48c', 'Rach Bal Singh', 6, 3600, 3600, NULL),
+  ('95325d29-5745-84be-4931-24cabd6743c5', '91ca9e43-b4e4-c9ad-cbb7-715a40cccadd', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4d0eb48b-ff8c-464f-6b04-c59a4080f285', 'Yeshu Patham Seewan', 7, 4000, 4000, NULL),
+  ('d16a98c9-9a53-7430-f2a7-8a0a251a82e8', 'ca80c65a-57ab-9752-d53f-aa793f457d4d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('68e63073-80ea-c800-d938-1c5c3fe431e0', '1371b730-741c-5d7c-d5b8-022245fb50d7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'kamlesh Kumar', 6, 3600, 0, NULL),
+  ('ec1b8c71-1d6c-77e3-deae-279f9cdd0bb2', '9e907398-a6cf-3f30-c246-05addcbfe3a4', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'c4b10f23-71a0-dc1d-db10-78a6b8b3c65c', 'Maruthu Kaiyan', 6, 3600, 3600, NULL),
+  ('ad819968-d1ec-a5cd-24db-d92a01759d27', '8070a010-0abd-712b-6908-de72e55bc66d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('3af784d5-8ea8-5442-7532-68d9bb70ef1e', '402a37ca-d99c-1ee0-488c-5a95c34105c7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3600, 3000, NULL),
+  ('7bd43139-b4d5-ff3e-5a8f-d431fe1b1536', '431b9631-6d78-2db3-c0ed-7eaa15195c4b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'f99c2098-c926-93bf-0952-b045dec2e730', 'Lal Kumar', 6, 3600, 1300, NULL),
+  ('110bd24d-9399-0c26-0656-95c6360bce2c', '486e9107-7611-bbe4-2cc1-84c2c8a09a82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '63190fd3-4b04-7abe-b94b-432447ca06ce', 'Asaithambi Kuppusamy', 6, 3600, 3600, NULL),
+  ('58e5c80d-c06b-9935-0b9e-a4c73e0bd64f', '7b6facb4-ea65-bdd5-9098-4babcd04d3c3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5958ed1f-beee-13c6-e993-237f7f8450d4', 'Apu Haidar', 7, 4000, 2500, NULL),
+  ('12b53233-46f0-dc56-a9ee-9f78a26f8ab6', '6d497f97-37fe-6b5f-4939-007898d5a310', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '38bbf442-a02b-e33e-3981-9cadb30311b1', 'Balwan Nishad', 6, 3600, 3600, NULL),
+  ('777b1459-eb67-060c-face-ca512badc68f', 'cafd4367-889f-b6e4-0dcf-62159654badf', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Manoj', 7, 4000, 0, NULL),
+  ('4c8febbb-1cb1-815b-3ca2-a4a9c02b0381', '21ac2c11-a1e0-52db-e64d-882c994c16a3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'abcbe6ac-3621-3824-5896-fe04adb49fc2', 'Rohitash Kumar', 6, 3600, 3600, NULL),
+  ('b8ce2026-0dff-1152-4833-d4c065db333f', 'f7fc872b-b4ec-45b9-c102-84d6ae76078e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ritesh Kumar', 8, 4400, 4400, NULL),
+  ('c6477b27-3579-9813-0521-49f3a13ae849', '5005b1ec-edfe-42ad-63e1-f40744a2a8ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3e8b7a53-fd6d-af83-2cc3-1865edb8c0da', 'Dalip Hanuman', 5, 3600, 3600, NULL),
+  ('9a695fc3-9a06-4b51-1699-f2014b0e6789', '675f27a7-898e-975e-247c-a5f7fab8794c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '566bb23f-f341-d262-a276-141755ea71ac', 'Shaji Sivanandan', 6, 3600, 3600, NULL),
+  ('48e44eb7-0f82-112f-162e-217f0e160b55', 'ca05e632-adab-e125-a5c0-42497455e67b', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Rafiq Ali', 7, 4000, 0, NULL),
+  ('e22e2d56-e05a-880a-1ea0-a95b8bc9620f', '46dcf4d0-a164-1186-8503-ab679a97a980', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b36a8107-39f7-6aee-d79f-d74d6c178863', 'Jabar Qasim', 5, 3600, 2850, NULL),
+  ('eaf45ae8-2331-86c6-5c3c-39faa29513ab', '7713d2e1-2470-e152-cfe0-1a1297462f82', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '537b69c1-5931-7004-d63b-3f340e96e928', 'Santosh Alle', 8, 4400, 3800, NULL),
+  ('5e910fb6-90bd-ac5b-7488-95797b3650ff', '232d9f8d-8ab4-eab7-d75a-71b663a0e262', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '03d9a09b-e0e7-5d3b-ccf9-0a29dda5ba1b', 'K Nizamuddin', 7, 4000, 4000, NULL),
+  ('0a795c79-80bd-8b25-b5c5-e7a9a617d22d', 'e67c73b1-897a-e295-9ac6-831557fd6cac', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Kuldeep Singh', 6, 3600, 0, NULL),
+  ('888bb68b-c8fd-fd45-3778-eb8380a1f574', '698146dc-884f-82a7-0266-093fe8a40395', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Rajesh Kumar', 8, 4400, 4400, NULL),
+  ('efd3a9eb-1cb0-e637-f573-df53c7eb605f', 'eab9abc9-db1e-001b-6d6a-37f22c3a9d25', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('2e351c34-ade8-7b56-f5c1-026a8881fe1a', '5f744488-28e2-f0e1-80de-a93aa398534c', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Kuldeep Singh', 6, 3600, 0, NULL),
+  ('19577abe-ad57-0076-3a77-2ee6fc8326e6', '88c38b23-1a32-c9ca-b0b1-b99af8ce9dde', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('d13322ac-8d15-00e0-68e3-18371481beac', '65aa2461-ce5b-4e3b-8ecc-4d7caf09e3ce', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('91b60142-b6d4-bf2a-1a69-067e50b09573', 'e8e00493-d214-691e-492d-8135afe7384a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('6470c3f0-d4ff-247f-63f2-fe9f8985b264', 'd347a97d-2a6a-f212-b1b7-4802e4c2699a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7a0456e3-00c7-2b7e-b9b1-8052039a419f', 'Arumurkan', 8, 4400, 4400, NULL),
+  ('a9a64b21-e86b-e9cc-010b-18adfb989b05', '90bc5b8d-f0e9-33a7-d49d-587e12a2e816', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '7db06d0e-e65e-ecc4-f4a8-c3fbffd35cb5', 'Prahlad Baberwal', 4, 3600, 1000, NULL),
+  ('ac17cd3f-3bcb-fa15-1a63-6b1b28c3a3d3', '5eaa632d-3a06-7ace-9c2b-18fc3a4eb879', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('265b317e-d931-24bf-57e7-64466aa0db46', '36d1af28-1a3f-01d6-7945-2a4b62ba9433', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0c2d47ee-2dd9-4a74-6f69-c522618a2320', 'Mohammad Galib', 8, 4400, 4400, NULL),
+  ('11a0aa6f-e391-3ef3-73ef-ba35aaa7854a', '6cd974dd-a343-810d-5b55-bf77af15a967', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Kuldeep Singh', 5, 3600, 0, NULL),
+  ('92cd8ae0-586a-676d-15ad-d5fcbe8ce0bd', '1f4f2054-b723-b524-85ed-244afb1a26f1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4385224d-8d36-cff7-4d55-ed9ec457e951', 'Subhan ', 6, 3600, 3600, NULL),
+  ('d5bda582-e6e0-7705-f00c-da22e9e36757', 'a18ee8ad-d676-e2cd-8b49-7e801dfeefa8', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 5, 3600, 0, NULL),
+  ('08b8881a-4c85-289e-c25e-0f6e6730463e', '4ec112ac-fad8-7436-4c76-f1506016fd92', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '339f315a-67a7-0ed8-7343-a757be722b4a', 'Gangir Trading', 6, 3600, 0, NULL),
+  ('19caafc6-cc11-b0e2-d705-42badfdd6b0c', 'a3be8b89-d857-498d-0791-884248a1c926', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('80d31f8b-6f34-3e46-4b89-41fddfcb8e98', '725b6593-ba44-2ac9-e08e-3e4a38a063a3', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'bee8793c-cbc2-a3b4-7cd7-2237dfa4be0a', 'Asif Khalid', 6, 4400, 4000, NULL),
+  ('cc002475-e3fa-33a0-3975-ba499706c66e', '314c0af2-fb6f-6c3d-e17a-8c0760337136', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Jagnath', 8, 4400, 4400, NULL),
+  ('749ac1b9-e088-7537-03c2-889c66bbe529', 'c383c90a-6ac9-0803-f112-5f501332609f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Hutaraj Dahal', 6, 3600, 3600, NULL),
+  ('dc0868bb-dd9d-2d57-a291-f59c1d878752', '9e941bc3-1e9c-f03a-652e-8143126edf0f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '99a5b336-32a0-efaf-d98a-73d79ee08eea', 'Sreenivas Srigadde', 5, 3600, 3200, NULL),
+  ('fb24e0cf-2532-27af-6ce1-2f4bdd559da4', '33277479-c5b2-2962-8d54-8afb06ab2362', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3f365ff8-b7de-a758-3982-b5139fc568c5', 'Hamdan Saeed', 6, 3600, 3600, NULL),
+  ('0bf011fd-c869-52f6-79f7-d6c30d0786a4', 'f77a0cf6-a7fe-89a2-89f3-a67b49c0884a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '246f3f06-52d1-bc92-0e54-8ccf5f7324f2', 'Mohammad Alau Din', 6, 3600, 3600, NULL),
+  ('f4bec377-81d7-08a1-c114-3bcb1a5a963a', '1274a665-bd96-a087-1080-2a04ab77b716', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '11f4ff60-bf5e-08ce-2123-17348510dc07', 'Al Deraa Structural Steel ', 5, 3600, 3600, NULL),
+  ('c826af5e-c4cd-8cba-15d9-cc14031d8849', 'da324106-f4b6-72f0-b763-8e9639981796', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'kuldeep Singh', 6, 3600, 0, NULL),
+  ('be24da5b-3988-d17b-f2c7-b41cf844b5e2', '30857481-044a-dcd7-3d7b-cf31b410fc9d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '3604d8a9-f659-4efd-9168-e48c0572b0d0', 'Nalesh Achehal', 7, 4400, 3600, NULL),
+  ('e7f59a96-4e09-c974-9d30-1f1379afbd7c', '42a24dc6-b4b9-6073-ea5b-60859a40d8ad', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'a2f0b399-caa3-c6fd-235a-b205fdd4d222', 'Murari Lal Ram', 7, 4000, 4000, NULL),
+  ('007b68bc-a297-0329-5ff6-0715dff722dd', 'e50b800c-ce0b-fd45-7717-2e6ffd050e6f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Novir Ali', 7, 3600, 3600, NULL),
+  ('455ca910-f94d-81a6-d69e-abb0118d0f29', 'b0701635-a3c6-2985-7c17-da559ca85242', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 5, 3600, 3600, NULL),
+  ('7e780502-901b-11e5-ea6a-06a37b98302f', '4fe7f532-9a66-bd81-64da-55ee4442418a', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'febdeb6b-8a92-96cc-7b9e-63ed6945413c', 'Ram Kishan Prahalad ', 8, 4400, 4400, NULL),
+  ('dd3237e6-fa9d-55be-d0c4-ec490b4433bb', '941d3e98-5e23-f23f-ad5c-a9dff0437423', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '5059d64e-1c16-d6a9-e19a-e394968c8a47', 'Johns Paints Trading', 1, 3600, 3600, NULL),
+  ('28893660-bf17-02b2-31c7-0c2f7df66e5e', 'b827147e-5928-e390-3d49-4687dbc2556e', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '0247fa11-8b9b-528e-e01f-c23d5beb99d4', 'Banwari Lal', 7, 4000, 3000, NULL),
+  ('92081a3f-8ec7-fcf0-7ffa-ea051fca7e8e', '64eac004-12dc-d288-0404-5733c080302f', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '47b83de3-fbbd-79e8-d345-cf4bd87775d3', 'Base Plate Company', 6, 3600, 0, NULL),
+  ('2a4865e9-8391-e91e-e0a1-ea62c513c91f', '31f5a7c7-13f2-d168-6458-e0efffa6eaee', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '6928fd2a-1ef9-42a0-9b6d-2ac0fb958514', 'Yas Pal Singh', 6, 3600, 3600, NULL),
+  ('900a5998-5d0f-8831-a0a7-b9e659409f95', '1d4c1ca3-79f5-9ac1-a710-43ea1c70d2db', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Khaja Mohammad ', 7, 4000, 4000, NULL),
+  ('cf847a15-7744-f7aa-1c94-a2e63c1d3e96', '48ca3a71-f155-09bf-3357-395393c2f505', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '297ce70e-d88f-6f29-1854-e510f2602ee2', 'Carpentors Technicals LLC', 7, 4000, 3000, NULL),
+  ('a021ce5b-f787-ca4c-fe30-30c7a40b2d08', '354d86f0-21cb-dafe-a3f1-2accb348999d', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'b95e9b18-5561-1000-2be7-3a23806fb04f', 'Vamshi Gasengi', 7, 4000, 4000, NULL),
+  ('f0222290-8d9d-9867-c6e0-a8ec1f5adf74', 'abeb21cc-39e0-c669-40ee-964e7b3de370', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '4409bee7-4cb0-9e53-8f48-c46e29387f55', 'Irfan Ali', 6, 3600, 0, NULL),
+  ('7bb721af-1eb7-ffe3-daf0-2d874b05fe9b', 'e299747f-6e1a-f198-0924-7053a6e424e5', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '075fbe4a-97c0-273e-e648-67e8500b3406', 'Balwinder Singh', 7, 4000, 4000, NULL),
+  ('54134af5-dc21-306a-aac0-c60063bfc3b3', '352ed3f3-3f1d-9f4b-10ac-0b8dca1e0b48', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Tofiq', 6, 3600, 3500, NULL),
+  ('63f25091-a443-8db4-36f5-c57cb5049c01', '28982004-3bc4-1964-e0c1-0a6605a17278', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, '951a58a5-d716-a14f-2d8f-7e88dbd76ffb', 'Rakesh Nishad ', 8, 4400, 0, NULL),
+  ('6f90b56f-7496-051e-f510-ef125eb060b3', 'bde2f5cf-5ff2-a977-99bc-2f0f028684a1', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ram Bhawan yadave', 7, 4000, 4000, NULL),
+  ('f6affde0-d1bf-96af-f8cf-cfd93e84da75', 'ba40c1be-4276-3815-69ab-2a1f6160e064', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Ram Karan', 8, 4400, 4400, NULL),
+  ('ac586c63-4a74-2afb-1471-c034b837c295', '792206f9-1146-facf-432e-2b7a3b1cfe13', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Sanjay Kumar', 8, 4400, 4400, NULL),
+  ('76d41141-8940-be24-fdf4-c133dc468e59', 'bca8fbbb-e84c-1554-3666-c42fc83fb399', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, 'de3556d7-e674-66aa-9e05-f429e251ea51', 'Vijay Prakash Yadave', 6, 3600, 0, NULL),
+  ('082a28b4-e22a-874a-3c80-51efa07f3516', '7078bf03-8c60-6ab7-d542-bba7214141ea', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Daulaf Sahani', 7, 4000, 3600, NULL),
+  ('99561dc0-c901-d8c5-f71b-cb265876c983', '9909495b-f777-53fd-4136-d5b334a161b7', '4c935f2b-23b9-b94c-99ca-cb2ee0620045', 2, 2026, NULL, 'Rajvir', 8, 4400, 4400, NULL);
+
+-- ── CAMP 2 MONTHLY RECORDS ───────────────────────────────────
+INSERT INTO monthly_records (id, room_id, camp_id, month, year, company_id, company_name, contract_type, people_count, rent, paid, remarks) VALUES
+  ('022ff0c7-0b1d-a6a8-6313-608550ec8501', '692ecce5-cce1-7ed1-52ac-d7407e92e8ed', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('7951ed01-0398-2986-0eba-729bacdb79e3', '692ecce5-cce1-7ed1-52ac-d7407e92e8ed', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('38b0e176-b178-d68e-3951-7506a47ec32f', '692ecce5-cce1-7ed1-52ac-d7407e92e8ed', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '913ae1f9-1acf-cf05-d11a-2f6172fcea66', 'Electricity Room', '', 0, 0, 0, NULL),
+  ('a38408b2-31f2-6d8c-2dca-5ee046c7c7ef', '58741e86-d940-e77e-436f-2ad7cf336050', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 12, 6500, 6500, NULL),
+  ('8e742238-95b5-8e9e-836b-3513f20e1975', '58741e86-d940-e77e-436f-2ad7cf336050', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 10, 6500, 6500, NULL),
+  ('81250f39-c362-64b3-15c5-11fdde07a0c7', '58741e86-d940-e77e-436f-2ad7cf336050', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 10, 6500, 6500, NULL),
+  ('031255b5-28dc-6dd0-c341-ffd0f780842f', 'bfaa8695-827b-3747-4fff-7549af3251ab', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 11, 3300, 0, 'Legal'),
+  ('7814ef43-f9ea-5ecb-7cab-2bc75b63a105', 'bfaa8695-827b-3747-4fff-7549af3251ab', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 10, 3300, 0, NULL),
+  ('f02a22ab-cc45-6772-e974-6891b28f5710', 'bfaa8695-827b-3747-4fff-7549af3251ab', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC ', 'yearly', 12, 3300, 0, NULL),
+  ('bfa5d56f-813b-5bf9-fb3a-e904214b6902', '0b2e2fd5-233d-a6e5-5847-405acc9dff19', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('e01da487-08d5-9465-e447-8dd822128e0e', '0b2e2fd5-233d-a6e5-5847-405acc9dff19', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('3218cf2f-8c16-4e45-3d1e-763b2b94a02f', '0b2e2fd5-233d-a6e5-5847-405acc9dff19', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('48f91ea6-c02b-f3f9-bc8e-2802b05c8160', '41bae381-22a2-e8c2-5482-f8cd41cc96d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('9b11d51b-84cf-ebbf-6e28-7920dec4d20a', '41bae381-22a2-e8c2-5482-f8cd41cc96d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('e6c186f0-38ff-ae49-ba87-62438923f4f7', '41bae381-22a2-e8c2-5482-f8cd41cc96d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('3fcd3bc3-771a-eb49-7dfc-b5f1b1340767', '5842b2f7-36ab-f92c-72fb-c087317c4d79', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'Vacant', 'monthly', 0, 0, 0, NULL),
+  ('ff693daa-f545-4f2d-0ea8-000086940dfa', '5842b2f7-36ab-f92c-72fb-c087317c4d79', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a48b5bbc-ab0f-8626-8b30-c33f6911ffb5', 'New Phoenix', 'monthly', 8, 7800, 7800, NULL),
+  ('98c98d37-9e66-31d9-300e-c47ab3896abd', '5842b2f7-36ab-f92c-72fb-c087317c4d79', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '6538b5c2-7bb4-f77f-881f-df9f150aece2', 'NEW PHOENIX TECHNICAL SERVICES LLC', 'monthly', 9, 7800, 7800, 'Transfer in DIB on 10th March Aed 7800/-'),
+  ('4f59f451-a120-e076-6d47-11d351628630', '2fcdd4a7-aa52-f192-04bf-e671d5b73d00', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 12, 6500, 6500, NULL),
+  ('3352c817-bf72-8396-4d31-086c3e818ea2', '2fcdd4a7-aa52-f192-04bf-e671d5b73d00', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 12, 6500, 6500, NULL),
+  ('ee50c730-c5fb-11f7-ffd2-18cbc87e9abd', '2fcdd4a7-aa52-f192-04bf-e671d5b73d00', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 10, 6500, 6500, NULL),
+  ('fabcd069-4746-f1ae-d5ee-a856946ce9db', 'c96ef0b0-2d21-6991-d4b1-c32c9e1d1ccf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '2868ce4c-9a0a-99da-1377-25f82e3da396', 'Falcon Pool', 'yearly', 11, 5400, 5400, NULL),
+  ('351b9803-2ba4-d487-2a29-74870e8fad43', 'c96ef0b0-2d21-6991-d4b1-c32c9e1d1ccf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '2868ce4c-9a0a-99da-1377-25f82e3da396', 'Falcon Pool', 'yearly', 12, 5400, 5400, NULL),
+  ('99412d74-e5be-5aba-5825-cd7a00acf982', 'c96ef0b0-2d21-6991-d4b1-c32c9e1d1ccf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd18265d2-62ae-33c0-aea3-6e888fc3c5ff', 'FALCON POOLS LLC', 'yearly', 11, 5400, 5400, NULL),
+  ('fc1fff4c-d6b8-b1b9-34f8-e6cfbdf85f2e', '39eceda3-a771-a4aa-d3d0-9b945f407c95', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '75cce825-9bcd-a56a-6c5c-7dd3e75e3148', 'Iftikar Hussain', 'monthly', 10, 7800, 7800, 'Cheque # 8 dated 13th Jan Aed 7800/-'),
+  ('93a60561-ca7d-41ee-a200-7e09e6035bd1', '39eceda3-a771-a4aa-d3d0-9b945f407c95', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '75cce825-9bcd-a56a-6c5c-7dd3e75e3148', 'Iftikar Hussain', 'monthly', 10, 7800, 7800, NULL),
+  ('7f1694a0-f257-a33d-859b-bd450d406569', '39eceda3-a771-a4aa-d3d0-9b945f407c95', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '75cce825-9bcd-a56a-6c5c-7dd3e75e3148', 'Iftikar Hussain', 'monthly', 11, 7800, 7800, NULL),
+  ('a7238f00-3a48-3bb8-f172-4c74f366fff1', '1b5f89fc-21ad-6bc8-f4ad-09b8c099fadf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'monthly', 9, 6500, 6500, 'Transfer on 8th Jan in Mashreq Aed 6500/-'),
+  ('3853263d-b2cd-cd1e-0c33-d5bd4e4f42ae', '1b5f89fc-21ad-6bc8-f4ad-09b8c099fadf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'monthly', 9, 6500, 6500, NULL),
+  ('d6771f69-1b53-f1f2-65dd-c05bfeba4bec', '1b5f89fc-21ad-6bc8-f4ad-09b8c099fadf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'monthly', 9, 6500, 6500, 'Transfer in Mashreq on 10th March Aed 6500/-'),
+  ('57aa8767-a02c-4be9-22e4-19c5818b4e4c', '92daa98f-d20d-1e28-0ea5-7cda77ffab88', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 6, 0, 0, NULL),
+  ('56fd4c6c-30cc-0327-c4ac-872b52e364be', '92daa98f-d20d-1e28-0ea5-7cda77ffab88', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 9, 0, 0, NULL),
+  ('6e550db1-699e-0104-5a12-8e9ef2624fb3', '92daa98f-d20d-1e28-0ea5-7cda77ffab88', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 10, 0, 0, NULL),
+  ('de68ac62-2e1e-70d4-9e85-8b665dcdd1d7', 'fa20b082-29d8-8b07-d649-636cad101be6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('edd962d2-e72e-3e23-4fd2-d1136aab4f68', 'fa20b082-29d8-8b07-d649-636cad101be6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('f81c49ac-4127-cfce-4d4b-58e4d760bf16', 'fa20b082-29d8-8b07-d649-636cad101be6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 10, 4500, 4500, NULL),
+  ('336b2dfe-ef06-6aeb-6b3e-0744b166bc04', '83b2e2c5-3a93-32e2-6d75-a15d9a1a460a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '99f69dec-b282-3aca-18a0-3bdb20803255', '800 Truck', 'monthly', 8, 5500, 5500, 'Transfer in DIB on 6th Jan Aed 16500/3'),
+  ('0179af76-d56f-92c8-92cc-5c1936c2d9af', '83b2e2c5-3a93-32e2-6d75-a15d9a1a460a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '99f69dec-b282-3aca-18a0-3bdb20803255', '800 Truck', 'monthly', 8, 5500, 5500, NULL),
+  ('d0cf1e95-21aa-4d12-1b7b-613d66016071', '83b2e2c5-3a93-32e2-6d75-a15d9a1a460a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '99f69dec-b282-3aca-18a0-3bdb20803255', '800 Truck', 'monthly', 8, 5500, 5500, 'Transfer in Mashreq on 6th March Aed 11000/2'),
+  ('23174218-73cc-3c12-1804-3553db70e921', '4560f53c-9ec8-845d-7ae4-89b491667611', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('61dc943d-88e1-4d87-2440-c0b4355fbabe', '4560f53c-9ec8-845d-7ae4-89b491667611', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 6, 4500, 4500, NULL),
+  ('183e71fa-fe20-d384-e15d-8cc72c16f67b', '4560f53c-9ec8-845d-7ae4-89b491667611', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 7, 4500, 4500, NULL),
+  ('4c6284ac-f729-ed81-8aa3-42f0eccabe1a', '1489c3c3-c85b-b0e7-49b0-ce824a45e11a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('90819d24-dfff-4df4-de79-0670db94aa8c', '1489c3c3-c85b-b0e7-49b0-ce824a45e11a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('5a64639e-a343-79d3-c1ff-5e98a135bb34', '1489c3c3-c85b-b0e7-49b0-ce824a45e11a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('4e6e6f1a-9434-df67-bd66-5d131996bf70', '0fec0ad3-aebf-7297-8ee1-adff814d6547', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('44eaf486-57e0-5965-2f62-a8171187f425', '0fec0ad3-aebf-7297-8ee1-adff814d6547', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 4, 4500, 4500, NULL),
+  ('d82b3085-da1a-9927-5083-6de3208a4980', '0fec0ad3-aebf-7297-8ee1-adff814d6547', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('1b6809dc-3363-d7d5-cdd7-3a0ae27d98d7', 'e60d65a7-70ac-9805-f940-483fd584dddf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '9dd093be-c279-4865-c4b4-4630dd854925', 'Cool Wood Interior', 'monthly', 8, 5500, 5500, NULL),
+  ('a37a7032-ce99-2fab-1002-26aa75b569cb', 'e60d65a7-70ac-9805-f940-483fd584dddf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '9dd093be-c279-4865-c4b4-4630dd854925', 'Cool Wood Interior', 'monthly', 6, 5500, 5500, NULL),
+  ('8b00e997-e39b-cca0-02af-390fc2f619a9', 'e60d65a7-70ac-9805-f940-483fd584dddf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '956c2b40-1d82-2487-395b-9328d9c6eaab', 'COOL WOOD INTERIOR DECORATION LLC', 'monthly', 6, 5500, 5500, 'Chequ # 330 dated 5th March Aed 11000/2'),
+  ('3b75d8fd-40c1-4ce2-09b3-a2f38080a858', 'b4f538b7-f31d-79f4-4e03-e008cd579186', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '9dd093be-c279-4865-c4b4-4630dd854925', 'Cool Wood Interior', 'monthly', 8, 5500, 5500, NULL),
+  ('e09173bf-8297-0516-92ae-4a867a2ac2b8', 'b4f538b7-f31d-79f4-4e03-e008cd579186', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '9dd093be-c279-4865-c4b4-4630dd854925', 'Cool Wood Interior', 'monthly', 8, 5500, 5500, NULL),
+  ('8cc486b2-01c4-1f64-fd71-6f4102c3026b', 'b4f538b7-f31d-79f4-4e03-e008cd579186', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '956c2b40-1d82-2487-395b-9328d9c6eaab', 'COOL WOOD INTERIOR DECORATION LLC', 'monthly', 7, 5500, 5500, NULL),
+  ('04b42a93-933e-ccb3-7b18-853b2c9516d8', 'a5d1ac7d-34fe-b395-c31c-b9c8bf255453', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 4, 3600, 3600, NULL),
+  ('000de8fe-291c-4b31-1e1a-bf2e4ac533b9', 'a5d1ac7d-34fe-b395-c31c-b9c8bf255453', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 4, 3600, 3600, NULL),
+  ('f0897b76-f129-f305-6435-e4edd8d383c6', 'a5d1ac7d-34fe-b395-c31c-b9c8bf255453', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'yearly', 4, 3600, 3600, NULL),
+  ('90138968-d402-426c-560e-594a3929e82a', 'cdb1a1b2-3aaa-4af4-3dda-d4a3b6374738', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 5, 3600, 3600, NULL),
+  ('596f3edd-fc59-cb48-632d-9f4c302b12bd', 'cdb1a1b2-3aaa-4af4-3dda-d4a3b6374738', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 5, 3600, 3600, NULL),
+  ('aa54c436-7dca-b5da-864c-5aa8a6307d42', 'cdb1a1b2-3aaa-4af4-3dda-d4a3b6374738', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('00108047-21f4-6ec6-f933-be919c75bc64', 'e9b2b45e-f4b7-0c9f-ddba-e2fc9dd96b3f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 6, 3600, 3600, NULL),
+  ('f73f8f05-b530-e2a0-1500-22b7ba915a9d', 'e9b2b45e-f4b7-0c9f-ddba-e2fc9dd96b3f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 6, 3600, 3600, NULL),
+  ('2e13b8af-fab7-de1a-9495-1261baac1547', 'e9b2b45e-f4b7-0c9f-ddba-e2fc9dd96b3f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('af55aa8c-2199-65db-208d-b6391b003823', 'cf8c4254-427a-8a55-3f51-ffb52d25bff5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 5, 3600, 3600, NULL),
+  ('d628d157-ca70-4dd5-22c8-f442baa1f8a6', 'cf8c4254-427a-8a55-3f51-ffb52d25bff5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 5, 3600, 3600, NULL),
+  ('76841af1-4482-362c-476b-77b0e9132b02', 'cf8c4254-427a-8a55-3f51-ffb52d25bff5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'yearly', 4, 3600, 3600, NULL),
+  ('658b9a47-bc54-bbfc-b130-7b931cad0de0', '707a4537-205d-2885-1c57-ed1c4a78c619', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 6, 3600, 3600, NULL),
+  ('13be19ff-0da9-3fab-6dad-b46582d25ce7', '707a4537-205d-2885-1c57-ed1c4a78c619', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fd7231ad-503f-333e-90a2-7e3687cda889', 'Advance Aluminium Systam', 'yearly', 5, 3600, 3600, NULL),
+  ('3e014ad9-1da7-84a5-2292-eaca6704c49d', '707a4537-205d-2885-1c57-ed1c4a78c619', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('6a4922ca-a4ed-0b36-f016-f30b62cfa149', '256d71ac-6280-cfb2-df32-f864488577ac', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('dfc2aab8-7f61-36e8-5de8-43b29b021f4c', '256d71ac-6280-cfb2-df32-f864488577ac', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('1b481441-a790-0c65-403b-961b4ce504da', '256d71ac-6280-cfb2-df32-f864488577ac', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('88d53746-6a1a-179a-1bd6-d304d686b855', '9364285c-e18b-2ad4-e540-4d303fb6f720', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('ef2455de-345d-5138-453a-9305370cf0a2', '9364285c-e18b-2ad4-e540-4d303fb6f720', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('ec2959ff-39df-25c0-b8a3-3f0915a1f0e5', '9364285c-e18b-2ad4-e540-4d303fb6f720', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('ea9eb802-aa23-98d4-557e-517373ba9e72', 'f110063d-341e-0596-7272-e88356b058f8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 6, 4500, 4500, NULL),
+  ('041e5198-d0d7-8a04-ec1c-2d96fce3b718', 'f110063d-341e-0596-7272-e88356b058f8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 6, 4500, 4500, NULL),
+  ('9d72439b-f864-7975-5612-0e17bad86ffa', 'f110063d-341e-0596-7272-e88356b058f8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 6, 4500, 4500, NULL),
+  ('0b095925-b6a7-753d-776c-a03b38d0c849', '266bcac9-fa22-75be-7efe-0edfe4a9ca0f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('03d977e7-3181-a1a4-da26-c66fa25d25c9', '266bcac9-fa22-75be-7efe-0edfe4a9ca0f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('06409f17-8f9d-5e3a-e7b9-850994432c37', '266bcac9-fa22-75be-7efe-0edfe4a9ca0f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('34e378cc-5e3c-3f48-00bf-c1b45bd54bae', '322a1445-bb4d-6a1e-21bd-de745dc37faf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('f25e51bc-e5a2-2d9e-8429-16e579c9c9a9', '322a1445-bb4d-6a1e-21bd-de745dc37faf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('41482639-f1d0-a807-ce8a-4188c57d62ce', '322a1445-bb4d-6a1e-21bd-de745dc37faf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('f801b57e-f0d1-6483-b319-fc2d5961b92d', 'df926aa3-01f2-e5e8-bce5-6df6e868c268', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('59243a66-8864-95e4-851e-bece37974773', 'df926aa3-01f2-e5e8-bce5-6df6e868c268', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('1309f087-6538-399e-54e4-1f115587af95', 'df926aa3-01f2-e5e8-bce5-6df6e868c268', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('466e7e58-b6d5-fadf-4af5-8ed597db85fd', '65d501ec-1575-f670-96d5-0d85f788f758', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('4c84d6ec-38b6-7459-820c-6f63bbfaa895', '65d501ec-1575-f670-96d5-0d85f788f758', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('b02bc9e1-17fa-ee6d-cc72-572ceaedceb1', '65d501ec-1575-f670-96d5-0d85f788f758', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('852400a7-c37c-ed8a-1a5a-472de8087287', '8ca60b19-6d29-b1e8-d68e-b53e12a6e8a4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('ebcf519c-0a7c-1921-0aad-60b7f8ab8aac', '8ca60b19-6d29-b1e8-d68e-b53e12a6e8a4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('a4f9baee-c260-758e-ab6b-c36d5d48bb17', '8ca60b19-6d29-b1e8-d68e-b53e12a6e8a4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('9a2b2d58-be56-9130-b92d-f2d4daf1732a', '6d92089a-a036-f8fc-a58e-aa5b73a1dcb7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('18c2af26-7544-d219-f180-959c9938e5b8', '6d92089a-a036-f8fc-a58e-aa5b73a1dcb7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('c4733e88-64ea-4bef-2371-365981aba0e1', '6d92089a-a036-f8fc-a58e-aa5b73a1dcb7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('75b22754-9a17-731b-4ad9-88908e449ba4', '5d79747f-c14a-e1d1-a933-cae7a98e65e7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'vacant', '', 0, 0, 0, NULL),
+  ('1a462c8b-34be-7144-c451-faeca5044688', '5d79747f-c14a-e1d1-a933-cae7a98e65e7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'vacant', '', 0, 0, 0, NULL),
+  ('1f53a87c-45e0-44f1-2907-fc69c1ef8783', '5d79747f-c14a-e1d1-a933-cae7a98e65e7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, NULL, 'Vacant', '', 5, 0, 0, NULL),
+  ('af8110ae-d575-86ef-185b-9adac7845e72', 'f334b9af-61d7-4f10-2af7-cd3744b8a73c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('c5aa07b0-abac-c9e4-cf01-fe76b2b8624b', 'f334b9af-61d7-4f10-2af7-cd3744b8a73c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('429b1891-e09c-6268-95ad-05414643bd83', 'f334b9af-61d7-4f10-2af7-cd3744b8a73c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('ef6a6818-81b8-4724-b6d0-96eb7c03c2e1', '84b4eb45-04e1-51c2-3c90-7a7af7d489e8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('e658cd0d-270a-a3f6-39ec-8015343507e3', '84b4eb45-04e1-51c2-3c90-7a7af7d489e8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('e73166b1-1cdd-aca1-dd0a-ace93b65fae5', '84b4eb45-04e1-51c2-3c90-7a7af7d489e8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('da6e2f6e-a40a-8f83-f575-be76107bc2c0', 'd61361e9-d3e1-b78d-7962-e358bb16701f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('bd35f72c-0303-78a0-c08c-12370e90a294', 'd61361e9-d3e1-b78d-7962-e358bb16701f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('6a29c595-459f-7bc0-c824-8765d758c46b', 'd61361e9-d3e1-b78d-7962-e358bb16701f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('4c702e1f-17a7-b7b7-3a6c-3a689c2847df', '1cb21aab-6fcf-0276-6646-1f2605568fe1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'fa99e464-aa8f-5067-062b-2a8feb09a533', 'Malik', 'monthly', 8, 5500, 5500, 'Cheque # 04 dated 10th Jan Aed 5500/-'),
+  ('f87413dd-42a5-5fba-009c-56553465b147', '1cb21aab-6fcf-0276-6646-1f2605568fe1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'fa99e464-aa8f-5067-062b-2a8feb09a533', 'Malik', 'monthly', 8, 5500, 5500, NULL),
+  ('f1a1d7d6-ab6a-7511-fb79-c31b37fa4bb1', '1cb21aab-6fcf-0276-6646-1f2605568fe1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fa99e464-aa8f-5067-062b-2a8feb09a533', 'MALIK', 'monthly', 6, 5500, 5500, NULL),
+  ('20d95c0e-d42a-9881-a6ef-bc7fc59277cd', '4e7e8c94-b156-fe58-d9bd-18ce2446c284', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLc', 'yearly', 6, 4400, 4400, NULL),
+  ('1be6e1d5-c5a9-34b3-3ebc-baf781ec7f3b', '4e7e8c94-b156-fe58-d9bd-18ce2446c284', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLc', 'yearly', 7, 4400, 4400, NULL),
+  ('89adab38-57c7-b4ce-e852-321767c42abd', '4e7e8c94-b156-fe58-d9bd-18ce2446c284', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '05fa3468-49f1-2732-dea7-9bfbff53cd57', 'VENUS CONSTRUCTION LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('ba3719a7-4bea-8771-8e3f-7364fa0a036d', 'b61d25d4-47de-6f15-efc0-0beb278e71ac', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ca7c744c-955d-822c-0422-48e2b6972e1c', 'Zadar AL Madina', 'monthly', 8, 5500, 5500, 'Cheque # 33 dated 10th Jan Aed 5500/-'),
+  ('a1de3475-66fe-c075-f4af-1dd86bf05d1a', 'b61d25d4-47de-6f15-efc0-0beb278e71ac', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ca7c744c-955d-822c-0422-48e2b6972e1c', 'Zadar AL Madina', 'monthly', 8, 5500, 5500, NULL),
+  ('9f08d823-1502-d21f-896c-6bb8516cc909', 'b61d25d4-47de-6f15-efc0-0beb278e71ac', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '2736db3f-6f59-3650-4fe4-b315f2c1f226', 'Jadar al Madina', 'monthly', 8, 6100, 6100, '1 Extra Person Aed 600/-'),
+  ('6323f25a-9075-fdd0-e2a3-0d2272d2feec', '9828f5dd-a65f-fa43-1da0-2cb52ab6b33c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 8, 2420, 0, 'Legal'),
+  ('d81b7460-c305-279d-7302-ff41fddc3b1c', '9828f5dd-a65f-fa43-1da0-2cb52ab6b33c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 6, 2420, 0, NULL),
+  ('234cf61f-987a-9bfd-2bd3-74ae6c64c09d', '9828f5dd-a65f-fa43-1da0-2cb52ab6b33c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 8, 2420, 0, NULL),
+  ('86e892d9-9196-40e5-59a7-e78a28d9093b', 'df1bb929-7a16-3698-6d0c-986700d05759', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 8, 2420, 0, 'Legal'),
+  ('6e1ff72d-e7ab-3f3f-1e45-7dd20d094b7a', 'df1bb929-7a16-3698-6d0c-986700d05759', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 7, 2420, 0, NULL),
+  ('91c71603-7e90-9174-3dc7-e0567e857993', 'df1bb929-7a16-3698-6d0c-986700d05759', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 8, 2420, 0, NULL),
+  ('3bffeac0-5009-1f57-efe6-c85028f66d94', '8b1208b9-1d06-f3fd-8b17-1048fe064ace', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 6, 2420, 0, 'Legal'),
+  ('df2a314c-4df2-6272-cfd7-7a22d8a945a6', '8b1208b9-1d06-f3fd-8b17-1048fe064ace', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 5, 2420, 0, NULL),
+  ('2e157a45-c7fe-0752-aa21-53a1a96fea51', '8b1208b9-1d06-f3fd-8b17-1048fe064ace', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 5, 2420, 0, NULL),
+  ('1af195ee-9ab5-68cd-57bc-a6b5d19e469a', '0515aecb-c4cc-b8a5-fddb-cb728fffcb54', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 8, 2420, 0, 'Legal'),
+  ('768820d4-2078-32b0-4440-f7b71dcd9653', '0515aecb-c4cc-b8a5-fddb-cb728fffcb54', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 8, 2420, 0, NULL),
+  ('f72e0d0f-8be5-7f48-6f02-073672933d89', '0515aecb-c4cc-b8a5-fddb-cb728fffcb54', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 8, 2420, 0, NULL),
+  ('e1797ab2-c7a8-7296-b306-12534824c114', '3e72b0d5-ed6e-61c0-2f13-df1f86bae42d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 6, 2420, 0, 'Legal'),
+  ('b389febc-9e8c-c970-1c72-96f3a43a87ec', '3e72b0d5-ed6e-61c0-2f13-df1f86bae42d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 6, 2420, 0, NULL),
+  ('d942fbf5-fd63-7046-be63-51fa1040fdee', '3e72b0d5-ed6e-61c0-2f13-df1f86bae42d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 6, 2420, 0, NULL),
+  ('1240882e-2941-18f0-36fe-861494ba8852', '67b4fa68-1286-b158-cb92-fe113cbeef6d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 5, 2420, 0, 'Legal'),
+  ('37168fd2-fdca-b702-548c-03ca17cb56ca', '67b4fa68-1286-b158-cb92-fe113cbeef6d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 8, 2420, 0, NULL),
+  ('d80e779c-482d-893a-9303-24683db06740', '67b4fa68-1286-b158-cb92-fe113cbeef6d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 6, 2420, 0, NULL),
+  ('c0927f30-68b6-2d8f-319d-077b7a3bc0b8', '8c5067f8-d39e-d23f-6849-5cd9bbdd13f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '882b2430-ddf5-aef1-2011-33ab0f50f790', 'Mindmap Human Capital', 'monthly', 10, 6500, 6500, NULL),
+  ('8bfb6cf3-cc57-a0d3-5228-83551dff4c3e', '8c5067f8-d39e-d23f-6849-5cd9bbdd13f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '882b2430-ddf5-aef1-2011-33ab0f50f790', 'Mindmap Human Capital', 'monthly', 10, 6500, 6500, NULL),
+  ('79788fc6-e451-df91-acf7-ac7bc5af526e', '8c5067f8-d39e-d23f-6849-5cd9bbdd13f5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '882b2430-ddf5-aef1-2011-33ab0f50f790', 'Mindmap Human Capital', 'monthly', 9, 6500, 6500, 'Transfer in Mashreq on 9th March 6500/-'),
+  ('314b0539-577c-a9e8-1f6d-fba71b9d0aec', '5b59d8b9-98d9-9dd1-b898-286892d6bb5f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('fc746d3e-356f-dbe6-72f8-64a2096f505b', '5b59d8b9-98d9-9dd1-b898-286892d6bb5f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('683e5ff1-b247-d3e9-2e3b-b70b4c527cb7', '5b59d8b9-98d9-9dd1-b898-286892d6bb5f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('05093895-92ea-97b2-3d49-b926a27def57', 'f8bb6046-1785-b809-fafc-94f631d866b8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 7, 5500, 5500, 'Transfer in Mashreq on 7th Jan Aed 30400/-'),
+  ('5b16c495-acaa-8c38-b34e-217895183f7b', 'f8bb6046-1785-b809-fafc-94f631d866b8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 5500, 5500, NULL),
+  ('242c237f-8917-c8be-f258-25987495c3d7', 'f8bb6046-1785-b809-fafc-94f631d866b8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'monthly', 10, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 33000/6'),
+  ('4f68e421-276d-2696-2997-a8607029af7c', '5c68a33b-b18b-351c-e7b9-7a8a4057ae91', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 5, 0, 0, NULL),
+  ('dfc6b1b5-0ba2-93f1-4d4f-3ea1385e2e03', '5c68a33b-b18b-351c-e7b9-7a8a4057ae91', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 5, 0, 0, NULL),
+  ('605137f3-c1e1-ab94-c400-51d85a26daba', '5c68a33b-b18b-351c-e7b9-7a8a4057ae91', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('ab8faa18-31ae-3191-2b5c-8469efedc484', '8d3fbf9b-5765-32c3-cc74-92742e695bf9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 6, 2420, 0, 'Legal'),
+  ('0f4b3aec-134e-9949-9a49-df05fb04a9ec', '8d3fbf9b-5765-32c3-cc74-92742e695bf9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 5, 2420, 0, NULL),
+  ('984cea36-5194-af2f-f357-b8f37b45dfba', '8d3fbf9b-5765-32c3-cc74-92742e695bf9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 6, 2420, 0, NULL),
+  ('14defbb3-2126-c09a-bdaf-ef042f47b5e7', '97868f37-8902-7703-bae7-af956cdcea82', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 6, 0, 0, NULL),
+  ('2673df26-917f-d68e-cf08-9a116979b7b0', '97868f37-8902-7703-bae7-af956cdcea82', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 6, 0, 0, NULL),
+  ('88406226-36b6-726e-462e-79285e04ee5b', '97868f37-8902-7703-bae7-af956cdcea82', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont Cleaners', '', 7, 0, 0, NULL),
+  ('714758e0-1c67-7562-e65f-20e86b6050e9', '659cd619-5e07-03f9-26ff-782740392fc0', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'Vacant', '', 0, 5500, 5500, 'Transfer in Mashreq on 7th Jan Aed 30400/-'),
+  ('d23c8526-6b76-7356-9931-1aa70c289c5a', '659cd619-5e07-03f9-26ff-782740392fc0', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('c85dcf99-52d0-60c7-661e-da76029127fe', '659cd619-5e07-03f9-26ff-782740392fc0', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, NULL, 'Vacant', '', 8, 0, 0, NULL),
+  ('14abf513-a74b-cf52-a4f1-09c21fd67be2', '60554c51-0e41-54b5-3984-df51580476ba', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'Vacant', '', 0, 5500, 5500, 'Transfer in Mashreq on 7th Jan Aed 30400/-'),
+  ('97dad2a2-7711-4ec0-dca1-61f94116c571', '60554c51-0e41-54b5-3984-df51580476ba', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('56d01b8f-53e2-f6de-4dda-9987864558f0', '60554c51-0e41-54b5-3984-df51580476ba', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, NULL, 'Vacant', '', 3, 0, 0, NULL),
+  ('e5879594-0922-e453-4fed-034a24b9ab5d', 'e368408c-5b1b-d0ff-b4df-749866206c77', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'Vacant', 'monthly', 0, 5500, 5500, 'Transfer in Mashreq on 7th Jan Aed 30400/-'),
+  ('529047f2-e040-b7bb-9208-8b2716d9aab4', 'e368408c-5b1b-d0ff-b4df-749866206c77', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', 'monthly', 0, 0, 0, NULL),
+  ('f6c3e29f-f5fb-c866-0f1c-f13912374e9a', 'e368408c-5b1b-d0ff-b4df-749866206c77', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '8c9e7446-d4b1-8069-f30a-08f48303afb4', 'FAVORITE PLUS PAINTING CONT LLC', 'monthly', 8, 4225, 4225, 'Transfer in Mashreq on 4th March for the period of 22nd Feb to 22nd March. Rent recorded as per month wise. Aed 11000/2 '),
+  ('c3c278b1-a4e9-fa41-3abe-08d48dba7a8d', 'fbab8c33-a697-f6c5-58b2-5e3ff9419980', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, '', 'monthly', 0, 5500, 5500, 'Transfer in Mashreq on 7th Jan Aed 30400/-'),
+  ('ede50ce3-1241-c712-faa7-8d49bb2a3e4f', 'fbab8c33-a697-f6c5-58b2-5e3ff9419980', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', 'monthly', 0, 0, 0, NULL),
+  ('2c7b9bda-1516-ed2e-79d5-2339fa7ef3eb', 'fbab8c33-a697-f6c5-58b2-5e3ff9419980', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '8c9e7446-d4b1-8069-f30a-08f48303afb4', 'FAVORITE PLUS PAINTING CONT LLC', 'monthly', 7, 4225, 4225, NULL),
+  ('f68bc87f-a79d-f155-e525-769f2ef25a42', '5efc740c-ae51-388d-f131-20ebf28f45e8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, '', '', 0, 5500, 2900, 'Transfer in Mashreq on 7th Jan Aed 30400/-'),
+  ('634f7e35-2552-c486-1258-e72cafcdea4b', '5efc740c-ae51-388d-f131-20ebf28f45e8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('ffc04d20-c719-76af-ca42-f2b035d3b20c', '5efc740c-ae51-388d-f131-20ebf28f45e8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('44a9001a-4af3-cbb9-9e76-e6ffcaa3809b', '7a19ad01-2c4d-fd04-55eb-07e64c5e1cdf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, '', '', 0, 5500, 0, NULL),
+  ('89d4140e-3a6f-883f-c406-80174b0ca5b2', '7a19ad01-2c4d-fd04-55eb-07e64c5e1cdf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('2296b451-de6c-9319-a51f-4fafb71ef47f', '7a19ad01-2c4d-fd04-55eb-07e64c5e1cdf', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, NULL, 'Vacant', '', 8, 0, 0, NULL),
+  ('d595741d-925f-fb9d-7dc5-4d0b756470cf', 'b68cef37-22ad-e452-238a-6b0c7df5169a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('fc56c76e-ea4a-0581-888e-f9d9781d6727', 'b68cef37-22ad-e452-238a-6b0c7df5169a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('7776c3af-24bd-bf88-981e-fe13bc131790', 'b68cef37-22ad-e452-238a-6b0c7df5169a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '05fa3468-49f1-2732-dea7-9bfbff53cd57', 'VENUS CONSTRUCTION LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('d41dbe8c-b9e8-2eeb-daa8-78c655f07abb', '301bb9ab-c1ff-6b18-63ab-677ed440bd64', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'eeb276fa-e618-d840-ec66-ff787214b96b', 'Jelnar ElC Comapnay', 'monthly', 8, 5500, 5500, 'Cheque # 800 Aed 11000/-'),
+  ('81f12e49-1a83-f8ee-54e9-eb991e9b6ef5', '301bb9ab-c1ff-6b18-63ab-677ed440bd64', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'eeb276fa-e618-d840-ec66-ff787214b96b', 'Jelnar ElC Comapnay', 'monthly', 4, 5500, 5500, NULL),
+  ('ed993078-e58f-fe0e-f41f-c4db0780fae4', '301bb9ab-c1ff-6b18-63ab-677ed440bd64', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'f54eb7d5-1766-2066-8fef-5bfe0a121090', 'JELNAR', 'monthly', 3, 5500, 5500, 'Chequ # 883 dated 5th March Aed 11000/2'),
+  ('2baa1584-34ea-ccdf-867e-a0020c9b4ddd', '4164c77d-9603-729f-d086-ee91fe2cbaf3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'db109df9-79f4-eaf4-5dba-511f67b5877c', 'GBT Golden Brush Tech', 'monthly', 6, 5500, 5500, 'Transfer in Mashreq on 8th Jan Aed 5500/-'),
+  ('f252ccb8-6655-9498-c7cd-4693565327ce', '4164c77d-9603-729f-d086-ee91fe2cbaf3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'db109df9-79f4-eaf4-5dba-511f67b5877c', 'GBT Golden Brush Tech', 'monthly', 6, 5500, 5500, NULL),
+  ('1e71e1ea-7677-7a85-69db-69d62b3b1c9a', '4164c77d-9603-729f-d086-ee91fe2cbaf3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '9319e8da-8ca3-a3f2-dbc3-fdd6812cf955', 'GBT GOLDEN BRUSH TECHNICAL SERVICES', 'monthly', 8, 5500, 5500, 'Transfer in Mashreq on 7th & 11th March Aed 2500 & 3000'),
+  ('1bc1eefd-f920-bd0a-229a-bf1c1cff0c53', '203381ce-a012-1b44-ba77-4b72b8217c11', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a48b5bbc-ab0f-8626-8b30-c33f6911ffb5', 'New Phoenix', '', 7, 5500, 5500, NULL),
+  ('579fb6a6-e486-6fd9-65fc-364a76e0daf9', '203381ce-a012-1b44-ba77-4b72b8217c11', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('608109d8-4a71-9fa2-29d5-dda94ef426a8', '203381ce-a012-1b44-ba77-4b72b8217c11', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('ce21307a-61bf-19bb-ab65-13456ac91abb', 'be4219c4-297e-4c46-74fd-cc4d72b7aec1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '6b01a6b3-c9c4-92ee-f265-0053f8cec003', 'Zakum Contracting Co', 'yearly', 8, 5100, 5100, NULL),
+  ('2b33d2f8-bf90-00d2-7362-16656ddbf636', 'be4219c4-297e-4c46-74fd-cc4d72b7aec1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '6b01a6b3-c9c4-92ee-f265-0053f8cec003', 'Zakum Contracting Co', 'yearly', 7, 5100, 5100, 'Tenant transferred 2 months rent + DREC, awaiting cheques for remaining period'),
+  ('d6c79b89-2525-7d8b-ed95-8ccfee831fa5', 'be4219c4-297e-4c46-74fd-cc4d72b7aec1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '1d202014-1361-4c3c-478a-db626d6435e1', 'ZAKUM', 'yearly', 5, 5500, 5500, NULL),
+  ('e055fd64-0ac1-960d-83a2-ca4297d82fad', '3cb7695a-73be-2b59-828d-e82369209762', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '6b01a6b3-c9c4-92ee-f265-0053f8cec003', 'Zakum Contracting Co', 'yearly', 8, 5100, 5100, NULL),
+  ('7c21f8d1-7174-84ec-f64c-05f45dfb022b', '3cb7695a-73be-2b59-828d-e82369209762', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '6b01a6b3-c9c4-92ee-f265-0053f8cec003', 'Zakum Contracting Co', 'yearly', 7, 5100, 5100, NULL),
+  ('e155b98a-7180-37ae-054f-452fdb0a77ed', '3cb7695a-73be-2b59-828d-e82369209762', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '1d202014-1361-4c3c-478a-db626d6435e1', 'ZAKUM', 'yearly', 6, 5500, 5500, NULL),
+  ('d119e24c-562c-5165-4a46-65156b2fd574', '10928bc4-b497-8192-c22c-0954bb716e1e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '033df181-7ba0-d9d0-e674-cc9f8204b410', 'Pristine Pro Carpentry', 'monthly', 6, 5500, 5500, 'Transfer in Mashreq ON 9th Jan Aed 5500/-'),
+  ('74d15f54-b404-471a-921c-dcdc79ae3ae7', '10928bc4-b497-8192-c22c-0954bb716e1e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '1c9d727d-4a9e-ae81-1961-1dde8fb51237', 'Cyana Technical Services llc', 'monthly', 6, 5500, 5500, NULL),
+  ('ca761cda-d052-7635-463f-2bd1f0967da2', '10928bc4-b497-8192-c22c-0954bb716e1e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '1c9d727d-4a9e-ae81-1961-1dde8fb51237', 'Cyana Technical Services llc', 'monthly', 6, 5500, 5500, 'Transfer in Mashreq on 6th March Aed 5500/-'),
+  ('e4c1adaf-d056-9f8c-b6f7-8b52717bfa24', '69417878-b48f-1d02-e33b-3a95e4a9a28c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'f54f7849-38c3-45d4-b6e0-828192e30f9e', 'Reno Space Interior Cont Co', 'yearly', 8, 3600, 3600, NULL),
+  ('8b70cee8-8c87-4e37-7447-0b5428f72d66', '69417878-b48f-1d02-e33b-3a95e4a9a28c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'f54f7849-38c3-45d4-b6e0-828192e30f9e', 'Reno Space Interior Cont Co', 'yearly', 8, 3600, 3600, NULL),
+  ('1d064b2f-31f5-67c4-0999-d51bb189b6f8', '69417878-b48f-1d02-e33b-3a95e4a9a28c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bba2ca18-0f7e-ff04-7819-ea51cea63d44', 'RENO SPACE TECHNICAL SERVICES CO.', 'yearly', 7, 3600, 3600, NULL),
+  ('77e6229f-da13-bc31-81ec-1272ad4e27b9', '4ccfc490-0654-ba0e-b4fc-a78e453c785a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('b3078292-7ee6-7178-804b-69237c44e7c3', '4ccfc490-0654-ba0e-b4fc-a78e453c785a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('6825c512-6020-2400-d0ab-8e1d864004af', '4ccfc490-0654-ba0e-b4fc-a78e453c785a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('7299fed4-69b8-d9b6-3bb7-1e5dc7cb705a', '231a382c-2c9e-7332-9837-22e156da9178', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('5b459426-326e-a82f-2233-8d2807a7c83a', '231a382c-2c9e-7332-9837-22e156da9178', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('2deace40-97d1-cea4-23b5-ddc27188681e', '231a382c-2c9e-7332-9837-22e156da9178', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('711e7e7a-abed-1b5a-a8b5-782d1a410912', 'b59d50a0-f313-5dd9-0d71-b439c4b8ca1e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('9082362a-1245-85e5-f796-3d6f36028a66', 'b59d50a0-f313-5dd9-0d71-b439c4b8ca1e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('b0d382c2-c285-3b1a-50b7-9bd4974e739e', 'b59d50a0-f313-5dd9-0d71-b439c4b8ca1e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('89880db2-438a-8d9d-d836-d233daad3f89', 'b0dbe4e9-0838-6c50-b20f-71be1a2d8dfb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '427237ca-c274-eddb-7d65-93e47f483e02', 'Ana Interior LLc', 'monthly', 8, 5500, 5500, 'Transfer in DIB on 6th Jan Aed 16500/3'),
+  ('420ad14d-a8de-89b3-2a37-77240fb5b225', 'b0dbe4e9-0838-6c50-b20f-71be1a2d8dfb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '427237ca-c274-eddb-7d65-93e47f483e02', 'Ana Interior LLc', 'monthly', 8, 5500, 5500, NULL),
+  ('d81d58a6-23fd-dcf2-a9d4-281da58d58e8', 'b0dbe4e9-0838-6c50-b20f-71be1a2d8dfb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '427237ca-c274-eddb-7d65-93e47f483e02', 'Ana Interior LLC', 'monthly', 8, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 5500/-'),
+  ('589d205b-da2f-2fb2-a40c-af00b8d9949a', 'a12a4ef8-aca4-476e-3764-9cd7218a6514', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 9, 4500, 4500, NULL),
+  ('544b7068-3085-5d93-3ddb-377e0d3cf04d', 'a12a4ef8-aca4-476e-3764-9cd7218a6514', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('d029948d-5ae2-41c6-b3e8-158ebf88a7e4', 'a12a4ef8-aca4-476e-3764-9cd7218a6514', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 10, 4500, 4500, NULL),
+  ('254139b0-ef15-fe03-05f1-712e5c1407e2', 'f40d2b2b-f169-7f33-8b90-c2e4297a3a7a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 3, 2420, 0, 'Legal'),
+  ('88557df7-e8e0-5765-88ee-3fc4c2c6d96e', 'f40d2b2b-f169-7f33-8b90-c2e4297a3a7a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 3, 2420, 0, NULL),
+  ('99895b93-beb9-22cd-c274-438825677161', 'f40d2b2b-f169-7f33-8b90-c2e4297a3a7a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 4, 2420, 0, NULL),
+  ('38dc9ca4-e354-d463-e976-97cb1532bc06', '245a06de-42e1-818a-a048-242531b9a07c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 9, 4500, 4500, NULL),
+  ('01cc35e0-602e-551d-8ac3-bd772c4eb9c7', '245a06de-42e1-818a-a048-242531b9a07c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 9, 4500, 4500, NULL),
+  ('72f9e505-370c-2fdf-e278-50959c9f0bfe', '245a06de-42e1-818a-a048-242531b9a07c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 8, 4500, 4500, NULL),
+  ('79382d4f-30ac-a6ad-1f73-a1f02c507cf5', 'ee339652-c6e5-58fe-4eaf-d116039d184e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('8e07f042-2631-a1d3-c045-c469fc6c4e7f', 'ee339652-c6e5-58fe-4eaf-d116039d184e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('b9913672-f30f-52cd-7d42-404d6149e642', 'ee339652-c6e5-58fe-4eaf-d116039d184e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('924375be-4775-f19c-24be-24a73a89074c', '2413ec8c-b1fc-68bf-fcae-60e97234dd62', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 0, 2350, 2350, NULL),
+  ('64062e62-0b38-c3c8-5ab0-57f1015599a5', '2413ec8c-b1fc-68bf-fcae-60e97234dd62', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 4, 2350, 2350, NULL),
+  ('4d32f574-9c80-29d6-7da4-ccb47be15a0c', '2413ec8c-b1fc-68bf-fcae-60e97234dd62', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 3, 2350, 2350, NULL),
+  ('aa3302b3-bffc-25d3-b2b2-49bf61a8b047', 'c187d54c-f3d2-7622-1674-606c1f2c4073', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 8, 0, 0, NULL),
+  ('79b04c5b-4923-bc9e-99fc-2f4f562fc265', 'c187d54c-f3d2-7622-1674-606c1f2c4073', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 5500, 5500, NULL),
+  ('04553afa-3fc0-4c8c-6c93-726b027733a8', 'c187d54c-f3d2-7622-1674-606c1f2c4073', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'monthly', 10, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 33000/6'),
+  ('469578dc-428c-0db8-6fcd-16e3629ee16d', 'c7123173-fc06-fdb6-0ab3-4c10bbade312', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 9, 0, 0, NULL),
+  ('93338575-e4ac-956b-638d-dadf82039378', 'c7123173-fc06-fdb6-0ab3-4c10bbade312', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 5500, 5500, NULL),
+  ('ec5a06a6-1e8b-ff6a-adae-9ecf28d6821f', 'c7123173-fc06-fdb6-0ab3-4c10bbade312', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'monthly', 10, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 33000/6'),
+  ('18edb759-d6a9-c83d-2981-c9aa3d0a5240', '5ffde3eb-22a7-d854-feed-9054459200af', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 0, 0, NULL),
+  ('db578175-1920-edfd-b9b4-342ef4bee4b3', '5ffde3eb-22a7-d854-feed-9054459200af', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 5500, 5500, NULL),
+  ('5438dd3e-f555-7aa5-3f29-ab447a97bce1', '5ffde3eb-22a7-d854-feed-9054459200af', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'monthly', 10, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 33000/6'),
+  ('7693465e-ba5d-ae97-dbd6-a1444b64c4b0', '3cfc222f-aaa2-1fad-c28c-ce230ffdf53a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79ad6dbf-3fc0-4a74-4938-1487a7441571', 'Jelnar ELC Company', 'monthly', 8, 5500, 5500, 'Cheque # 800 Aed 11000/-'),
+  ('bdf50f09-005d-e839-f17b-722d1942ff60', '3cfc222f-aaa2-1fad-c28c-ce230ffdf53a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79ad6dbf-3fc0-4a74-4938-1487a7441571', 'Jelnar ELC Company', 'monthly', 8, 5500, 5500, NULL),
+  ('c4c5ec81-a494-718f-fb8a-f8e5faba4aff', '3cfc222f-aaa2-1fad-c28c-ce230ffdf53a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'f54eb7d5-1766-2066-8fef-5bfe0a121090', 'JELNAR', 'monthly', 3, 5500, 5500, 'Chequ # 883 dated 5th March Aed 11000/2'),
+  ('6d278245-0765-e1e3-f30d-6101b48d3466', '7bf3e370-4b21-16b0-c071-53caf51387d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 5, 0, 0, NULL),
+  ('84645e06-8f77-42a6-fcae-3cd14ad3205a', '7bf3e370-4b21-16b0-c071-53caf51387d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 5, 0, 0, NULL),
+  ('318f665b-05a9-6aa5-36e8-466b8b6fdd33', '7bf3e370-4b21-16b0-c071-53caf51387d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('f69a4b16-320b-b273-4bd5-67ad713e0325', '41580399-c52e-8278-3bf9-b308fc478f8f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '0e740921-9f36-ea5c-9a4f-42014c1e5ddb', 'Bait Al Lait', 'monthly', 7, 5500, 5500, 'Transfer in Mashreq on 7th Jan Aed 5500/-'),
+  ('a6fd36d0-d706-5caf-b861-04172d200b3d', '41580399-c52e-8278-3bf9-b308fc478f8f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '0e740921-9f36-ea5c-9a4f-42014c1e5ddb', 'Bait Al Lait', 'monthly', 7, 5500, 5500, NULL),
+  ('cb7c3b8b-ddf1-0b37-4a30-90045e7afaba', '41580399-c52e-8278-3bf9-b308fc478f8f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'beb4b1a3-bc4e-810d-b68a-8265fa62afdb', 'BAIT AL LAITH TECHNICAL SERVICES', 'monthly', 7, 5500, 5500, 'Transfer in Mashreq 5500/-'),
+  ('d0935968-414c-0feb-9111-5d1ad2fd4aed', '971bc0b7-6594-d469-7978-aa676837190b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('e5c97e95-cf27-7901-f780-094a54494111', '971bc0b7-6594-d469-7978-aa676837190b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'Tayas Contracting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('23d5ce9c-ef6b-0854-fb35-2286fa20ecf3', '971bc0b7-6594-d469-7978-aa676837190b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('2c661556-52a2-ed19-0d33-cc91f4108886', 'c0842d29-fbcb-a7c0-9afa-11131e15cd77', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '9a91be12-6b65-f692-4bfe-804924d5764e', 'Jamshed Technical', 'monthly', 8, 5500, 5500, NULL),
+  ('c6d0bef9-da60-5063-bd6f-0f847580d7b1', 'c0842d29-fbcb-a7c0-9afa-11131e15cd77', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '9a91be12-6b65-f692-4bfe-804924d5764e', 'Jamshed Technical', 'monthly', 6, 5500, 5500, NULL),
+  ('03ae4e82-85c2-3832-6b21-c510366bde54', 'c0842d29-fbcb-a7c0-9afa-11131e15cd77', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd15b2c51-6ac7-7301-3337-821d5a41d84f', 'JELNAR (Jamshed Technical)', 'monthly', 8, 5500, 5500, NULL),
+  ('6a9f1309-84c2-aecb-996f-80dc0e37b9de', 'cf74214b-30b8-215a-3988-9bc765dd9021', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'c6eb45f2-9cb8-43ac-707d-95070fe820da', 'Shahid Ali', 'monthly', 8, 5500, 5500, NULL),
+  ('b427b11a-64a1-259a-e3dd-3ce69b6a824c', 'cf74214b-30b8-215a-3988-9bc765dd9021', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'c6eb45f2-9cb8-43ac-707d-95070fe820da', 'Shahid Ali', 'monthly', 8, 5500, 5500, NULL),
+  ('632e42d9-0171-a536-90c6-a1a99a016183', 'cf74214b-30b8-215a-3988-9bc765dd9021', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c6eb45f2-9cb8-43ac-707d-95070fe820da', 'Shahid Ali', 'monthly', 8, 5500, 5500, NULL),
+  ('9ab4b46e-ee9b-9543-1b83-7429c76c1d46', '4ebfb1da-60ee-feef-6a43-9d5787e40289', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 5, 0, 0, NULL),
+  ('e6875d97-8933-1b31-e0aa-14db7dea6182', '4ebfb1da-60ee-feef-6a43-9d5787e40289', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('0f1a2d0a-2d2f-91ea-0712-83cd61525124', '4ebfb1da-60ee-feef-6a43-9d5787e40289', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('1f1dec57-ef00-25de-94d4-8cffeb1ba273', 'ea49f842-662c-e07b-9885-8fd74bb347fe', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '4809a3c4-7304-8487-26c2-0cc956d76eca', 'Hashim Darwish Co', 'monthly', 8, 5000, 5000, 'Transfer on 16th Dec in Mashreq for Jan,2026.'),
+  ('45e0f182-ed5c-521b-80c8-dfa9dc8db1e3', 'ea49f842-662c-e07b-9885-8fd74bb347fe', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '4809a3c4-7304-8487-26c2-0cc956d76eca', 'Hashim Darwish Co', 'monthly', 8, 5000, 5000, NULL),
+  ('14328516-9e80-483c-f7d4-985b55ec7a99', 'ea49f842-662c-e07b-9885-8fd74bb347fe', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '24f5d4a5-a737-4358-06b7-cde553770d81', 'HASHIM DARWISH IBRAHIM LANDSCAPING LLC', 'monthly', 7, 5500, 5500, 'Transfer in Mashreq by Zafar Shahid on 7th March Aed 11000/-'),
+  ('21a5c42c-b130-914f-7d7d-1819e2901de9', 'c72c9a3b-4641-1441-f5b3-7d252925ec13', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '4809a3c4-7304-8487-26c2-0cc956d76eca', 'Hashim Darwish Co', 'monthly', 7, 5000, 5000, 'Transfer in Mashreq on 5th Jan Aed 5000/-'),
+  ('d96b3927-f5c8-9e6c-1e65-0a7fb5406269', 'c72c9a3b-4641-1441-f5b3-7d252925ec13', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '4809a3c4-7304-8487-26c2-0cc956d76eca', 'Hashim Darwish Co', 'monthly', 7, 5000, 5000, NULL),
+  ('7f7e6c79-67f6-488d-5734-a0ecbaaa7f86', 'c72c9a3b-4641-1441-f5b3-7d252925ec13', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '24f5d4a5-a737-4358-06b7-cde553770d81', 'HASHIM DARWISH IBRAHIM LANDSCAPING LLC', 'monthly', 7, 5500, 5500, NULL),
+  ('e1854eb9-4325-b36b-c352-0cef45b797bb', '0839f7ad-0daa-66a4-a84a-324366d09ece', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('448b1bd3-c939-bf20-e678-8bc28160c92c', '0839f7ad-0daa-66a4-a84a-324366d09ece', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('d4192830-53db-045e-5dce-e1a0135a80ac', '0839f7ad-0daa-66a4-a84a-324366d09ece', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '05fa3468-49f1-2732-dea7-9bfbff53cd57', 'VENUS CONSTRUCTION LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('b1b592cb-db57-3cf1-e9d6-7686d48dc0eb', 'b2d8abc4-5d28-c551-209e-ab90ed4d4bfd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('ef4eeb7c-7365-d300-5d09-ab630c36b584', 'b2d8abc4-5d28-c551-209e-ab90ed4d4bfd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '380c1586-fb21-3763-2795-19c14981434e', 'Venus Contracting LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('46dc208b-94b7-6f8f-1331-f560d3a7eafb', 'b2d8abc4-5d28-c551-209e-ab90ed4d4bfd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '05fa3468-49f1-2732-dea7-9bfbff53cd57', 'VENUS CONSTRUCTION LLC', 'yearly', 6, 4400, 4400, NULL),
+  ('e4c6f20d-822f-9dcb-647f-66ce22e2791e', 'b00028ec-dd89-97e8-df74-bd3e2a49d878', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('03c232fc-5bf7-7341-188b-862648ec6239', 'b00028ec-dd89-97e8-df74-bd3e2a49d878', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('906c3bb0-100a-354a-748a-87fc35f74d9f', 'b00028ec-dd89-97e8-df74-bd3e2a49d878', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('e0246744-d2d9-41d1-e616-ebd9021b2421', '5521569e-6339-6e09-7b48-d626b4f1839f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('c0029e04-04e6-4c4e-efe9-456a8149a65c', '5521569e-6339-6e09-7b48-d626b4f1839f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('61a150f2-7dc7-c1b1-566c-cdf7ba74c770', '5521569e-6339-6e09-7b48-d626b4f1839f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 9, 0, 0, NULL),
+  ('ef32acef-0bff-5865-a1e7-ab29769e0959', '592c8d2a-3e9a-d60e-898f-a4ff141eccfd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, NULL, 'Vacant', '', 0, 5500, 0, NULL),
+  ('42f51c56-a4f0-705c-1a1a-be26bcae6a28', '592c8d2a-3e9a-d60e-898f-a4ff141eccfd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('73f4c93f-8857-aa39-b36a-f06edc4b4bca', '592c8d2a-3e9a-d60e-898f-a4ff141eccfd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, NULL, 'Vacant', '', 0, 0, 0, NULL),
+  ('f77dee44-34da-95dd-82a9-1cff8b086a68', '81be3ee1-915a-53b2-357c-446b94dbda2f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('4376b476-d764-c32b-ebc8-c9c43a3600ac', '81be3ee1-915a-53b2-357c-446b94dbda2f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 7, 5500, 5500, NULL),
+  ('f3d9ded2-31e1-716c-6094-4b4241ec0c94', '81be3ee1-915a-53b2-357c-446b94dbda2f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fd0625c8-32e3-7545-b121-03841e89e235', 'MIZNA MIZNA PROJECT', 'monthly', 3, 5500, 5500, NULL),
+  ('8a013d97-b743-ab65-73f5-eb47eaf54e9f', '64db2470-ca51-344a-4567-13ac5fc2c879', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('39a9b979-0211-14e1-328e-8b1a60eb0263', '64db2470-ca51-344a-4567-13ac5fc2c879', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('818457ba-2f69-3e0e-ef25-31aea0184c6d', '64db2470-ca51-344a-4567-13ac5fc2c879', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 7, 0, 0, NULL),
+  ('16069c33-33b8-223a-32b9-3fa222f26fc0', 'f19d1d72-cf01-6495-c871-ab98b64d303e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('cc9a5105-8e18-421c-6f56-175cc703703e', 'f19d1d72-cf01-6495-c871-ab98b64d303e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('bc479a50-e067-c32d-435c-441d3b3cb5ea', 'f19d1d72-cf01-6495-c871-ab98b64d303e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('05e2f1e0-7ef2-2f97-5fdf-6130699212a5', '7de2d3d3-2c52-3793-8413-f29c37975b24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 7, 0, 0, NULL),
+  ('33cbb021-614f-efd0-49a2-b4dcf5515e19', '7de2d3d3-2c52-3793-8413-f29c37975b24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 5500, 5500, NULL),
+  ('dcd6b23d-2c2d-9c8a-9fa0-9906c580d907', '7de2d3d3-2c52-3793-8413-f29c37975b24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'monthly', 10, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 33000/6'),
+  ('036c026b-b4a7-f401-c1d3-85224e5a3cab', 'd55467cd-3cad-6923-858b-acb77062ddef', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('71a8aab2-e759-b636-e89e-7887d8c90554', 'd55467cd-3cad-6923-858b-acb77062ddef', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('b7cce5ce-6a88-0212-0a82-57058e4dced2', 'd55467cd-3cad-6923-858b-acb77062ddef', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '55728a38-81ce-4ac7-6c03-3b5984030813', 'AMBIGRAM INTERIORS LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('43c76ffc-1d87-5a51-3328-42f6bfd51f41', '69c04e2c-9258-9bb9-44cd-68831ad9f0fe', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('94de510a-411f-64aa-1c0f-e558791a9d05', '69c04e2c-9258-9bb9-44cd-68831ad9f0fe', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 7, 3600, 3600, NULL),
+  ('e5b443fe-ff70-71fa-d96a-59c369688bd5', '69c04e2c-9258-9bb9-44cd-68831ad9f0fe', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '55728a38-81ce-4ac7-6c03-3b5984030813', 'AMBIGRAM INTERIORS LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('ca344119-867b-df9a-59c4-da33b1457d07', 'b884a8a2-24ab-ce48-7346-a26f77257923', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('7e49ae2f-89af-f8db-42a4-fb00ba4086d2', 'b884a8a2-24ab-ce48-7346-a26f77257923', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('05645967-7ec3-f6dc-2a3d-aa588c7c4083', 'b884a8a2-24ab-ce48-7346-a26f77257923', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '55728a38-81ce-4ac7-6c03-3b5984030813', 'AMBIGRAM INTERIORS LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('3f7e49f1-0ac4-463d-9d4d-231269e5cfd9', 'ecdc569d-507a-6702-6cf3-63af1f969214', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 0, 2350, 2350, NULL),
+  ('29bebf24-c887-1752-5bc9-8ebf8fe09856', 'ecdc569d-507a-6702-6cf3-63af1f969214', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 0, 2350, 2350, NULL),
+  ('8d4e729e-1ba6-ee6d-d223-32a251d48326', 'ecdc569d-507a-6702-6cf3-63af1f969214', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 0, 2350, 2350, NULL),
+  ('5bcb6f97-57d4-2a2f-1435-f1923c2360e4', '2e72b5d0-5481-b00f-198e-528f725755d4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 1, 2350, 2350, NULL),
+  ('040eab8a-1597-7c8e-ca54-c1c475fb001f', '2e72b5d0-5481-b00f-198e-528f725755d4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 1, 2350, 2350, NULL),
+  ('49ecc5b5-61dc-4ec9-0aae-a336b5c7cb00', '2e72b5d0-5481-b00f-198e-528f725755d4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 1, 2350, 2350, NULL),
+  ('89795875-f24a-3555-1e5b-202c027d3eac', '70bed9b9-5f9c-d6ab-3189-ee63e269cbe9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 1, 2350, 2350, NULL),
+  ('a5c587cf-84ef-a2d1-e2ca-7925f520fea4', '70bed9b9-5f9c-d6ab-3189-ee63e269cbe9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 1, 2350, 2350, NULL),
+  ('59315ed9-786c-7970-6bb3-c7f56cc21096', '70bed9b9-5f9c-d6ab-3189-ee63e269cbe9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 1, 2350, 2350, NULL),
+  ('f35984a0-b1d8-8545-89c0-b3f9710579d6', '6a65048c-9bfd-3a73-5b10-bff3e6992725', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ae413320-1073-96e1-eb16-8ccf3e51207e', 'Al Shwifat', 'monthly', 6, 5500, 5500, 'Transfer in Mashreq on 6th Jan Aed 16500/3'),
+  ('f5d78a7e-b503-60ac-3f34-46731755f21d', '6a65048c-9bfd-3a73-5b10-bff3e6992725', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ae413320-1073-96e1-eb16-8ccf3e51207e', 'Al Shwifat', 'monthly', 6, 5500, 5500, NULL),
+  ('bd15ec5a-6f60-ece3-a346-820378d3c3a0', '6a65048c-9bfd-3a73-5b10-bff3e6992725', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cfd0cafe-3623-380a-c5b3-bd31d7489d5a', 'AL SHWIFAT TECHNICAL SERVICES', 'monthly', 6, 5500, 5500, 'Transfer in Mashreq on 5th March Aed 16500/3'),
+  ('3cc96fd7-7cd5-cebb-7fb2-a14ad56f919d', '2b045874-fc2e-5cf9-6cdb-1cdb93934cb3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ae413320-1073-96e1-eb16-8ccf3e51207e', 'Al Shwifat', 'monthly', 7, 5500, 5500, NULL),
+  ('75c3e738-be62-08ad-39b1-bd0dd0916cf3', '2b045874-fc2e-5cf9-6cdb-1cdb93934cb3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ae413320-1073-96e1-eb16-8ccf3e51207e', 'Al Shwifat', 'monthly', 7, 5500, 5500, NULL),
+  ('42867d7b-2740-4f5e-ba95-658e22ce0883', '2b045874-fc2e-5cf9-6cdb-1cdb93934cb3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cfd0cafe-3623-380a-c5b3-bd31d7489d5a', 'AL SHWIFAT TECHNICAL SERVICES', 'monthly', 7, 5500, 5500, NULL),
+  ('c43500d3-d753-b132-bc9c-1afa346de299', '21541a32-fd75-b837-70de-c6b638851b7f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '23bbb361-032c-0642-0b0f-68f51605a0d2', 'Rithi Technical Serevices LLC', 'monthly', 7, 5500, 5500, NULL),
+  ('310df246-5adc-ef29-bcf9-54db4ba915d1', '21541a32-fd75-b837-70de-c6b638851b7f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '23bbb361-032c-0642-0b0f-68f51605a0d2', 'Rithi Technical Serevices LLC', 'monthly', 6, 5500, 5500, NULL),
+  ('8fa07b38-b0bb-d6fe-c543-e1be503c6643', '21541a32-fd75-b837-70de-c6b638851b7f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd69eef71-5c6d-f465-2567-f439f5e5d2b8', 'RITHI TECH', 'monthly', 4, 5500, 5500, NULL),
+  ('9b9aa4a3-fecc-4237-f3a0-b90d25ad2d0f', 'b20c4a76-3853-a44d-3a09-96c4a8c637a6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('38ff2a8e-52e3-fec4-159f-9f2ac24721df', 'b20c4a76-3853-a44d-3a09-96c4a8c637a6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('b0e736cc-6145-5f1e-baa2-72b31b51d92d', 'b20c4a76-3853-a44d-3a09-96c4a8c637a6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('61c9c1bc-28ef-c4e5-98c9-9990e389a391', '43c4b3b0-240e-45f2-a465-027c62765831', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('71b61ddf-c214-adb9-31e4-a8b77d4d71e4', '43c4b3b0-240e-45f2-a465-027c62765831', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('9072b75a-b24e-1554-77d6-b04623460ab2', '43c4b3b0-240e-45f2-a465-027c62765831', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('76970fc4-a202-ec5f-25c1-ddf9b45c6b3c', 'b099291a-b655-e181-601f-0e993d8f57ec', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('11ebd91e-2737-7ba2-b63c-a1ef85099e48', 'b099291a-b655-e181-601f-0e993d8f57ec', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('62cd59a8-3e9d-1ab8-f575-613b61aee08d', 'b099291a-b655-e181-601f-0e993d8f57ec', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('d970d292-fec1-422b-0286-745dc5523f93', 'bce7b8d0-4971-cc4b-ecdb-0c8bc4333ab5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('0c67f090-c7e6-b3bd-1c41-a3d11c37ae3c', 'bce7b8d0-4971-cc4b-ecdb-0c8bc4333ab5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('ea46ec30-4a3c-04ef-9b41-1c1925499837', 'bce7b8d0-4971-cc4b-ecdb-0c8bc4333ab5', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '988374cb-8fc1-f3be-2111-0a843efe3370', 'Petra Oasis', 'yearly', 8, 4500, 4500, NULL),
+  ('07fb74d5-b615-30e5-8d1a-c515bde3e90d', 'cb38b2cf-00f6-a22e-a25b-c40ec62c1a09', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '534e6d8a-5731-1856-7ce6-e3b8a014e045', 'Jubily Tea Shop', 'monthly', 7, 5500, 5500, NULL),
+  ('142bed01-69ab-bb87-4b61-8556e21f3f68', 'cb38b2cf-00f6-a22e-a25b-c40ec62c1a09', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '534e6d8a-5731-1856-7ce6-e3b8a014e045', 'Jubily Tea Shop', 'monthly', 7, 5500, 5500, NULL),
+  ('28291169-a3ea-0ebf-a84d-8f090f50d251', 'cb38b2cf-00f6-a22e-a25b-c40ec62c1a09', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '3578f07d-b785-ff33-8974-38c9c0ef18e1', 'JUBLI TEA SHOP', 'monthly', 7, 5500, 5500, NULL),
+  ('d332946e-0525-c53f-2e20-f81871965a3f', 'bac4f5ea-e90a-f6ef-942c-fe15b8efbe2a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('c8cd06f9-46d5-9c7b-939b-1d9c7280cd68', 'bac4f5ea-e90a-f6ef-942c-fe15b8efbe2a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('96a6d7ec-62d5-f28c-1a7d-41bfa3f2af14', 'bac4f5ea-e90a-f6ef-942c-fe15b8efbe2a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('6a6f8c18-0c45-1a98-c766-f3b42aa0aa34', '2b4d7471-043d-524b-0ea5-f99e9736316c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('24e9fc0f-91bb-516d-e18b-f7fe1e4802d3', '2b4d7471-043d-524b-0ea5-f99e9736316c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('49e44aa0-8610-aa6f-468b-ab654a7ffa8d', '2b4d7471-043d-524b-0ea5-f99e9736316c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('0636c907-bceb-cea0-6a2e-3341cbf32407', 'c029b6cf-869c-7e62-61f1-8f9f22f06f9d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('6c9743bf-1da7-f3a0-f866-79d2ed55408b', 'c029b6cf-869c-7e62-61f1-8f9f22f06f9d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('e38daf02-5eeb-6e73-a428-983362fa6f95', 'c029b6cf-869c-7e62-61f1-8f9f22f06f9d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 7, 0, 0, NULL),
+  ('e145f3f5-afef-c703-9b81-7b98f76419f3', 'fe75e338-9e27-f72d-2aa8-593abe919b9d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 3, 2350, 2350, NULL),
+  ('3c42932d-ad90-372e-d13f-27e21df0f166', 'fe75e338-9e27-f72d-2aa8-593abe919b9d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 3, 2350, 2350, NULL),
+  ('e14ad236-255d-4b20-b352-1e46e725c565', 'fe75e338-9e27-f72d-2aa8-593abe919b9d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 3, 2350, 2350, NULL),
+  ('cd43c6f4-e7d7-64bb-d98a-f54ccc7f9e48', 'aa7bacc6-dc27-a556-d46c-96413a96ba9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('2ca9848e-3a28-89f5-03a8-1c5f13624640', 'aa7bacc6-dc27-a556-d46c-96413a96ba9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('3c779cd5-59ae-93a0-5693-fc64bce0e27a', 'aa7bacc6-dc27-a556-d46c-96413a96ba9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('e438bd53-cdbf-54a7-797f-966e269e65e3', '604c962f-6b37-3d08-1041-4f75b979caff', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('a27a6134-bd54-291c-8b51-1de45eead846', '604c962f-6b37-3d08-1041-4f75b979caff', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('5d2c32ee-b5e1-e444-ea93-4e53c2b16212', '604c962f-6b37-3d08-1041-4f75b979caff', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('1f90cd1b-2032-4cde-8cfb-18c18505024f', 'd873449f-4749-c77b-ad3f-ccc29607a26e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('81be23cb-a197-e660-369c-7cdb10c71ef2', 'd873449f-4749-c77b-ad3f-ccc29607a26e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('12d37ec8-70a8-38b8-be73-ad595c39fd8e', 'd873449f-4749-c77b-ad3f-ccc29607a26e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('a39a485e-c776-48c5-e88f-4207df5f71f0', '86a91418-4a55-6589-3a57-21d0ef5d6db7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('ea8753d6-72c3-778a-1ee4-198b06baea4d', '86a91418-4a55-6589-3a57-21d0ef5d6db7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('8ec27baa-afa9-57dd-acbc-6f39c8b2ef10', '86a91418-4a55-6589-3a57-21d0ef5d6db7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('a1ea7ffa-ee38-285d-afa2-1704116be904', 'a4093cdd-4abc-52cc-5163-3826c52f9e2a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 6, 2350, 2350, NULL),
+  ('30f1b9be-a9ab-4a75-e6ba-b87942a76455', 'a4093cdd-4abc-52cc-5163-3826c52f9e2a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 4, 2350, 2350, NULL),
+  ('d1ff9283-c3f9-f253-1b05-adc3a42e32f5', 'a4093cdd-4abc-52cc-5163-3826c52f9e2a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 4, 2350, 2350, NULL),
+  ('681d66fd-2f99-5455-0523-9a7ddd912e92', 'c2f7bc25-ab18-667f-7085-d6a258e3fb61', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('0eed50eb-f201-8e6a-1e65-cfae71f4154a', 'c2f7bc25-ab18-667f-7085-d6a258e3fb61', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 4, 2350, 2350, NULL),
+  ('40b6b8d3-0f66-3ce0-3998-6ea4b3ed5f27', 'c2f7bc25-ab18-667f-7085-d6a258e3fb61', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('59411806-1185-9a25-a16c-7a73514bc2a3', '53a60fac-22f9-3ddb-dc0f-43c8dfea5273', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('9e6dcab3-95c5-2f82-f16b-42cf57be207e', '53a60fac-22f9-3ddb-dc0f-43c8dfea5273', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('6ea35a83-cc31-8980-1ec8-234d67316891', '53a60fac-22f9-3ddb-dc0f-43c8dfea5273', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '22aec601-abf5-390f-1b02-c687fc36e2ea', 'Camp Office', '', 0, 0, 0, NULL),
+  ('110b88cf-e458-ac16-65db-c4308f35e14a', '5d23a7f7-d37a-8310-39bd-13908f16d93b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('214f35d5-86a8-660c-8eea-ac7a4ae0c1f9', '5d23a7f7-d37a-8310-39bd-13908f16d93b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '6b1f1fef-740c-13b2-1510-0c7a17883788', 'Ambigram', 'yearly', 6, 3600, 3600, NULL),
+  ('a08261da-b27f-109a-f17e-af5061d5d9e5', '5d23a7f7-d37a-8310-39bd-13908f16d93b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '55728a38-81ce-4ac7-6c03-3b5984030813', 'AMBIGRAM INTERIORS LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('d68b241a-7985-5055-abbe-7bc79e5596de', '91ab3836-c563-cbbd-f950-369f19f3a855', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 0, 0, NULL),
+  ('e4e2e340-bcff-63e7-a758-2b6de7c95710', '91ab3836-c563-cbbd-f950-369f19f3a855', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd1743bec-aac7-6741-9010-9f8038bbbd56', 'Favourite Plus', 'monthly', 10, 5500, 5500, NULL),
+  ('bcd19a50-20fe-cae8-a20c-84728847659c', '91ab3836-c563-cbbd-f950-369f19f3a855', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'c1cacbe1-a0ae-5edd-7ccf-2635939a9b30', 'FAVORITE PLUS PAINTING CONTRACTING LLC', 'monthly', 10, 5500, 5500, 'Transfer in Mashreq on 10th March Aed 33000/6'),
+  ('3e8b8ada-2674-bff9-4e0f-d6f9da19e443', '0c5c5b0d-57d2-1fd9-2dba-5bfa94c8d2db', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('ae7500ec-d297-99c0-1995-83136cae6fd3', '0c5c5b0d-57d2-1fd9-2dba-5bfa94c8d2db', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('d233d845-8295-6cb7-cb52-c3b40742ae6c', '0c5c5b0d-57d2-1fd9-2dba-5bfa94c8d2db', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 10, 4500, 4500, NULL),
+  ('b9944c95-0981-364d-d05f-6331c93abdca', 'c2141ac9-e3a9-a062-eee7-5313f5829a9e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('f9a398aa-9835-f6ec-66b9-aecc94083c9b', 'c2141ac9-e3a9-a062-eee7-5313f5829a9e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 6, 4500, 4500, NULL),
+  ('5729a342-5a94-73c1-75ce-071d8e4b5ecc', 'c2141ac9-e3a9-a062-eee7-5313f5829a9e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 9, 4500, 4500, NULL),
+  ('eb00789b-c80f-a9fc-a524-640abe99b84f', '8829a458-7de0-c759-fc68-d30abeb1994e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('7f4ead4e-b1a9-e315-a63f-e238da9c26a4', '8829a458-7de0-c759-fc68-d30abeb1994e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('4ddc7be6-a8a0-ab90-ebb3-5d4016fd4a9c', '8829a458-7de0-c759-fc68-d30abeb1994e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '7e2d1344-68ff-b909-c7bf-14cd28bc1fb1', 'Mosque', '', 0, 0, 0, NULL),
+  ('58a3b206-5107-935b-e9b5-1a4ee192d707', 'ee259dc1-4a1d-c734-d4fc-5cee1fab897f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'af90354e-6157-1e69-e583-d8982d2148fa', 'Al Naami', 'monthly', 8, 5500, 5500, 'Transfer 4400+1100'),
+  ('6c6c0466-8861-e6a9-5059-50c5ca8633c5', 'ee259dc1-4a1d-c734-d4fc-5cee1fab897f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'af90354e-6157-1e69-e583-d8982d2148fa', 'Al Naami', 'monthly', 8, 5500, 5500, NULL),
+  ('ce2d67db-2e03-67ea-25d3-3a4991622ab7', 'ee259dc1-4a1d-c734-d4fc-5cee1fab897f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '240a751f-e4d8-0cdb-cf21-7d0afa7fd732', 'ALNAAMI GENERAL CONTRACTING LLC', 'monthly', 7, 5500, 5500, 'Transfer in Mashreq Aed 5500/-'),
+  ('7ef3f4ee-3c10-1697-fddc-fea9cc97175a', '47d1e562-cc82-8a64-ea69-5362bf3fc9c2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('14083c43-3dea-d569-b7ed-d5e7b26f8fd2', '47d1e562-cc82-8a64-ea69-5362bf3fc9c2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('b4527716-e153-64a0-1b99-d75c7872b690', '47d1e562-cc82-8a64-ea69-5362bf3fc9c2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('a6d66ebb-fe51-ffc6-bf34-46b502f2f06c', 'ad8219fb-d54b-521a-c801-6929b29e9ca3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 5, 2350, 2350, NULL),
+  ('9c4f17b0-e44d-9b27-dea7-56f655c87cdb', 'ad8219fb-d54b-521a-c801-6929b29e9ca3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 2, 2350, 2350, NULL),
+  ('1b84858e-c393-0da5-9304-e9e875581397', 'ad8219fb-d54b-521a-c801-6929b29e9ca3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 3, 2350, 2350, NULL),
+  ('d08b6ac1-5ce8-c5f1-83b6-9ce342677957', '1a0e1f51-dd5c-819f-c05e-65b347454acb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 8, 2350, 2350, NULL),
+  ('9fbb9c1a-92f4-f8df-c13c-af1a7937d49e', '1a0e1f51-dd5c-819f-c05e-65b347454acb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ef417706-af53-62e0-3934-d21ac36a23f7', 'Gulf Fidelity Security Serv LLC', 'yearly', 7, 2350, 2350, NULL),
+  ('43cd9015-cbc9-1bec-bf0c-e9ef6d7df029', '1a0e1f51-dd5c-819f-c05e-65b347454acb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd183b95f-5b4b-6691-7d89-617f1cba3225', 'GULF FIDELITY SECURITY SEVICES LLC', 'yearly', 4, 2350, 2350, NULL),
+  ('e5bbf442-5033-1e6e-5aaf-728aacf16281', '104acb2e-e99c-0b6d-3c22-f9dfcd2ae33b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '4fe94cfe-879d-3245-b2cf-0174a8e1e382', 'Zaika Al Kabab (Store)', 'monthly', 0, 6500, 6500, NULL),
+  ('9a0c0006-ed20-a91e-8051-249cfaf95fd2', '104acb2e-e99c-0b6d-3c22-f9dfcd2ae33b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '4fe94cfe-879d-3245-b2cf-0174a8e1e382', 'Zaika Al Kabab (Store)', 'monthly', 0, 6500, 0, NULL),
+  ('50fe2a12-87bb-7f94-2893-154bd6ea0a8e', '104acb2e-e99c-0b6d-3c22-f9dfcd2ae33b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '4c6cd757-68e6-5e55-1159-293566ac46a7', 'ZAIQA AL KEBAB RESTAURANT LLC', 'monthly', 0, 6500, 6500, 'Transfer in Mashreq on 9th March 13000/2'),
+  ('b27f6450-af34-a25f-e1e0-ec451ebbacc3', '6616fc0c-c789-728c-4bc7-b10e3a8bb8d2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 11, 0, 0, NULL),
+  ('d63d57fc-7d2d-88ad-35fa-c933b79e01f5', '6616fc0c-c789-728c-4bc7-b10e3a8bb8d2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 11, 0, 0, NULL),
+  ('6e11de63-58d9-e9d5-d71e-08b3e2716f67', '6616fc0c-c789-728c-4bc7-b10e3a8bb8d2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 14, 0, 0, NULL),
+  ('3dff4e70-d9e8-77d7-5a56-1dee2a5858b6', '5e204b76-a999-63ad-3865-0d587d072993', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '16c78be6-7f8d-d148-4af2-c88a87469d84', 'Rajajeevannatham', 'monthly', 8, 5500, 5500, NULL),
+  ('e9af34af-72f8-378f-8682-5644de3c9acb', '5e204b76-a999-63ad-3865-0d587d072993', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '16c78be6-7f8d-d148-4af2-c88a87469d84', 'Rajajeevannatham', 'monthly', 10, 5500, 5500, NULL),
+  ('b1574677-e4cb-b375-883f-537028c888b4', '5e204b76-a999-63ad-3865-0d587d072993', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '0c870a3f-3af9-db5a-b663-755b5f7987ad', 'RAJA JEEVANNANTHAM', 'monthly', 8, 5500, 5500, NULL),
+  ('0dbdf336-776d-2e2f-98e5-eb8b0547724c', 'd04ea037-695e-da16-44d4-c55db6e16417', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('7b92565e-b879-0988-2d69-1a0fd877405c', 'd04ea037-695e-da16-44d4-c55db6e16417', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('49288dcb-d070-673b-470f-7a08b1717366', 'd04ea037-695e-da16-44d4-c55db6e16417', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 10, 4500, 4500, NULL),
+  ('4f2244ba-4b0a-f868-f10a-830a521beaa5', 'c601511c-04f3-ed7b-e66c-ddb492e13cfb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 15, 0, 0, NULL),
+  ('5f502f3b-32ef-fa82-2ad9-8557c3ce3fbc', 'c601511c-04f3-ed7b-e66c-ddb492e13cfb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 15, 0, 0, NULL),
+  ('02ad524b-2ead-46d1-fa12-be636bbdc731', 'c601511c-04f3-ed7b-e66c-ddb492e13cfb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 16, 0, 0, NULL),
+  ('92f86492-bf6f-0512-e519-7d284297911f', '7c353559-9129-3f47-6364-8683e67bb0ce', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 15, 0, 0, NULL),
+  ('8b38a8ad-226f-085f-7cab-666626744c35', '7c353559-9129-3f47-6364-8683e67bb0ce', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 14, 0, 0, NULL),
+  ('7318c962-b5b9-8da9-21a8-64dd3dc2cd32', '7c353559-9129-3f47-6364-8683e67bb0ce', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 14, 0, 0, NULL),
+  ('5ba0d6f8-4f71-422d-7103-8e1080885b04', '0ca7cddf-304c-ae58-1ab8-b7a4d851dcd6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'de37c09f-5f70-92e5-e7da-4bc85ab30fc0', 'Czar', 'monthly', 7, 7800, 7800, NULL),
+  ('a4d41314-8aaa-8561-bbf6-6d8ac81c7aa0', '0ca7cddf-304c-ae58-1ab8-b7a4d851dcd6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'de37c09f-5f70-92e5-e7da-4bc85ab30fc0', 'Czar', 'monthly', 7, 7800, 7800, NULL),
+  ('d94ac71f-66f8-43b5-a3b8-671ed03664f7', '0ca7cddf-304c-ae58-1ab8-b7a4d851dcd6', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'de37c09f-5f70-92e5-e7da-4bc85ab30fc0', 'CZAR', 'monthly', 7, 7800, 7800, 'Transfer in Mashreq on 10th March Aed 7800/-'),
+  ('cbce911b-530a-be23-1c3a-053714f346ef', 'f1103034-4fcc-d666-c693-7cfefdf26656', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('e38d3804-537e-525a-a308-176e5b46c9a5', 'f1103034-4fcc-d666-c693-7cfefdf26656', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('808f4e30-3a8a-264a-d332-9eafaa15c986', 'f1103034-4fcc-d666-c693-7cfefdf26656', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('67a14489-2a5d-b831-bdd3-da4e2b397ce2', '1bba0ca6-9fba-8fbf-8064-b5f5c8ab422c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('9b05f9bc-1dac-9ea2-7d15-e95bd73ef4cc', '1bba0ca6-9fba-8fbf-8064-b5f5c8ab422c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('31da0d86-2ba7-2759-adc0-ac387564513e', '1bba0ca6-9fba-8fbf-8064-b5f5c8ab422c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('9c0eea4a-39c1-688f-6ba9-f074a304b189', 'eb9cff5e-1025-5ed1-132b-34dbcb9e242b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('b238ad37-7051-5051-b1a7-ec4a16180667', 'eb9cff5e-1025-5ed1-132b-34dbcb9e242b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('a89eccad-fcbc-ea82-3f12-ce43bd97d8ef', 'eb9cff5e-1025-5ed1-132b-34dbcb9e242b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('f89664a2-d8a1-2f72-a22f-53db5e162bc9', 'c90fd948-f4bf-2cad-36db-9d022587fdb2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('8ef48951-f896-749f-3bfc-3057f5b1ee82', 'c90fd948-f4bf-2cad-36db-9d022587fdb2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('c03359fe-be4a-da98-6c43-8dc713648bcc', 'c90fd948-f4bf-2cad-36db-9d022587fdb2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('2d43b1d3-9b2e-e599-b5f5-310a000a91f4', 'd06654e4-e30c-9154-4ffd-b835e9c047e0', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('d1d8e553-3aaa-fba4-4212-e6cc62b5f824', 'd06654e4-e30c-9154-4ffd-b835e9c047e0', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('e4dcb4af-e1f5-104d-45ab-de8a619041f3', 'd06654e4-e30c-9154-4ffd-b835e9c047e0', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('75ec0d24-4619-149a-3e4c-c3b403be4765', '0e04666e-f9b5-31e4-21f8-500055f5b36c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('6dc14b77-b6db-6960-2fab-b20e58396ca6', '0e04666e-f9b5-31e4-21f8-500055f5b36c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('d33b4eda-4857-78b4-8da2-c95e6ecab973', '0e04666e-f9b5-31e4-21f8-500055f5b36c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('6f798de3-786e-08f0-82bc-86d4693b19d3', '66f2dcbc-8660-1728-49d6-ed907c1a30d8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('90336a20-e779-4d75-fae4-b421dafc8e26', '66f2dcbc-8660-1728-49d6-ed907c1a30d8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('6a774b24-65b6-2fde-81cc-068a50a48fb3', '66f2dcbc-8660-1728-49d6-ed907c1a30d8', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('5256177e-883a-c36b-217d-f3bfd6155aed', 'e1cc54e0-04e7-41c9-8cf2-6c034e96ddee', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('09589489-d66c-04b3-83e4-986789bddca4', 'e1cc54e0-04e7-41c9-8cf2-6c034e96ddee', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('e2292363-8df6-ff09-21dc-65c1d4cf16a3', 'e1cc54e0-04e7-41c9-8cf2-6c034e96ddee', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('044fb9b1-5e93-cf32-7ba7-b7e97062e3f5', '015b06d9-ca78-21ce-f43f-30e758c6f1d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('0b76e020-cbaa-dbfb-bd67-60370a595a13', '015b06d9-ca78-21ce-f43f-30e758c6f1d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('4f13caed-10d5-8e0c-63b7-ad80ecfbedbd', '015b06d9-ca78-21ce-f43f-30e758c6f1d1', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fd0625c8-32e3-7545-b121-03841e89e235', 'MIZNA MIZNA PROJECT', 'monthly', 7, 5500, 5500, NULL),
+  ('162a7119-702e-0545-832c-07ec0f441219', '483e6f48-3f6d-45ac-d42a-5a9b4606de24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('759862d8-b14f-0a94-7b15-125d23284b48', '483e6f48-3f6d-45ac-d42a-5a9b4606de24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('2736452a-8602-0fa7-69c7-f6a1e6722646', '483e6f48-3f6d-45ac-d42a-5a9b4606de24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('65561aa4-e443-0ae6-d18b-96be598264e9', '3bff6527-ec1a-f757-0fc3-f33571e05c9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('4ef37727-16b1-c4ef-8c5e-df1c4254fa78', '3bff6527-ec1a-f757-0fc3-f33571e05c9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('c4f63ee7-1205-44e9-0ebb-1a283a58cfda', '3bff6527-ec1a-f757-0fc3-f33571e05c9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('051c7806-4d36-159f-78b7-bfd751480d30', 'dbbc9ebe-4b6d-8960-8120-3e36f87133d3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('0fe46e7a-a180-de2b-b142-23f45f73bc88', 'dbbc9ebe-4b6d-8960-8120-3e36f87133d3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('3f6a9188-8cdd-4457-0432-9090d88908e8', 'dbbc9ebe-4b6d-8960-8120-3e36f87133d3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('11263161-b74b-8679-efad-e17df17874a4', '1c9b951d-9d37-1c51-6016-d82e832c71ad', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('8acca9d6-1299-622c-b112-15e77ad674c4', '1c9b951d-9d37-1c51-6016-d82e832c71ad', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('d4844dfc-64d4-3b51-5b1a-66204dd71cd0', '1c9b951d-9d37-1c51-6016-d82e832c71ad', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 8, 0, 0, NULL),
+  ('041dba45-1a3a-09f3-d49f-bc670da7cab8', '8ba22f81-9638-d739-b145-be838909ea9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('3d4c1527-8989-68da-502a-5a528c189314', '8ba22f81-9638-d739-b145-be838909ea9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('8ec4bf07-af9b-4be7-9577-4ba4a1c5bd41', '8ba22f81-9638-d739-b145-be838909ea9c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('7562df2c-b687-be23-452d-7c1f9bcb1f58', '98585ef1-3bd1-4240-b431-bdc081f63c5e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ae413320-1073-96e1-eb16-8ccf3e51207e', 'AL Shwifat', 'monthly', 8, 5500, 5500, 'Transfer in Mashreq on 6th Jan Aed 16500/3'),
+  ('f023b90e-da32-b44d-2c45-51fec192be62', '98585ef1-3bd1-4240-b431-bdc081f63c5e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ae413320-1073-96e1-eb16-8ccf3e51207e', 'AL Shwifat', 'monthly', 8, 5500, 5500, NULL),
+  ('567bab7f-e41d-17f2-ee5d-c16f0a7ac0a7', '98585ef1-3bd1-4240-b431-bdc081f63c5e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cfd0cafe-3623-380a-c5b3-bd31d7489d5a', 'AL SHWIFAT TECHNICAL SERVICES', 'monthly', 8, 5500, 5500, 'Transfer in Mashreq on 5th March Aed 16500/3'),
+  ('933d0eb2-5e82-3310-8c09-3e354deab9ab', '5faeeca8-398c-a31a-ace4-32cae7083c0b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 6, 1500, 1500, NULL),
+  ('7c9e3cf4-2e36-864d-510d-b0daf3db204d', '5faeeca8-398c-a31a-ace4-32cae7083c0b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 6, 1500, 1500, NULL),
+  ('3352bb4c-0485-642e-6bc8-92c3e2b3383c', '5faeeca8-398c-a31a-ace4-32cae7083c0b', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '73675964-ddfc-b08d-2aa6-846fac3b6656', 'Jubily Supermarket', 'yearly', 7, 3400, 0, NULL),
+  ('033dae8a-bb46-e428-fbf5-e8d0f8cbd36e', '3413c2fa-a007-8cb2-6831-8ebab9266ec3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 6, 1500, 1500, NULL),
+  ('a5e80c0d-346e-02d8-1640-cadd1003628e', '3413c2fa-a007-8cb2-6831-8ebab9266ec3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 5, 1500, 1500, NULL),
+  ('2899e236-d824-44af-22e1-bf9893ad8204', '3413c2fa-a007-8cb2-6831-8ebab9266ec3', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '73675964-ddfc-b08d-2aa6-846fac3b6656', 'Jubily Supermarket', 'yearly', 6, 3400, 0, NULL),
+  ('d07c22af-b12c-f665-c903-aeb875d07f0c', '66e3c4ad-b39d-b0e5-c36e-329d42665e4c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 0, 1500, 1500, NULL),
+  ('0b0c8402-e1eb-34c6-3de5-3b7c854f7ae9', '66e3c4ad-b39d-b0e5-c36e-329d42665e4c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 0, 1500, 1500, NULL),
+  ('2e2f4a86-2706-cb9e-d306-ed1b5c7cc0be', '66e3c4ad-b39d-b0e5-c36e-329d42665e4c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '73675964-ddfc-b08d-2aa6-846fac3b6656', 'Jubily Supermarket', 'yearly', 0, 3400, 0, NULL),
+  ('0f6311db-8755-f5a2-fc52-3fbd7c4654f7', '1971ae05-af47-da6d-4226-025ab090e65e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 5, 1500, 1500, NULL),
+  ('7894a04f-aa48-a8b5-116e-230a5ab1ac89', '1971ae05-af47-da6d-4226-025ab090e65e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '3901e018-bf1f-2dc5-7df5-efe74c86d280', 'Jubily Super Market', 'yearly', 4, 1500, 1500, NULL),
+  ('359fa27d-eae4-90d1-e33c-30638f0e9a47', '1971ae05-af47-da6d-4226-025ab090e65e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '73675964-ddfc-b08d-2aa6-846fac3b6656', 'Jubily Supermarket', 'yearly', 5, 3400, 0, NULL),
+  ('68338935-12a8-f9b9-2004-a32cc66c4beb', '28ea425c-7f59-ca13-9d65-b1ba67e320ed', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'monthly', 8, 3600, 0, 'Legal'),
+  ('fd720a47-5a84-65b8-df1b-6e9aa4571e7d', '28ea425c-7f59-ca13-9d65-b1ba67e320ed', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'monthly', 7, 3600, 0, NULL),
+  ('dc548d02-0aed-23cf-bf92-4714ffdea066', '28ea425c-7f59-ca13-9d65-b1ba67e320ed', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fb61c310-3513-b50e-fea3-49a77ee1cc4d', 'HHM Building Contracting LLC', 'monthly', 7, 3600, 0, NULL),
+  ('68a6718f-b60a-3dce-75ab-4f7d5b5e35e0', '9574ff82-0a29-8b84-2e41-f53c2e14251a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'monthly', 8, 3600, 0, 'Legal'),
+  ('1be223e0-d271-73b7-6704-8ce2be4d8563', '9574ff82-0a29-8b84-2e41-f53c2e14251a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'monthly', 7, 3600, 0, NULL),
+  ('e602fbbf-7d29-2630-fd9b-e9b6d6884db9', '9574ff82-0a29-8b84-2e41-f53c2e14251a', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fb61c310-3513-b50e-fea3-49a77ee1cc4d', 'HHM Building Contracting LLC', 'monthly', 7, 3600, 0, NULL),
+  ('a98499a3-e623-c125-c937-d281e886247e', '0dfd1bca-00cc-0703-f51a-374be58729c7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('c6ab7de1-6909-51c5-1aa8-c4216653f2d0', '0dfd1bca-00cc-0703-f51a-374be58729c7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('aefab9f9-1b8c-b760-776a-8c5e6235ae3a', '0dfd1bca-00cc-0703-f51a-374be58729c7', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('c6a62986-85a9-a521-abb1-b470e3e74bdc', '2eebb59a-e367-dded-79d5-05437c4d702e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('78c4da20-303f-2b68-b966-af76f8c06534', '2eebb59a-e367-dded-79d5-05437c4d702e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('4f40d23d-c41b-24e2-0517-23bc85dbe6e4', '2eebb59a-e367-dded-79d5-05437c4d702e', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('f5fe4708-5c32-2551-186a-f303fb299e1d', '721743de-f134-af6f-adfb-4087f664ae3d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'f7340e69-b900-f762-bedc-e835668b949a', 'Olive Star', 'monthly', 6, 5500, 5500, 'Cheque # 59006 dated 5th Jan Aed 16500/3'),
+  ('ca47e520-4db4-c50c-244c-4ba354a4cc5e', '721743de-f134-af6f-adfb-4087f664ae3d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'f7340e69-b900-f762-bedc-e835668b949a', 'Olive Star', 'monthly', 4, 5500, 5500, NULL),
+  ('2b82d827-1f97-516f-8fa5-6a6fd45954eb', '721743de-f134-af6f-adfb-4087f664ae3d', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '32736642-00a6-ddd3-024c-d305b53ca4b1', 'OLIVE STAR TECHNICAL SERVICES LLC', 'monthly', 3, 5500, 5500, 'RAK Bank cheque # 59009 dated 5th March 16500/3 '),
+  ('05fb07ea-7bc2-c8f7-83b5-2ee2e812ad8a', 'd5356fd5-b492-3f65-86f8-828daa337552', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'f7340e69-b900-f762-bedc-e835668b949a', 'Olive Star', 'monthly', 7, 5500, 5500, NULL),
+  ('2be9e247-8980-be07-0fea-abc4a1a46055', 'd5356fd5-b492-3f65-86f8-828daa337552', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'f7340e69-b900-f762-bedc-e835668b949a', 'Olive Star', 'monthly', 6, 5500, 5500, NULL),
+  ('e67d8997-11b7-1a6d-a4ae-2587243450d2', 'd5356fd5-b492-3f65-86f8-828daa337552', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '32736642-00a6-ddd3-024c-d305b53ca4b1', 'OLIVE STAR TECHNICAL SERVICES LLC', 'monthly', 6, 5500, 5500, NULL),
+  ('111fb570-2f3c-0d00-916a-654c6ab9264b', '50abe551-16a9-aed8-b779-1a26bd0a29ee', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'f7340e69-b900-f762-bedc-e835668b949a', 'Olive Star', 'monthly', 7, 5500, 5500, NULL),
+  ('edf73288-87dc-c761-9954-a8ca3970fb6e', '50abe551-16a9-aed8-b779-1a26bd0a29ee', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'f7340e69-b900-f762-bedc-e835668b949a', 'Olive Star', 'monthly', 8, 5500, 5500, NULL),
+  ('ff403769-3427-28fd-e2cc-8fae8973a7f5', '50abe551-16a9-aed8-b779-1a26bd0a29ee', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '32736642-00a6-ddd3-024c-d305b53ca4b1', 'OLIVE STAR TECHNICAL SERVICES LLC', 'monthly', 7, 5500, 5500, NULL),
+  ('f696bf7f-a540-599a-83ea-dccb5aa3a8b9', '55e74b42-fcd8-f09c-f8cf-e01d2a7fde4f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'M.B.K', 'yearly', 8, 3800, 3800, NULL),
+  ('6034e8b2-e12d-c03b-6203-d8e92dc6b8bb', '55e74b42-fcd8-f09c-f8cf-e01d2a7fde4f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'M.B.K', 'yearly', 8, 3800, 3800, NULL),
+  ('a7da0b8a-dd62-ae34-2a84-ead6b1e9a76f', '55e74b42-fcd8-f09c-f8cf-e01d2a7fde4f', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '622a82b6-8b60-0bd6-77ce-5bf7f5c35777', 'MBK TECHNICAL SERVICES', 'yearly', 6, 3800, 3800, NULL),
+  ('a9e6b3f4-2418-76e4-f2d3-6cd585ed27dc', '47e9438b-1dbc-efbb-4b36-365883bac87c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'M.B.K', 'yearly', 8, 3800, 3800, NULL),
+  ('41421afd-77ea-1554-3fe9-7048d840ea30', '47e9438b-1dbc-efbb-4b36-365883bac87c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'M.B.K', 'yearly', 7, 3800, 3800, NULL),
+  ('61d96e4c-9b99-799e-c2d1-a361620da385', '47e9438b-1dbc-efbb-4b36-365883bac87c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '622a82b6-8b60-0bd6-77ce-5bf7f5c35777', 'MBK TECHNICAL SERVICES', 'yearly', 6, 3800, 3800, NULL),
+  ('eb2060f5-6892-35de-d46a-a7b83fd0b74c', 'a7ef3f2d-a444-45b0-ff57-1b16f40fc9dd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('23bb13ac-68f2-af9d-7051-155d089d3893', 'a7ef3f2d-a444-45b0-ff57-1b16f40fc9dd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 4, 0, 0, NULL),
+  ('9056d59b-33f7-8fe6-6596-0082b657b960', 'a7ef3f2d-a444-45b0-ff57-1b16f40fc9dd', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '79cb5eb4-3af7-53fa-9768-6e35ea7d18a7', 'Bartawi Gen. Cont', '', 0, 0, 0, NULL),
+  ('66a53ff9-cde2-93ee-02c3-acdbc99e6f75', 'ce29b8ff-1015-3ad5-b4a5-4534c2a860c2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'M.B.K', 'yearly', 8, 3800, 3800, NULL),
+  ('5dd1fe28-b25a-5e7d-d764-9b867ad2c718', 'ce29b8ff-1015-3ad5-b4a5-4534c2a860c2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'ab9737fd-9080-6ecb-5c86-d0984ecc94ea', 'M.B.K', 'yearly', 8, 3800, 3800, NULL),
+  ('5d5fa705-c3f0-3f1e-c2b7-492eeb054b98', 'ce29b8ff-1015-3ad5-b4a5-4534c2a860c2', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '622a82b6-8b60-0bd6-77ce-5bf7f5c35777', 'MBK TECHNICAL SERVICES', 'yearly', 7, 3800, 3800, NULL),
+  ('5965e6d8-34b9-58ca-3f98-8cb53ac8e40b', 'c3cb2a0f-554d-f6b3-5adb-561c300f36d4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '99f69dec-b282-3aca-18a0-3bdb20803255', '800 Truck', 'monthly', 7, 5500, 5500, 'Transfer in DIB on 6th Jan Aed 16500/3'),
+  ('1cf99685-9ef2-bffc-4b8d-297eb913bc20', 'c3cb2a0f-554d-f6b3-5adb-561c300f36d4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '99f69dec-b282-3aca-18a0-3bdb20803255', '800 Truck', 'monthly', 8, 5500, 5500, NULL),
+  ('0b91a5b3-9daa-3222-45da-90112cd7cca1', 'c3cb2a0f-554d-f6b3-5adb-561c300f36d4', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '99f69dec-b282-3aca-18a0-3bdb20803255', '800 Truck', 'monthly', 8, 5500, 5500, 'Transfer in Mashreq on 6th March Aed 11000/2'),
+  ('b3022b85-518d-4d0a-0772-7303cc88c8cb', '3ed5cc87-0a50-cb27-2c3e-3b2433c51047', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'af00ac0a-4023-cd17-2954-9a11c811c408', 'Advance Aluminium System', 'yearly', 5, 3600, 3600, NULL),
+  ('41dbcb66-df0a-6cc6-e3fe-8fae43d357b4', '3ed5cc87-0a50-cb27-2c3e-3b2433c51047', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'af00ac0a-4023-cd17-2954-9a11c811c408', 'Advance Aluminium System', 'yearly', 5, 3600, 3600, NULL),
+  ('368c39db-24ee-9c8e-c002-337db5f68d1b', '3ed5cc87-0a50-cb27-2c3e-3b2433c51047', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'cd651d3b-8613-a9d4-c965-5a6640733a8b', 'ADVANCED ALUMINIUM SYSTEM ADAL LLC', 'yearly', 5, 3600, 3600, NULL),
+  ('f02aadab-af69-b604-e5b9-46a572c272e0', '02de01aa-313e-aaa7-969f-3f58fd19c534', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '28b8076e-d92d-5dd5-88d6-026d9d165569', 'Blue Ginger', 'monthly', 8, 5500, 5500, NULL),
+  ('5a4707d6-d99f-92b1-506c-f65713da7af8', '02de01aa-313e-aaa7-969f-3f58fd19c534', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '28b8076e-d92d-5dd5-88d6-026d9d165569', 'Blue Ginger', 'monthly', 8, 5500, 5500, NULL),
+  ('f2b4c60f-5e96-3dd3-7f62-5efa64c5de47', '02de01aa-313e-aaa7-969f-3f58fd19c534', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '28b8076e-d92d-5dd5-88d6-026d9d165569', 'Blue Ginger', 'monthly', 8, 5500, 5500, 'Cheque # 3778 dated 20th March Aed 11000/2'),
+  ('8d9fc9e4-e471-d4ac-9e20-84fe60cee0b8', '173e4af4-f5c9-1675-b6b8-64cb74c1b5ca', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, '28b8076e-d92d-5dd5-88d6-026d9d165569', 'Blue Ginger', 'monthly', 8, 5500, 5500, NULL),
+  ('88d65f56-5237-5cad-9dab-2d356bf45a07', '173e4af4-f5c9-1675-b6b8-64cb74c1b5ca', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, '28b8076e-d92d-5dd5-88d6-026d9d165569', 'Blue Ginger', 'monthly', 8, 5500, 5500, NULL),
+  ('60393c84-c54f-5af7-adbc-dca2f96d48df', '173e4af4-f5c9-1675-b6b8-64cb74c1b5ca', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '28b8076e-d92d-5dd5-88d6-026d9d165569', 'Blue Ginger', 'monthly', 8, 5500, 5500, NULL),
+  ('499f5b3a-e6fa-a427-5711-b4d1b6288b02', '17a7ae8a-4234-06d9-09a6-07771945e5fc', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 8, 3600, 3600, NULL),
+  ('28a2e2c7-f7c5-979c-42e8-c18560ea93a4', '17a7ae8a-4234-06d9-09a6-07771945e5fc', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'b89feeee-dab8-2f0f-3a28-c942e56d36c5', 'Tayas Contarcting LLC', 'yearly', 7, 3600, 3600, NULL),
+  ('e0607cfd-1759-636b-da7c-aa46f4f6ae42', '17a7ae8a-4234-06d9-09a6-07771945e5fc', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'a9adebb4-b846-4faa-974f-92a3e23ff66e', 'TAYAS CONTRACTING LLC', 'yearly', 6, 3600, 3600, NULL),
+  ('d2e07015-2495-caed-34d4-abc28e72880d', '88df63a7-f73a-b6e9-f2c6-39a8a8a2cccb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('752cdbfb-a221-f64f-85cf-44eac8ba6bdf', '88df63a7-f73a-b6e9-f2c6-39a8a8a2cccb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 9, 4500, 4500, NULL),
+  ('7119a837-8035-efce-3e53-407358cfd11c', '88df63a7-f73a-b6e9-f2c6-39a8a8a2cccb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 9, 4500, 4500, NULL),
+  ('b383dec5-08cc-2dba-a900-f6b0386cdbcd', '77f4ac2a-6083-4d9d-7fe7-ae4ee417f45c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'b6916a3f-42d1-23de-d15d-ad54100f8941', 'Zamco', 'monthly', 8, 7350, 7350, NULL),
+  ('af02298e-d6a8-f8a9-bb43-11d641c0f8bd', '77f4ac2a-6083-4d9d-7fe7-ae4ee417f45c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, NULL, 'Vacant', 'monthly', 0, 0, 0, NULL),
+  ('325e300d-a95c-ed70-3141-00ef3e327be9', '77f4ac2a-6083-4d9d-7fe7-ae4ee417f45c', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'd1907102-68c4-ac08-5b22-dcec76349be5', 'Zaykaa Biryani Restaurant llc', 'monthly', 12, 6500, 6500, 'Transfer in Mashreq on 9th March 13000/2'),
+  ('75c10a33-79df-f39f-a665-28013794896e', '84d4e61e-ac56-4e7f-bec7-fc78a574f427', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('2baf5d1d-e762-a4e7-ea7c-b7943a9f0a65', '84d4e61e-ac56-4e7f-bec7-fc78a574f427', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('8733b4b2-01f9-c4cf-92ad-c0418ff97b0b', '84d4e61e-ac56-4e7f-bec7-fc78a574f427', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fd0625c8-32e3-7545-b121-03841e89e235', 'MIZNA MIZNA PROJECT', 'monthly', 6, 5500, 5500, NULL),
+  ('065ad51c-5d46-cd17-eaf8-c71daa0325a6', '8980139f-4d49-8aac-5adb-4fa0513db751', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('8c15f6a1-49c1-52d8-1922-bfd959453632', '8980139f-4d49-8aac-5adb-4fa0513db751', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'a52fdb30-bf40-5153-da13-14eeae9d1774', 'Mizna', 'monthly', 8, 5500, 5500, NULL),
+  ('1dc3a837-515d-878f-3d11-e4544078a9a8', '8980139f-4d49-8aac-5adb-4fa0513db751', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'fd0625c8-32e3-7545-b121-03841e89e235', 'MIZNA MIZNA PROJECT', 'monthly', 7, 5500, 5500, NULL),
+  ('3ebaa0ab-c5bb-0f33-189f-ad16eecfc164', '0afc046b-ae27-310a-61b4-7606bd5495e9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 8, 2420, 0, 'Legal'),
+  ('93597675-23e6-cd99-3e38-d3df429c7dab', '0afc046b-ae27-310a-61b4-7606bd5495e9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd20cc1b0-40de-b53d-aa5a-7cc754e4410c', 'HHM Bld Contracting', 'yearly', 7, 2420, 0, NULL),
+  ('2ad34a68-f4ab-4e86-361e-3a446a737a99', '0afc046b-ae27-310a-61b4-7606bd5495e9', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, '85e1dace-2653-b3b1-bc4f-cdff507261a0', 'HHM ELECTROMECHANICAL LLC', 'yearly', 8, 2420, 0, NULL),
+  ('6fd36f0b-47d9-7032-4965-19e23accd400', '9791077e-8b80-795e-4f1a-a81106b71ebb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 7, 4500, 4500, NULL),
+  ('e8e1d3e3-c58a-6915-f65e-4a3c8fc694de', '9791077e-8b80-795e-4f1a-a81106b71ebb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 8, 4500, 4500, NULL),
+  ('1c014e75-8429-e67b-be39-7a040d6373bf', '9791077e-8b80-795e-4f1a-a81106b71ebb', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 9, 4500, 4500, NULL),
+  ('860a4a2d-9ee0-d5a3-da0b-68535cea74e3', 'cea8da67-c6fb-b39f-e123-208f1b7bca24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('1ca65e08-2792-2634-b614-5a2c81bc9622', 'cea8da67-c6fb-b39f-e123-208f1b7bca24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('1f305fb5-ccdb-5000-1709-eb2b9162fb1f', 'cea8da67-c6fb-b39f-e123-208f1b7bca24', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 10, 4500, 4500, NULL),
+  ('8fad330f-4e2a-566a-e42c-36455521ada6', '5fb55ad6-7111-55df-a0ef-67cf0fce1778', '1af2c34d-6c38-1b45-277f-072f900acbc1', 1, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('bfb662f3-b3d0-039b-a747-9b1f131ad5b7', '5fb55ad6-7111-55df-a0ef-67cf0fce1778', '1af2c34d-6c38-1b45-277f-072f900acbc1', 2, 2026, 'd35926ce-48e0-4642-ded1-0988898bdb88', 'Al Hayat Albsyth Co', 'yearly', 10, 4500, 4500, NULL),
+  ('dc620efa-942c-b069-d763-91d9be4dd6ff', '5fb55ad6-7111-55df-a0ef-67cf0fce1778', '1af2c34d-6c38-1b45-277f-072f900acbc1', 3, 2026, 'bc711af6-0ecc-f350-225d-2e7edafe487b', 'AL HAYAT', 'yearly', 9, 4500, 4500, NULL);
+
+```
+---
+
+
+## Map Configuration Guide
+
+# Map Configuration Guide — How to Complete the Camp Map
+
+When you receive the physical layout paper for Camp 1 and Camp 2, follow these steps.
+This is the ONLY step remaining after the database is deployed.
+
+## What's Already Done
+- All buildings are seeded in the `buildings` table
+- All rooms are seeded in the `rooms` table
+- Map layout records exist in `map_layouts` with `is_configured = false`
+- The frontend renders the map from database geometry — nothing is hardcoded
+
+## What You Need to Do
+
+### Step 1 — Scan or photograph the layout paper
+Get a clear top-down image of each camp.
+
+### Step 2 — Drop the image here (Claude chat)
+Say: "Here is the Camp 1 layout paper, configure the map."
+I will extract building positions and generate the SQL update statements.
+
+### Step 3 — Run the SQL
+The output will be UPDATE statements like:
+
+```sql
+-- Camp 1 Building A
+UPDATE buildings
+SET map_x=120, map_y=80, map_width=180, map_height=240,
+    map_rotation=0, map_shape_type='rect'
+WHERE id = '<building-a-id>';
+
+-- Camp 1 Building B
+UPDATE buildings
+SET map_x=320, map_y=80, map_width=180, map_height=240
+WHERE id = '<building-b-id>';
+
+-- ... and so on for all buildings
+```
+
+Then update the camp:
+```sql
+UPDATE camps SET map_configured=true, map_configured_at=NOW()
+WHERE id='<camp-id>';
+
+UPDATE map_layouts SET is_configured=true, configured_at=NOW()
+WHERE camp_id='<camp-id>';
+```
+
+### Step 4 — Room positions auto-generate
+Once building geometry is set, the API auto-calculates room positions
+within each floor plan based on room count and wing assignment.
+You can fine-tune individual rooms if needed:
+
+```sql
+UPDATE rooms
+SET fp_x=10, fp_y=20, fp_width=76, fp_height=90, fp_wing='north'
+WHERE camp_id='...' AND room_number='A01';
+```
+
+## Building IDs Reference
+
+### Camp 1
+| Building | Ground Block | First Block | UUID |
+|---|---|---|---|
+| A | A (22 rooms) | AA (22 rooms) | Run: SELECT id FROM buildings WHERE camp_id=... AND code='A' |
+| B | B (24 rooms) | BB (24 rooms) | ... |
+| C | C (22 rooms) | CC (22 rooms) | ... |
+| D | D (23 rooms) | DD (23 rooms) | ... |
+| E | E (24 rooms) | EE (24 rooms) | ... |
+| F | F (22 rooms) | FF (22 rooms) | ... |
+
+### Camp 2
+| Building | Ground Block | First Block | Notes |
+|---|---|---|---|
+| A | A (5 rooms) | AA (6 rooms) | Mix of Bartawi + corporate |
+| B | B (14 rooms) | BB (14 rooms) | Heavy Tayas + Petra Oasis |
+| C | C (12 rooms) | CC (12 rooms) | HHM (legal) + various |
+| D | D (14 rooms) | DD (14 rooms) | Mix of corporate |
+| E | E (14 rooms) | EE (14 rooms) | Gulf Fidelity block |
+| F | F (5 rooms) | FF (5 rooms) | Gulf Fidelity + Ambigram |
+| S | S (1 room) | SS (6 rooms) | S01=Restaurant, SS=Bartawi+Czar |
+| U | U (19 rooms) | UU (24 rooms) | Largest block, most diverse |
+
+
+---
+
+
+## Sensor Pipeline Architecture
+
+# Sensor Pipeline — Architecture & Activation Guide
+
+## Status: DORMANT
+The pipeline is fully built. The `sensor_devices` and `sensor_readings` tables exist.
+The ingestion endpoint code must be written but the route and auth skeleton is ready.
+To activate: set feature flag `iot_sensor_pipeline = true`.
+
+## Architecture
+
+```
+[Hardware Sensors] → POST /api/v1/sensors/ingest
+                          ↓
+                    [Auth: Device API Key]
+                          ↓
+                    [sensor_ingestion_log] ← raw payload stored first
+                          ↓
+                    [Validation + Device Lookup]
+                          ↓
+                    [sensor_readings] ← partitioned by month
+                          ↓
+                    [Anomaly Detection] ← threshold config per device
+                          ↓
+                    [notifications] ← if anomaly detected
+```
+
+## Ingestion API Contract
+
+### POST /api/v1/sensors/ingest
+**Headers:**
+- `X-Device-ID: <hardware_device_id>`
+- `X-API-Key: <device_api_key>`
+- `Content-Type: application/json`
+
+**Body (single reading):**
+```json
+{
+  "device_id": "SENSOR_CAMP1_WATER_MAIN_001",
+  "reading_value": 45.3,
+  "reading_unit": "L/min",
+  "reading_ts": "2026-04-15T14:32:00Z",
+  "is_cumulative": false,
+  "raw_payload": { "raw": 4530, "battery": 87, "signal": -65 }
+}
+```
+
+**Body (batch readings):**
+```json
+{
+  "device_id": "SENSOR_CAMP1_WATER_MAIN_001",
+  "readings": [
+    { "reading_value": 45.3, "reading_ts": "2026-04-15T14:30:00Z" },
+    { "reading_value": 46.1, "reading_ts": "2026-04-15T14:31:00Z" }
+  ]
+}
+```
+
+## Sensor Types Seeded
+| Type | Unit | Use Case |
+|---|---|---|
+| water_flow | L/min | Main water inlet flow rate |
+| water_volume | m³ | Cumulative consumption per block |
+| electricity_kwh | kWh | Monthly electricity usage |
+| electricity_kw | kW | Peak demand monitoring |
+| temperature | °C | Ambient room temperature |
+| humidity | % | Humidity monitoring |
+| occupancy_count | persons | Motion-based headcount |
+| pressure_psi | psi | Water pipe pressure |
+| door_event | event | Entry/exit tracking |
+
+## Activating a Sensor Device
+
+```sql
+-- 1. Register the physical device
+INSERT INTO sensor_devices (
+  camp_id, building_id, sensor_type_id,
+  device_id, device_name, location_desc,
+  is_active, status
+) VALUES (
+  '<camp-1-id>',
+  '<building-a-id>',
+  (SELECT id FROM sensor_types WHERE name='water_flow'),
+  'CAMP1_WATER_BLD_A_MAIN',
+  'Camp 1 Building A Main Water Inlet',
+  'Ground floor water inlet pipe, Building A',
+  true,
+  'active'
+);
+
+-- 2. Enable the feature flag
+UPDATE feature_flags
+SET is_enabled=true, enabled_at=NOW()
+WHERE flag_key='iot_sensor_pipeline' AND tenant_id='<tenant-id>';
+```
+
+## Monthly Data Partitions
+sensor_readings is partitioned by month for performance.
+Add new partitions before the month starts:
+
+```sql
+CREATE TABLE sensor_readings_2027_01 PARTITION OF sensor_readings
+  FOR VALUES FROM ('2027-01-01') TO ('2027-02-01');
+```
+
+## Expense Integration
+When sensors are live, utility costs can auto-populate from readings:
+
+```sql
+-- Auto-generate expense from monthly sensor totals
+INSERT INTO expenses (camp_id, category_id, amount, description, month, year)
+SELECT
+  sr.camp_id,
+  (SELECT id FROM expense_categories WHERE name='Utilities'),
+  SUM(sr.reading_value) * <rate_per_unit>,
+  'Auto: Electricity usage from sensors',
+  EXTRACT(MONTH FROM sr.reading_ts)::INT,
+  EXTRACT(YEAR FROM sr.reading_ts)::INT
+FROM sensor_readings sr
+JOIN sensor_devices sd ON sr.device_id = sd.id
+JOIN sensor_types st ON sr.sensor_type_id = st.id
+WHERE st.name = 'electricity_kwh'
+  AND sr.reading_ts BETWEEN '2026-04-01' AND '2026-05-01'
+GROUP BY sr.camp_id, EXTRACT(MONTH FROM sr.reading_ts), EXTRACT(YEAR FROM sr.reading_ts);
+```
+
+
+---
+
+
+## Deployment Order
+
+Run files in this exact order:
+
+```bash
+# 1. Schema first
+psql $DATABASE_URL < schema.sql
+
+# 2. Structural seed (tenant, camps, buildings, blocks, rooms)
+psql $DATABASE_URL < seed_structure.sql
+
+# 3. Companies and individuals
+psql $DATABASE_URL < seed_entities.sql
+
+# 4. Historical monthly records (1,359 records)
+psql $DATABASE_URL < seed_monthly.sql
+
+# 5. Verify
+psql $DATABASE_URL -c "SELECT camp_id, COUNT(*) FROM rooms GROUP BY camp_id;"
+psql $DATABASE_URL -c "SELECT camp_id, month, COUNT(*), SUM(rent), SUM(paid), SUM(balance) FROM monthly_records GROUP BY camp_id, month ORDER BY camp_id, month;"
+```
+
+Expected verification output:
+```
+Camp 1: 274 rooms
+Camp 2: 179 rooms
+Monthly records: 822 (Camp 1) + 537 (Camp 2) = 1,359 total
+```
+
+---
+
+## Next Steps After Deployment
+
+1. ✅ Schema deployed
+2. ✅ All real data seeded
+3. ⏳ **Get layout paper → drop in chat → receive map config SQL → run it**
+4. ⏳ Build the REST API (endpoints for rooms, payments, complaints, financials)
+5. ⏳ Build the frontend (dashboard + camp map views from mockups)
+6. ⏳ Connect sensor hardware → activate `iot_sensor_pipeline` flag
+7. ⏳ When ready for SaaS → activate `multi_tenant_saas` flag

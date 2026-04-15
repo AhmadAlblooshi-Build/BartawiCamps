@@ -1,0 +1,701 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// This table is a partition table and requires additional setup for migrations. Visit https://pris.ly/d/partition-tables for more info.
+model audit_logs {
+  id            BigInt   @default(autoincrement())
+  tenant_id     String?  @db.Uuid
+  user_id       String?  @db.Uuid
+  action        String   @db.VarChar(100)
+  resource_type String?  @db.VarChar(100)
+  resource_id   String?  @db.Uuid
+  old_values    Json?
+  new_values    Json?
+  ip_address    String?  @db.Inet
+  user_agent    String?
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  tenants       tenants? @relation(fields: [tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users         users?   @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([id, created_at])
+  @@index([resource_type, resource_id], map: "idx_audit_resource")
+}
+
+model bed_occupancy {
+  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bed_space_id       String      @db.Uuid
+  room_id            String      @db.Uuid
+  individual_id      String      @db.Uuid
+  check_in_date      DateTime?   @db.Date
+  check_out_date     DateTime?   @db.Date
+  reason_for_leaving String?
+  is_current         Boolean?    @default(true)
+  created_by         String?     @db.Uuid
+  created_at         DateTime?   @default(now()) @db.Timestamptz(6)
+  bed_spaces         bed_spaces  @relation(fields: [bed_space_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users              users?      @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  individuals        individuals @relation(fields: [individual_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms              rooms       @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model bed_spaces {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  room_id       String          @db.Uuid
+  bed_number    Int
+  status        String          @default("vacant") @db.VarChar(20)
+  created_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  bed_occupancy bed_occupancy[]
+  rooms         rooms           @relation(fields: [room_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([room_id, bed_number])
+}
+
+model blocks {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  building_id  String    @db.Uuid
+  camp_id      String    @db.Uuid
+  code         String    @db.VarChar(20)
+  floor_label  String    @default("Ground") @db.VarChar(20)
+  floor_number Int       @default(0)
+  room_count   Int       @default(0)
+  is_active    Boolean?  @default(true)
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+  buildings    buildings @relation(fields: [building_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  camps        camps     @relation(fields: [camp_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  rooms        rooms[]
+
+  @@unique([camp_id, code])
+}
+
+model buildings {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camp_id           String            @db.Uuid
+  code              String            @db.VarChar(20)
+  name              String            @db.VarChar(100)
+  floor_count       Int               @default(2)
+  ground_block_code String?           @db.VarChar(10)
+  upper_block_code  String?           @db.VarChar(10)
+  map_x             Decimal?          @db.Decimal(10, 2)
+  map_y             Decimal?          @db.Decimal(10, 2)
+  map_width         Decimal?          @db.Decimal(10, 2)
+  map_height        Decimal?          @db.Decimal(10, 2)
+  map_rotation      Decimal?          @default(0) @db.Decimal(5, 2)
+  map_shape_type    String?           @default("rect") @db.VarChar(20)
+  map_shape_points  Json?
+  label_offset_x    Decimal?          @default(0) @db.Decimal(10, 2)
+  label_offset_y    Decimal?          @default(-12) @db.Decimal(10, 2)
+  is_active         Boolean?          @default(true)
+  notes             String?
+  created_at        DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime?         @default(now()) @db.Timestamptz(6)
+  blocks            blocks[]
+  camps             camps             @relation(fields: [camp_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  complaints        complaints[]
+  qr_codes          qr_codes[]
+  rooms             rooms[]
+  sensor_devices    sensor_devices[]
+  sensor_readings   sensor_readings[]
+
+  @@unique([camp_id, code])
+}
+
+model camps {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id         String            @db.Uuid
+  name              String            @db.VarChar(100)
+  code              String            @db.VarChar(20)
+  address           String?
+  city              String?           @default("Dubai") @db.VarChar(100)
+  country           String?           @default("UAE") @db.VarChar(100)
+  total_rooms       Int               @default(0)
+  leasable_rooms    Int               @default(0)
+  map_canvas_width  Decimal?          @default(1400) @db.Decimal(10, 2)
+  map_canvas_height Decimal?          @default(900) @db.Decimal(10, 2)
+  map_configured    Boolean?          @default(false)
+  map_configured_at DateTime?         @db.Timestamptz(6)
+  is_active         Boolean?          @default(true)
+  created_at        DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime?         @default(now()) @db.Timestamptz(6)
+  blocks            blocks[]
+  buildings         buildings[]
+  tenants           tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  complaints        complaints[]
+  contract_alerts   contract_alerts[]
+  contracts         contracts[]
+  expenses          expenses[]
+  map_layouts       map_layouts[]
+  monthly_records   monthly_records[]
+  payments          payments[]
+  qr_codes          qr_codes[]
+  room_occupancy    room_occupancy[]
+  rooms             rooms[]
+  sensor_devices    sensor_devices[]
+  sensor_readings   sensor_readings[]
+
+  @@unique([tenant_id, code])
+}
+
+model companies {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id       String            @db.Uuid
+  name            String            @db.VarChar(255)
+  name_normalized String?           @db.VarChar(255)
+  trade_license   String?           @db.VarChar(100)
+  contact_person  String?           @db.VarChar(255)
+  contact_phone   String?           @db.VarChar(50)
+  contact_email   String?           @db.VarChar(255)
+  address         String?
+  industry        String?           @db.VarChar(100)
+  is_active       Boolean?          @default(true)
+  notes           String?
+  created_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  tenants         tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contracts       contracts[]
+  monthly_records monthly_records[]
+  room_occupancy  room_occupancy[]
+}
+
+model complaint_categories {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id        String       @db.Uuid
+  name             String       @db.VarChar(100)
+  priority_default String?      @default("medium") @db.VarChar(20)
+  is_active        Boolean?     @default(true)
+  tenants          tenants      @relation(fields: [tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  complaints       complaints[]
+}
+
+model complaint_updates {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaint_id String     @db.Uuid
+  user_id      String?    @db.Uuid
+  old_status   String?    @db.VarChar(30)
+  new_status   String?    @db.VarChar(30)
+  note         String?
+  created_at   DateTime?  @default(now()) @db.Timestamptz(6)
+  complaints   complaints @relation(fields: [complaint_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users        users?     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model complaints {
+  id                                       String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaint_ref                            String                @unique @db.VarChar(30)
+  camp_id                                  String                @db.Uuid
+  room_id                                  String?               @db.Uuid
+  building_id                              String?               @db.Uuid
+  category_id                              String?               @db.Uuid
+  title                                    String                @db.VarChar(255)
+  description                              String?
+  status                                   String                @default("open") @db.VarChar(30)
+  priority                                 String                @default("medium") @db.VarChar(20)
+  reported_by_user                         String?               @db.Uuid
+  reported_by_name                         String?               @db.VarChar(255)
+  reported_by_room                         String?               @db.VarChar(20)
+  reported_via                             String?               @default("staff") @db.VarChar(30)
+  assigned_to                              String?               @db.Uuid
+  resolved_at                              DateTime?             @db.Timestamptz(6)
+  resolved_by                              String?               @db.Uuid
+  resolution_notes                         String?
+  image_urls                               Json?                 @default("[]")
+  created_at                               DateTime?             @default(now()) @db.Timestamptz(6)
+  updated_at                               DateTime?             @default(now()) @db.Timestamptz(6)
+  complaint_updates                        complaint_updates[]
+  users_complaints_assigned_toTousers      users?                @relation("complaints_assigned_toTousers", fields: [assigned_to], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  buildings                                buildings?            @relation(fields: [building_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  camps                                    camps                 @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  complaint_categories                     complaint_categories? @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_complaints_reported_by_userTousers users?                @relation("complaints_reported_by_userTousers", fields: [reported_by_user], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_complaints_resolved_byTousers      users?                @relation("complaints_resolved_byTousers", fields: [resolved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms                                    rooms?                @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([camp_id], map: "idx_complaints_camp")
+  @@index([status], map: "idx_complaints_status")
+}
+
+model contract_alerts {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contract_id       String    @db.Uuid
+  camp_id           String    @db.Uuid
+  alert_type        String    @db.VarChar(50)
+  days_until_expiry Int?
+  is_acknowledged   Boolean?  @default(false)
+  acknowledged_by   String?   @db.Uuid
+  acknowledged_at   DateTime? @db.Timestamptz(6)
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+  users             users?    @relation(fields: [acknowledged_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  camps             camps     @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts         contracts @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model contracts {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camp_id             String            @db.Uuid
+  room_id             String            @db.Uuid
+  company_id          String?           @db.Uuid
+  contract_type       String            @default("monthly") @db.VarChar(30)
+  monthly_rent        Decimal           @default(0) @db.Decimal(10, 2)
+  start_date          DateTime?         @db.Date
+  end_date            DateTime?         @db.Date
+  auto_renew          Boolean?          @default(false)
+  renewal_notice_days Int?              @default(60)
+  status              String?           @default("active") @db.VarChar(30)
+  ejari_number        String?           @db.VarChar(100)
+  notes               String?
+  created_by          String?           @db.Uuid
+  created_at          DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime?         @default(now()) @db.Timestamptz(6)
+  contract_alerts     contract_alerts[]
+  camps               camps             @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  companies           companies?        @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users               users?            @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms               rooms             @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  room_occupancy      room_occupancy[]
+
+  @@index([room_id], map: "idx_contracts_room")
+}
+
+model expense_categories {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id   String     @db.Uuid
+  name        String     @db.VarChar(100)
+  description String?
+  is_active   Boolean?   @default(true)
+  tenants     tenants    @relation(fields: [tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  expenses    expenses[]
+}
+
+model expenses {
+  id                                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camp_id                           String             @db.Uuid
+  category_id                       String             @db.Uuid
+  amount                            Decimal            @db.Decimal(10, 2)
+  description                       String
+  expense_date                      DateTime           @db.Date
+  month                             Int                @db.SmallInt
+  year                              Int                @db.SmallInt
+  payment_method                    String?            @db.VarChar(50)
+  reference_number                  String?            @db.VarChar(255)
+  receipt_url                       String?
+  approved_by                       String?            @db.Uuid
+  created_by                        String?            @db.Uuid
+  created_at                        DateTime?          @default(now()) @db.Timestamptz(6)
+  updated_at                        DateTime?          @default(now()) @db.Timestamptz(6)
+  users_expenses_approved_byTousers users?             @relation("expenses_approved_byTousers", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  camps                             camps              @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  expense_categories                expense_categories @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_expenses_created_byTousers  users?             @relation("expenses_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model feature_flags {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id   String?   @db.Uuid
+  flag_key    String    @db.VarChar(100)
+  flag_name   String?   @db.VarChar(255)
+  description String?
+  is_enabled  Boolean?  @default(false)
+  config      Json?     @default("{}")
+  enabled_at  DateTime? @db.Timestamptz(6)
+  enabled_by  String?   @db.Uuid
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
+  users       users?    @relation(fields: [enabled_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tenants     tenants?  @relation(fields: [tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([tenant_id, flag_key])
+}
+
+model individuals {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id       String            @db.Uuid
+  full_name       String?           @db.VarChar(255)
+  owner_name      String            @db.VarChar(255)
+  mobile_number   String?           @db.VarChar(50)
+  nationality     String?           @db.VarChar(100)
+  religion        String?           @db.VarChar(100)
+  languages       String?           @db.VarChar(255)
+  company_name    String?           @db.VarChar(255)
+  profession      String?           @db.VarChar(100)
+  industry        String?           @db.VarChar(100)
+  id_type         String?           @db.VarChar(50)
+  id_number       String?           @db.VarChar(100)
+  id_copy_on_file Boolean?          @default(false)
+  is_active       Boolean?          @default(true)
+  notes           String?
+  created_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  bed_occupancy   bed_occupancy[]
+  tenants         tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  monthly_records monthly_records[]
+  room_occupancy  room_occupancy[]
+}
+
+model map_layouts {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camp_id          String    @db.Uuid
+  version          Int       @default(1)
+  canvas_width     Decimal?  @default(1400) @db.Decimal(10, 2)
+  canvas_height    Decimal?  @default(900) @db.Decimal(10, 2)
+  background_color String?   @default("#07101f") @db.VarChar(20)
+  scale_factor     Decimal?  @default(1.0) @db.Decimal(6, 4)
+  north_direction  Int?      @default(0)
+  is_active        Boolean?  @default(true)
+  is_configured    Boolean?  @default(false)
+  configured_at    DateTime? @db.Timestamptz(6)
+  configured_by    String?   @db.Uuid
+  notes            String?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  camps            camps     @relation(fields: [camp_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users            users?    @relation(fields: [configured_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([camp_id, version])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model monthly_records {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  room_id        String          @db.Uuid
+  camp_id        String          @db.Uuid
+  occupancy_id   String?         @db.Uuid
+  month          Int             @db.SmallInt
+  year           Int             @db.SmallInt
+  individual_id  String?         @db.Uuid
+  owner_name     String?         @db.VarChar(255)
+  company_id     String?         @db.Uuid
+  company_name   String?         @db.VarChar(255)
+  contract_type  String?         @db.VarChar(30)
+  people_count   Int?            @default(0)
+  rent           Decimal         @default(0) @db.Decimal(10, 2)
+  paid           Decimal         @default(0) @db.Decimal(10, 2)
+  balance        Decimal?        @default(dbgenerated("(rent - paid)")) @db.Decimal(10, 2)
+  off_days       Int?            @default(0)
+  remarks        String?
+  is_locked      Boolean?        @default(false)
+  created_by     String?         @db.Uuid
+  created_at     DateTime?       @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime?       @default(now()) @db.Timestamptz(6)
+  camps          camps           @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  companies      companies?      @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users          users?          @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  individuals    individuals?    @relation(fields: [individual_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  room_occupancy room_occupancy? @relation(fields: [occupancy_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms          rooms           @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments       payments[]
+
+  @@unique([room_id, month, year])
+  @@index([camp_id], map: "idx_monthly_camp")
+  @@index([year, month], map: "idx_monthly_period")
+  @@index([room_id], map: "idx_monthly_room")
+}
+
+model notifications {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id     String    @db.Uuid
+  user_id       String?   @db.Uuid
+  type          String    @db.VarChar(100)
+  title         String    @db.VarChar(255)
+  message       String?
+  resource_type String?   @db.VarChar(100)
+  resource_id   String?   @db.Uuid
+  is_read       Boolean?  @default(false)
+  read_at       DateTime? @db.Timestamptz(6)
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+  tenants       tenants   @relation(fields: [tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users         users?    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id, is_read], map: "idx_notifications_user")
+}
+
+model payments {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  monthly_record_id String          @db.Uuid
+  room_id           String          @db.Uuid
+  camp_id           String          @db.Uuid
+  amount            Decimal         @db.Decimal(10, 2)
+  payment_method    String          @default("cash") @db.VarChar(50)
+  payment_date      DateTime        @db.Date
+  reference_number  String?         @db.VarChar(255)
+  bank_name         String?         @db.VarChar(100)
+  cheque_number     String?         @db.VarChar(100)
+  notes             String?
+  received_by       String?         @db.Uuid
+  created_at        DateTime?       @default(now()) @db.Timestamptz(6)
+  camps             camps           @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  monthly_records   monthly_records @relation(fields: [monthly_record_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users             users?          @relation(fields: [received_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms             rooms           @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([payment_date], map: "idx_payments_date")
+  @@index([room_id], map: "idx_payments_room")
+}
+
+model permissions {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resource         String             @db.VarChar(100)
+  action           String             @db.VarChar(50)
+  description      String?
+  role_permissions role_permissions[]
+
+  @@unique([resource, action])
+}
+
+model qr_codes {
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camp_id         String     @db.Uuid
+  room_id         String?    @db.Uuid
+  building_id     String?    @db.Uuid
+  qr_type         String     @default("complaint") @db.VarChar(30)
+  qr_token        String     @unique @db.VarChar(100)
+  qr_url          String
+  qr_image_url    String?
+  is_active       Boolean?   @default(false)
+  scan_count      Int?       @default(0)
+  last_scanned_at DateTime?  @db.Timestamptz(6)
+  created_at      DateTime?  @default(now()) @db.Timestamptz(6)
+  buildings       buildings? @relation(fields: [building_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  camps           camps      @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms           rooms?     @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model role_permissions {
+  role_id       String      @db.Uuid
+  permission_id String      @db.Uuid
+  permissions   permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([role_id, permission_id])
+}
+
+model roles {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id        String             @db.Uuid
+  name             String             @db.VarChar(100)
+  description      String?
+  is_system        Boolean?           @default(false)
+  created_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  role_permissions role_permissions[]
+  tenants          tenants            @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user_roles       user_roles[]
+
+  @@unique([tenant_id, name])
+}
+
+model room_occupancy {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  room_id            String            @db.Uuid
+  camp_id            String            @db.Uuid
+  individual_id      String?           @db.Uuid
+  company_id         String?           @db.Uuid
+  contract_id        String?           @db.Uuid
+  people_count       Int?              @default(0)
+  monthly_rent       Decimal           @default(0) @db.Decimal(10, 2)
+  check_in_date      DateTime?         @db.Date
+  check_out_date     DateTime?         @db.Date
+  reason_for_leaving String?
+  off_days           Int?              @default(0)
+  status             String?           @default("active") @db.VarChar(30)
+  is_current         Boolean?          @default(true)
+  created_by         String?           @db.Uuid
+  created_at         DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime?         @default(now()) @db.Timestamptz(6)
+  monthly_records    monthly_records[]
+  camps              camps             @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  companies          companies?        @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contracts          contracts?        @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users              users?            @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  individuals        individuals?      @relation(fields: [individual_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms              rooms             @relation(fields: [room_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model rooms {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  block_id        String            @db.Uuid
+  building_id     String            @db.Uuid
+  camp_id         String            @db.Uuid
+  room_number     String            @db.VarChar(20)
+  sr_number       Int?
+  old_room_number String?           @db.VarChar(20)
+  room_type       String            @default("standard") @db.VarChar(30)
+  max_capacity    Int               @default(6)
+  bed_count       Int?
+  standard_rent   Decimal?          @default(0) @db.Decimal(10, 2)
+  status          String            @default("occupied") @db.VarChar(30)
+  fp_x            Decimal?          @db.Decimal(10, 2)
+  fp_y            Decimal?          @db.Decimal(10, 2)
+  fp_width        Decimal?          @default(76) @db.Decimal(10, 2)
+  fp_height       Decimal?          @default(90) @db.Decimal(10, 2)
+  fp_wing         String?           @db.VarChar(20)
+  fp_row          Int?
+  fp_col          Int?
+  notes           String?
+  is_active       Boolean?          @default(true)
+  created_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  bed_occupancy   bed_occupancy[]
+  bed_spaces      bed_spaces[]
+  complaints      complaints[]
+  contracts       contracts[]
+  monthly_records monthly_records[]
+  payments        payments[]
+  qr_codes        qr_codes[]
+  room_occupancy  room_occupancy[]
+  blocks          blocks            @relation(fields: [block_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  buildings       buildings         @relation(fields: [building_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  camps           camps             @relation(fields: [camp_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sensor_devices  sensor_devices[]
+  sensor_readings sensor_readings[]
+
+  @@unique([camp_id, room_number])
+  @@index([block_id], map: "idx_rooms_block")
+  @@index([camp_id], map: "idx_rooms_camp")
+  @@index([status], map: "idx_rooms_status")
+  @@index([room_type], map: "idx_rooms_type")
+}
+
+model sensor_devices {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camp_id            String            @db.Uuid
+  building_id        String?           @db.Uuid
+  room_id            String?           @db.Uuid
+  sensor_type_id     String            @db.Uuid
+  device_id          String            @unique @db.VarChar(100)
+  device_name        String?           @db.VarChar(255)
+  location_desc      String?
+  manufacturer       String?           @db.VarChar(100)
+  model              String?           @db.VarChar(100)
+  installation_date  DateTime?         @db.Date
+  last_reading_at    DateTime?         @db.Timestamptz(6)
+  last_reading_value Decimal?          @db.Decimal(15, 4)
+  is_active          Boolean?          @default(false)
+  status             String?           @default("pending") @db.VarChar(30)
+  config             Json?             @default("{}")
+  created_at         DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime?         @default(now()) @db.Timestamptz(6)
+  buildings          buildings?        @relation(fields: [building_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  camps              camps             @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms              rooms?            @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sensor_types       sensor_types      @relation(fields: [sensor_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sensor_readings    sensor_readings[]
+}
+
+model sensor_ingestion_log {
+  id            BigInt    @id @default(autoincrement())
+  device_hw_id  String?   @db.VarChar(100)
+  payload       Json
+  ip_address    String?   @db.Inet
+  received_at   DateTime? @default(now()) @db.Timestamptz(6)
+  processed     Boolean?  @default(false)
+  error_message String?
+}
+
+/// This table is a partition table and requires additional setup for migrations. Visit https://pris.ly/d/partition-tables for more info.
+model sensor_readings {
+  id             BigInt         @default(autoincrement())
+  device_id      String         @db.Uuid
+  camp_id        String         @db.Uuid
+  building_id    String?        @db.Uuid
+  room_id        String?        @db.Uuid
+  sensor_type_id String         @db.Uuid
+  reading_value  Decimal        @db.Decimal(15, 4)
+  reading_unit   String?        @db.VarChar(50)
+  reading_ts     DateTime       @default(now()) @db.Timestamptz(6)
+  is_cumulative  Boolean?       @default(false)
+  delta_value    Decimal?       @db.Decimal(15, 4)
+  is_anomaly     Boolean?       @default(false)
+  quality_score  Decimal?       @default(1.0) @db.Decimal(3, 2)
+  raw_payload    Json?
+  created_at     DateTime?      @default(now()) @db.Timestamptz(6)
+  buildings      buildings?     @relation(fields: [building_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  camps          camps          @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sensor_devices sensor_devices @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rooms          rooms?         @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sensor_types   sensor_types   @relation(fields: [sensor_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([id, reading_ts])
+  @@index([camp_id, reading_ts], map: "idx_sensor_readings_camp")
+  @@index([device_id, reading_ts], map: "idx_sensor_readings_device")
+}
+
+model sensor_types {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String            @unique @db.VarChar(100)
+  unit            String?           @db.VarChar(50)
+  description     String?
+  sensor_devices  sensor_devices[]
+  sensor_readings sensor_readings[]
+}
+
+model tenants {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                 String                 @db.VarChar(255)
+  slug                 String                 @unique @db.VarChar(100)
+  plan                 String?                @default("internal") @db.VarChar(50)
+  is_active            Boolean?               @default(true)
+  settings             Json?                  @default("{}")
+  created_at           DateTime?              @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime?              @default(now()) @db.Timestamptz(6)
+  audit_logs           audit_logs[]
+  camps                camps[]
+  companies            companies[]
+  complaint_categories complaint_categories[]
+  expense_categories   expense_categories[]
+  feature_flags        feature_flags[]
+  individuals          individuals[]
+  notifications        notifications[]
+  roles                roles[]
+  users                users[]
+}
+
+model user_roles {
+  user_id                             String    @db.Uuid
+  role_id                             String    @db.Uuid
+  assigned_at                         DateTime? @default(now()) @db.Timestamptz(6)
+  assigned_by                         String?   @db.Uuid
+  users_user_roles_assigned_byTousers users?    @relation("user_roles_assigned_byTousers", fields: [assigned_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  roles                               roles     @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_user_roles_user_idTousers     users     @relation("user_roles_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, role_id])
+}
+
+model users {
+  id                                            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id                                     String              @db.Uuid
+  email                                         String              @db.VarChar(255)
+  password_hash                                 String              @db.VarChar(255)
+  full_name                                     String              @db.VarChar(255)
+  phone                                         String?             @db.VarChar(50)
+  avatar_url                                    String?
+  is_active                                     Boolean?            @default(true)
+  last_login_at                                 DateTime?           @db.Timestamptz(6)
+  created_at                                    DateTime?           @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime?           @default(now()) @db.Timestamptz(6)
+  audit_logs                                    audit_logs[]
+  bed_occupancy                                 bed_occupancy[]
+  complaint_updates                             complaint_updates[]
+  complaints_complaints_assigned_toTousers      complaints[]        @relation("complaints_assigned_toTousers")
+  complaints_complaints_reported_by_userTousers complaints[]        @relation("complaints_reported_by_userTousers")
+  complaints_complaints_resolved_byTousers      complaints[]        @relation("complaints_resolved_byTousers")
+  contract_alerts                               contract_alerts[]
+  contracts                                     contracts[]
+  expenses_expenses_approved_byTousers          expenses[]          @relation("expenses_approved_byTousers")
+  expenses_expenses_created_byTousers           expenses[]          @relation("expenses_created_byTousers")
+  feature_flags                                 feature_flags[]
+  map_layouts                                   map_layouts[]
+  monthly_records                               monthly_records[]
+  notifications                                 notifications[]
+  payments                                      payments[]
+  room_occupancy                                room_occupancy[]
+  user_roles_user_roles_assigned_byTousers      user_roles[]        @relation("user_roles_assigned_byTousers")
+  user_roles_user_roles_user_idTousers          user_roles[]        @relation("user_roles_user_idTousers")
+  tenants                                       tenants             @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tenant_id, email])
+}
