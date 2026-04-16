@@ -62,7 +62,9 @@
       "Bash(__NEW_LINE_5063172e5e39da2f__ echo \"=== Testing camps list ===\")",
       "Bash(__NEW_LINE_681ff226ce81e427__ echo \"\")",
       "Bash(__NEW_LINE_7a33856c62801cf7__ echo \"=== Testing camps list ===\")",
-      "Bash(__NEW_LINE_7a33856c62801cf7__ echo \"\")"
+      "Bash(__NEW_LINE_7a33856c62801cf7__ echo \"\")",
+      "Bash(__NEW_LINE_123cca3ba2547cec__ curl -s 'http://localhost:3001/api/v1/camps/4c935f2b-23b9-b94c-99ca-cb2ee0620045' -H \"Authorization: Bearer $TOKEN\")",
+      "Bash(python3 -m json.tool:*)"
     ]
   }
 }
