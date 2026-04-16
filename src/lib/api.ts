@@ -1,213 +1,173 @@
-import axios from 'axios'
-import type {
-  Camp, Building, Room, MonthlyRecord, Payment,
-  Complaint, DashboardData, PaginatedResponse,
-  PaymentFormData, ComplaintFormData, RoomFilters, RecordFilters
-} from './types'
+import { useSession } from './auth'
+import { toQS } from './utils'
 
-const api = axios.create({
-  baseURL: '/api',
-  headers: {
-    'Content-Type': 'application/json',
-    'x-tenant-id': 'bartawi',  // hardcoded until auth is built
-  },
-  timeout: 10000,
-})
+const BASE = process.env.NEXT_PUBLIC_API_BASE
+  ? `${process.env.NEXT_PUBLIC_API_BASE}/api`
+  : '/api'
 
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    console.error('API Error:', err.response?.data || err.message)
-    return Promise.reject(err)
+export interface ApiError extends Error {
+  code?: string
+  status?: number
+  details?: any
+}
+
+function makeError(status: number, body: any, fallback = 'Request failed'): ApiError {
+  const err = new Error(body?.error?.message || body?.message || fallback) as ApiError
+  err.code = body?.error?.code
+  err.status = status
+  err.details = body?.error?.details
+  return err
+}
+
+async function request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = useSession.getState().token
+  const headers = new Headers(init.headers || {})
+  if (!headers.has('Content-Type') && init.body && typeof init.body === 'string') {
+    headers.set('Content-Type', 'application/json')
   }
-)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
 
-// ── CAMPS ──────────────────────────────────────────────────────
-export const campsApi = {
-  list: async (): Promise<Camp[]> => {
-    const { data } = await api.get('/camps')
-    return data.data || data
-  },
+  const res = await fetch(`${BASE}/v1${path}`, { ...init, headers })
 
-  dashboard: async (
-    campId: string,
-    month: number,
-    year: number
-  ): Promise<DashboardData> => {
-    const { data } = await api.get(`/camps/${campId}/dashboard`, {
-      params: { month, year }
-    })
-    return data
-  },
+  if (res.status === 401) {
+    useSession.getState().clear()
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search)
+      window.location.href = `/login?next=${next}&expired=1`
+    }
+    throw makeError(401, null, 'Session expired')
+  }
 
-  buildings: async (campId: string): Promise<Building[]> => {
-    const { data } = await api.get(`/camps/${campId}/buildings`)
-    return data.data || data
-  },
+  let body: any = null
+  const ct = res.headers.get('content-type') || ''
+  if (ct.includes('application/json')) {
+    body = await res.json().catch(() => null)
+  }
 
-  rooms: async (
-    campId: string,
-    filters?: RoomFilters
-  ): Promise<PaginatedResponse<Room>> => {
-    const { data } = await api.get(`/camps/${campId}/rooms`, {
-      params: {
-        ...(filters?.blockCode    && { block_code: filters.blockCode }),
-        ...(filters?.status       && { status: filters.status }),
-        ...(filters?.has_balance  && { has_balance: 'true' }),
-        ...(filters?.room_type    && { room_type: filters.room_type }),
-        ...(filters?.search       && { search: filters.search }),
-        limit: 100,
-      }
-    })
-    return data
-  },
+  if (!res.ok) throw makeError(res.status, body, `HTTP ${res.status}`)
+  return (body as T) ?? (undefined as any)
 }
 
-// ── ROOMS ──────────────────────────────────────────────────────
-export const roomsApi = {
-  get: async (roomId: string): Promise<Room> => {
-    const { data } = await api.get(`/rooms/${roomId}`)
-    return data
-  },
+export const api = {
+  get:    <T = any>(p: string, init?: RequestInit) => request<T>(p, { ...init, method: 'GET' }),
+  post:   <T = any>(p: string, data?: any, init?: RequestInit) => request<T>(p, { ...init, method: 'POST',  body: data ? JSON.stringify(data) : undefined }),
+  put:    <T = any>(p: string, data?: any, init?: RequestInit) => request<T>(p, { ...init, method: 'PUT',   body: data ? JSON.stringify(data) : undefined }),
+  patch:  <T = any>(p: string, data?: any, init?: RequestInit) => request<T>(p, { ...init, method: 'PATCH', body: data ? JSON.stringify(data) : undefined }),
+  delete: <T = any>(p: string, init?: RequestInit) => request<T>(p, { ...init, method: 'DELETE' }),
 }
 
-// ── MONTHLY RECORDS ────────────────────────────────────────────
-export const recordsApi = {
-  list: async (filters: RecordFilters): Promise<PaginatedResponse<MonthlyRecord>> => {
-    const { data } = await api.get('/monthly-records', {
-      params: {
-        ...(filters.campId      && { camp_id: filters.campId }),
-        ...(filters.month       && { month: filters.month }),
-        ...(filters.year        && { year: filters.year }),
-        ...(filters.has_balance && { has_balance: 'true' }),
-        page:  filters.page  || 1,
-        limit: filters.limit || 50,
-      }
-    })
-    return data
-  },
+export const endpoints = {
+  // --- auth ---
+  login:  (email: string, password: string) => api.post<{ token: string; user: { id: string; email: string; fullName: string; permissions: string[] } }>('/auth/login', { email, password }),
+  me:     () => api.get<{ id: string; email: string; fullName: string; permissions: string[] }>('/auth/me'),
+
+  // --- camps ---
+  camps:  () => api.get<{ data: any[] }>('/camps'),
+  camp:   (id: string) => api.get<any>(`/camps/${id}`),
+
+  // --- rooms ---
+  rooms: (params?: Record<string, any>) => api.get<{ data: any[]; pagination: any }>(`/rooms${toQS(params)}`),
+  room:  (id: string) => api.get<any>(`/rooms/${id}`),
+  roomHistory: (id: string) => api.get<{ data: any[] }>(`/rooms/${id}/history`),
+  roomBalance: (id: string) => api.get<{ outstanding: number; by_month: any[] }>(`/rooms/${id}/balance`),
+
+  // --- occupancy ---
+  checkin: (data: any) => api.post('/occupancy/checkin', data),
+  notice:  (data: any) => api.post('/occupancy/notice', data),
+  completeCheckout: (data: any) => api.post('/occupancy/complete-checkout', data),
+  searchEntities: (query: string, type: 'individual' | 'company' | 'both' = 'both') =>
+    api.get<{ data: any[] }>(`/occupancy/search-entities?query=${encodeURIComponent(query)}&type=${type}`),
+
+  // --- contracts ---
+  contracts: (params?: Record<string, any>) => api.get<{ data: any[]; pagination: any }>(`/contracts${toQS(params)}`),
+  contract:  (id: string) => api.get<any>(`/contracts/${id}`),
+  renewContract: (id: string, data: any) => api.put(`/contracts/${id}/renew`, data),
+  updateContractStatus: (id: string, data: any) => api.patch(`/contracts/${id}/status`, data),
+  ackAlert: (id: string, note?: string) => api.patch(`/contracts/${id}/alerts/ack`, { note }),
+  contractNotes: (id: string) => api.get<{ data: any[] }>(`/contracts/${id}/notes`),
+  addContractNote: (id: string, data: any) => api.post(`/contracts/${id}/notes`, data),
+  contractRenewals: (id: string) => api.get<{ data: any[] }>(`/contracts/${id}/renewals`),
+
+  // --- notifications ---
+  notifications: (unread = false) =>
+    api.get<{ data: any[]; unread_count: number }>(`/notifications${unread ? '?unread=true' : ''}`),
+  markRead: (id: string) => api.patch(`/notifications/${id}/read`),
+  markAllRead: () => api.post('/notifications/read-all'),
+  snooze: (id: string, days = 7) => api.post(`/notifications/${id}/snooze`, { days }),
+
+  // --- reports — accept either single campId (legacy shape) or camp_ids[] ---
+  reportRentRoll:    (params: { camp_ids?: string[]; campId?: string; month: number; year: number }) =>
+    api.get<any>(`/reports/rent-roll${toQS(params)}`),
+  reportOutstanding: (params: { camp_ids?: string[]; campId?: string; month: number; year: number }) =>
+    api.get<any>(`/reports/outstanding${toQS(params)}`),
+  reportSummary:     (campId: string, m: number, y: number) =>
+    api.get<any>(`/reports/summary?campId=${campId}&month=${m}&year=${y}`),
+  reportOccupancy:   (campId: string) =>
+    api.get<any>(`/reports/occupancy?campId=${campId}`),
+  reportSummaryMulti:  (params: { camp_ids?: string[]; month: number; year: number }) =>
+    api.get<{ camps: any[] }>(`/reports/summary${toQS(params)}`),
+  reportOccupancyMulti: (params: { camp_ids?: string[] }) =>
+    api.get<{ camps: any[] }>(`/reports/occupancy${toQS(params)}`),
+
+  // --- property types (admin) ---
+  propertyTypes: () => api.get<{ data: any[] }>('/property-types'),
+  propertyType:  (id: string) => api.get<any>(`/property-types/${id}`),
+  createPropertyType: (data: any) => api.post('/property-types', data),
+  updatePropertyType: (id: string, data: any) => api.patch(`/property-types/${id}`, data),
+  deletePropertyType: (id: string) => api.delete(`/property-types/${id}`),
+
+  // --- deposits ---
+  deposits: (params?: Record<string, any>) => api.get<{ data: any[]; pagination: any }>(`/deposits${toQS(params)}`),
+  deposit:  (id: string) => api.get<any>(`/deposits/${id}`),
+  collectDeposit: (data: any) => api.post('/deposits', data),
+  refundDeposit:  (id: string, data: any) => api.post(`/deposits/${id}/refund`, data),
+  depositReceiptData: (id: string) => api.get(`/deposits/${id}/receipt-data`),
+
+  // --- payment schedules ---
+  schedules: (params?: Record<string, any>) => api.get<{ data: any[] }>(`/payment-schedules${toQS(params)}`),
+  generateSchedule: (data: any) => api.post('/payment-schedules/generate', data),
+  updateScheduleRow: (id: string, data: any) => api.patch(`/payment-schedules/${id}`, data),
+
+  // --- maintenance ---
+  maintenance: (params?: Record<string, any>) => api.get<{ data: any[] }>(`/maintenance${toQS(params)}`),
+  maintRequest: (id: string) => api.get<any>(`/maintenance/${id}`),
+  createMaint: (data: any) => api.post('/maintenance', data),
+  updateMaint: (id: string, data: any) => api.patch(`/maintenance/${id}`, data),
+
+  // --- complaints ---
+  complaints: (params?: Record<string, any>) => api.get<{ data: any[] }>(`/complaints${toQS(params)}`),
+  createComplaint: (data: any) => api.post('/complaints', data),
+  updateComplaint: (id: string, data: any) => api.patch(`/complaints/${id}`, data),
+
+  // --- payments ---
+  payments: (params?: Record<string, any>) => api.get<{ data: any[] }>(`/payments${toQS(params)}`),
+  logPayment: (data: any) => api.post('/payments', data),
+  paymentReceiptData: (id: string) => api.get(`/payments/${id}/receipt-data`),
+
+  // --- teams (admin) ---
+  teams: () => api.get<{ data: any[] }>('/teams'),
+  createTeam: (data: any) => api.post('/teams', data),
+  addTeamMember: (id: string, data: any) => api.post(`/teams/${id}/members`, data),
+  removeTeamMember: (teamId: string, userId: string) => api.delete(`/teams/${teamId}/members/${userId}`),
+
+  // --- users & roles (admin) ---
+  users: () => api.get<{ data: any[] }>('/users'),
+  inviteUser: (data: { email: string; full_name: string; role_id: string }) => api.post('/users/invite', data),
+  updateUser: (id: string, data: any) => api.patch(`/users/${id}`, data),
+  roles: () => api.get<{ data: any[] }>('/roles'),
+  permissions: () => api.get<{ data: any[] }>('/permissions'),
+
+  // --- tenant & settings ---
+  tenant: () => api.get<any>('/tenant'),
+  updateTenant: (data: any) => api.patch('/tenant', data),
+  featureFlags: () => api.get<{ data: any[] }>('/feature-flags'),
+  setFeatureFlag: (key: string, enabled: boolean) => api.patch(`/feature-flags/${key}`, { enabled }),
+
+  // --- AI endpoints (from backend fix 9.x + gap-fix 2) ---
+  aiClassifyComplaint: (text: string) =>
+    api.post<{ category: string; priority: string; title: string }>('/ai/classify-complaint', { text }),
+  aiNarrateAnomaly: (data: any) =>
+    api.post<{ narration: string }>('/ai/narrate-anomaly', data),
+  aiMatchEntity: (name: string, candidates: any[]) =>
+    api.post<{ match_index: number | null; confidence: number; reason: string }>('/ai/match-entity', { name, candidates }),
 }
-
-// ── PAYMENTS ───────────────────────────────────────────────────
-export const paymentsApi = {
-  create: async (payload: PaymentFormData): Promise<Payment> => {
-    const { data } = await api.post('/payments', payload)
-    return data
-  },
-
-  list: async (filters?: {
-    campId?: string
-    roomId?: string
-    page?: number
-    limit?: number
-  }): Promise<PaginatedResponse<Payment>> => {
-    const { data } = await api.get('/payments', { params: filters })
-    return data
-  },
-}
-
-// ── COMPLAINTS ─────────────────────────────────────────────────
-export const complaintsApi = {
-  list: async (filters?: {
-    campId?: string
-    status?: string
-    priority?: string
-    page?: number
-    limit?: number
-  }): Promise<PaginatedResponse<Complaint>> => {
-    const { data } = await api.get('/complaints', { params: filters })
-    return data
-  },
-
-  create: async (payload: ComplaintFormData): Promise<Complaint> => {
-    const { data } = await api.post('/complaints', payload)
-    return data
-  },
-
-  updateStatus: async (id: string, status: string, note?: string): Promise<Complaint> => {
-    const { data } = await api.patch(`/complaints/${id}/status`, { status, note })
-    return data
-  },
-}
-
-// ── OCCUPANCY ─────────────────────────────────────────────────────────────
-export const occupancyApi = {
-  checkout: async (data: any) => {
-    const { data: res } = await api.post('/occupancy/checkout', data)
-    return res
-  },
-  checkin: async (data: any) => {
-    const { data: res } = await api.post('/occupancy/checkin', data)
-    return res
-  },
-}
-
-// ── CONTRACTS ─────────────────────────────────────────────────────────────
-export const contractsApi = {
-  list: async (filters?: { campId?: string; status?: string }) => {
-    const { data } = await api.get('/contracts', {
-      params: {
-        ...(filters?.campId  ? { campId:  filters.campId  } : {}),
-        ...(filters?.status  ? { status:  filters.status  } : {}),
-      }
-    })
-    return data
-  },
-
-  renew: async (id: string, payload: { new_end_date: string; new_monthly_rent?: number }) => {
-    const { data } = await api.post(`/contracts/${id}/renew`, payload)
-    return data
-  },
-
-  updateStatus: async (id: string, status: string) => {
-    const { data } = await api.patch(`/contracts/${id}/status`, { status })
-    return data
-  },
-
-  addNote: async (id: string, note: string) => {
-    const { data } = await api.post(`/contracts/${id}/notes`, { note })
-    return data
-  },
-}
-
-// ── REPORTS ───────────────────────────────────────────────────────────────
-export const reportsApi = {
-  rentRoll: async (campId: string, month: number, year: number) => {
-    const { data } = await api.get('/reports/rent-roll', { params: { campId, month, year } })
-    return data
-  },
-  occupancy: async (campId: string) => {
-    const { data } = await api.get('/reports/occupancy', { params: { campId } })
-    return data
-  },
-  outstanding: async (campId: string, month: number, year: number) => {
-    const { data } = await api.get('/reports/outstanding', { params: { campId, month, year } })
-    return data
-  },
-  summary: async (campId: string, month: number, year: number) => {
-    const { data } = await api.get('/reports/summary', { params: { campId, month, year } })
-    return data
-  },
-}
-
-// ── NOTIFICATIONS ─────────────────────────────────────────────────────────
-export const notificationsApi = {
-  list: async () => {
-    const { data } = await api.get('/notifications')
-    return data
-  },
-  markRead: async (id: string) => {
-    const { data } = await api.post(`/notifications/${id}/mark-read`)
-    return data
-  },
-  markAllRead: async () => {
-    const { data } = await api.post('/notifications/mark-all-read')
-    return data
-  },
-  snooze: async (id: string) => {
-    const { data } = await api.post(`/notifications/${id}/snooze`)
-    return data
-  },
-}
-
-export default api

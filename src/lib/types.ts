@@ -1,317 +1,150 @@
-// All TypeScript types matching the database schema exactly
-
-export type CampCode = 'C1' | 'C2'
+export interface User {
+  id: string
+  email: string
+  fullName: string
+  permissions: string[]
+}
 
 export interface Camp {
   id: string
+  code: 'C1' | 'C2'
   name: string
-  code: CampCode
-  city: string
   total_rooms: number
   leasable_rooms: number
   map_configured: boolean
 }
 
-export interface Building {
-  id: string
-  camp_id: string
-  code: string
-  name: string
-  floor_count: number
-  ground_block_code: string
-  upper_block_code: string
-  map_x: number | null  // NULL until layout paper processed
-  map_y: number | null
-  blocks?: Block[]
-}
-
-export interface Block {
-  id: string
-  building_id: string
-  code: string
-  floor_label: string
-  floor_number: number
-  room_count: number
-}
-
-export type RoomType = 'standard' | 'bartawi' | 'commercial' | 'service'
-export type RoomStatus = 'occupied' | 'vacant' | 'maintenance' | 'bartawi_use'
-
 export interface Room {
   id: string
   camp_id: string
   block_id: string
-  building_id: string
+  property_type_id: string | null
   room_number: string
+  old_room_number: string | null
   sr_number: number
-  room_type: RoomType
   max_capacity: number
-  standard_rent: number
-  status: RoomStatus
-  map_x: number | null
-  map_y: number | null
-  block?: Block
-  building?: Building
-  current_occupancy?: Occupancy
-  monthly_records?: MonthlyRecord[]
+  standard_rent: string  // Decimal string
+  room_size: 'big' | 'small' | 'service'
+  status: 'occupied' | 'vacant' | 'vacating' | 'bartawi_use' | 'maintenance' | 'reserved'
+  room_type: string
+  is_active: boolean
+  fp_x: number | null
+  fp_y: number | null
+  fp_width: number | null
+  fp_height: number | null
+  current_occupancy?: RoomOccupancy | null
+  property_type?: PropertyType | null
+}
+
+export interface PropertyType {
+  id: string
+  name: string
+  slug: string
+  description?: string
+  icon_name?: string
+  display_color: 'amber' | 'teal' | 'rust' | 'neutral'
+  is_residential: boolean
+  is_leasable: boolean
+}
+
+export interface RoomOccupancy {
+  id: string
+  room_id: string
+  individual_id: string | null
+  company_id: string | null
+  contract_id: string | null
+  is_current: boolean
+  check_in_date: string
+  check_out_date: string | null
+  notice_given_at: string | null
+  intended_vacate_date: string | null
+  status: 'active' | 'notice_given' | 'checked_out' | 'transferred' | 'evicted'
+  individual?: Individual | null
+  company?: Company | null
+  contract?: Contract | null
+}
+
+export interface Individual {
+  id: string
+  owner_name: string | null
+  full_name: string | null
+  mobile_number: string | null
+  nationality: string | null
+  emergency_contact_name: string | null
+  emergency_contact_phone: string | null
 }
 
 export interface Company {
   id: string
   name: string
-  contact_person?: string
-  contact_phone?: string
-  industry?: string
+  name_normalized: string
+  contact_person: string | null
+  entity_group_name: string | null
+  related_entity_id: string | null
 }
-
-export interface Individual {
-  id: string
-  owner_name: string
-  full_name?: string
-  nationality?: string
-  mobile_number?: string
-}
-
-export type ContractType = 'monthly' | 'yearly' | 'ejari' | 'bgc'
-export type ContractStatus = 'active' | 'expired' | 'terminated' | 'legal_dispute' | 'pending_renewal'
 
 export interface Contract {
   id: string
-  contract_type: ContractType
-  monthly_rent: number
-  start_date: string | null
+  camp_id: string
+  room_id: string
+  company_id: string | null
+  contract_type: 'monthly' | 'yearly' | 'ejari' | 'bgc'
+  monthly_rent: string
+  start_date: string
   end_date: string | null
-  status: ContractStatus
-}
-
-export interface Occupancy {
-  id: string
-  room_id: string
-  people_count: number
-  monthly_rent: number
-  check_in_date: string | null
-  status: string
-  individual?: Individual
-  company?: Company
-  contract?: Contract
-}
-
-export interface MonthlyRecord {
-  id: string
-  room_id: string
-  camp_id: string
-  month: number
-  year: number
-  owner_name?: string
-  company_name?: string
-  contract_type?: string
-  people_count: number
-  rent: number
-  paid: number
-  balance: number   // generated column — NEVER write this
-  remarks?: string
-  room?: Room
-  individual?: Individual
-  company?: Company
-}
-
-export interface Payment {
-  id: string
-  monthly_record_id: string
-  room_id: string
-  amount: number
-  payment_method: 'cash' | 'cheque' | 'bank_transfer' | 'card'
-  payment_date: string
-  reference_number?: string
-  bank_name?: string
-  cheque_number?: string
-  notes?: string
-}
-
-export type ComplaintStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
-export type ComplaintPriority = 'low' | 'medium' | 'high' | 'urgent'
-
-export interface Complaint {
-  id: string
-  complaint_ref: string
-  camp_id: string
-  room_id?: string
-  title: string
-  description?: string
-  status: ComplaintStatus
-  priority: ComplaintPriority
-  reported_by_name?: string
-  reported_by_room?: string
-  reported_via: 'staff' | 'qr_code' | 'mobile_app'
-  created_at: string
-  updated_at: string
-  room?: Room
-}
-
-export interface DashboardData {
-  camp: Camp
-  period: { month: number; year: number }
-  occupancy: {
-    total_rooms: number
-    occupied: number
-    vacant: number
-    bartawi_use: number
-    occupancy_rate: number
-    leasable_rooms: number
-  }
-  financials: {
-    total_rent: number
-    total_paid: number
-    total_balance: number
-    collection_rate: number
-  }
-  outstanding_records: MonthlyRecord[]
-}
-
-// API response wrappers
-export interface PaginatedResponse<T> {
-  data: T[]
-  pagination: {
-    page: number
-    limit: number
-    total: number
-    pages: number
-  }
-}
-
-export interface ApiError {
-  error: string
-  message: string
-}
-
-// Form types
-export interface PaymentFormData {
-  monthly_record_id: string
-  room_id: string
-  camp_id: string
-  amount: number
-  payment_method: 'cash' | 'cheque' | 'bank_transfer' | 'card'
-  payment_date: string
-  reference_number?: string
-  bank_name?: string
-  cheque_number?: string
-  notes?: string
-}
-
-export interface ComplaintFormData {
-  camp_id: string
-  room_id?: string
-  title: string
-  description?: string
-  priority: ComplaintPriority
-  reported_by_name?: string
-  reported_by_room?: string
-  category_id?: string
-}
-
-// Filter types
-export interface RoomFilters {
-  blockCode?: string
-  status?: RoomStatus
-  has_balance?: boolean
-  room_type?: RoomType
-  search?: string
-}
-
-export interface RecordFilters {
-  campId?: string
-  month?: number
-  year?: number
-  has_balance?: boolean
-  page?: number
-  limit?: number
-}
-
-// ── FEATURES 4-7 TYPES ────────────────────────────────────────────────────
-
-export interface CheckoutFormData {
-  room_id: string
-  camp_id: string
-  occupancy_id?: string
-  checkout_date: string
-  reason_for_leaving: string
-  final_balance_settled: boolean
-  notes?: string
-}
-
-export interface CheckinFormData {
-  room_id: string
-  camp_id: string
-  owner_name?: string
-  individual_id?: string
-  company_id?: string
-  company_name?: string
-  contract_type?: string
-  contract_start_date?: string
-  contract_end_date?: string
-  ejari_number?: string
-  monthly_rent: number
-  people_count: number
-  checkin_date: string
-  off_days?: number
-}
-
-export type ContractUrgency = 'expired' | 'critical' | 'warning' | 'notice' | 'healthy'
-
-export interface ContractWithDetails {
-  id: string
-  camp_id: string
-  room_id: string
-  company_id?: string
-  contract_type: string
-  monthly_rent: number
-  start_date: string | null
-  end_date: string | null
-  status: string
-  ejari_number?: string
-  days_until_expiry: number | null
-  urgency: ContractUrgency
+  ejari_number: string | null
+  status: 'active' | 'terminated' | 'legal_dispute' | 'expired' | 'pending_renewal'
+  urgency?: 'expired' | 'critical' | 'warning' | 'notice' | 'healthy'
+  days_until_expiry?: number | null
   rooms?: { room_number: string }
-  companies?: {
-    id: string
-    name: string
-    contact_person?: string
-    contact_phone?: string
-  }
-  contract_alerts?: any[]
-  notes?: string
+  companies?: { name: string; id: string }
 }
 
-export interface AppNotification {
+export interface Notification {
   id: string
   type: string
   title: string
   message: string
-  resource_type: string
-  resource_id: string
   is_read: boolean
-  read_at?: string
+  resource_type: string | null
+  resource_id: string | null
+  snoozed_until: string | null
   created_at: string
 }
 
-export interface ReportSummary {
-  report_type: string
-  camp: { id: string; name: string; code: string }
-  period: { month: number; year: number }
-  occupancy: {
-    total_rooms: number
-    leasable_rooms: number
-    occupied: number
-    vacant: number
-    bartawi_use: number
-    occupancy_rate: number
-  }
-  financials: {
-    total_rent: number
-    total_paid: number
-    total_balance: number
-    collection_rate: number
-  }
-  outstanding_records?: any[]
-  generated_at: string
+export interface Deposit {
+  id: string
+  room_id: string
+  amount: string
+  currency: string
+  payment_method: string
+  status: 'pending' | 'held' | 'partially_refunded' | 'refunded' | 'forfeited'
+  receipt_number: string
+  collected_at: string
+  refunded_amount?: string
+  forfeited_amount?: string
+}
+
+export interface MaintenanceRequest {
+  id: string
+  request_number: string
+  title: string
+  description: string
+  priority: 'low' | 'medium' | 'high' | 'urgent'
+  status: 'open' | 'assigned' | 'in_progress' | 'blocked' | 'resolved' | 'closed' | 'cancelled'
+  room_id: string | null
+  assigned_team_id: string | null
+  assigned_user_id: string | null
+  created_at: string
+  resolved_at: string | null
+  room?: { room_number: string }
+  assigned_team?: { name: string }
+  assigned_user?: { full_name: string }
+  category?: { name: string }
+}
+
+export interface Pagination {
+  limit: number
+  has_more: boolean
+  next_cursor: string | null
 }
