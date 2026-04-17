@@ -38,7 +38,7 @@ export function LoginForm() {
         fullName: res.user.fullName,
         permissions: res.user.permissions
       })
-      const next = search.get('next') || '/dashboard'
+      const next = search.get('next') || '/'
       router.replace(next)
     } catch (e: any) {
       setErr(e.message || 'Login failed')

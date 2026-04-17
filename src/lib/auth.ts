@@ -8,9 +8,11 @@ interface SessionState {
   token: string | null
   user: User | null
   loading: boolean
+  _hasHydrated: boolean
   setSession: (token: string, user: User) => void
   clear: () => void
   setLoading: (v: boolean) => void
+  setHasHydrated: (v: boolean) => void
 }
 
 export const useSession = create<SessionState>()(
@@ -19,13 +21,18 @@ export const useSession = create<SessionState>()(
       token: null,
       user: null,
       loading: false,
+      _hasHydrated: false,
       setSession: (token, user) => set({ token, user, loading: false }),
       clear: () => set({ token: null, user: null, loading: false }),
       setLoading: (loading) => set({ loading }),
+      setHasHydrated: (v) => set({ _hasHydrated: v }),
     }),
     {
       name: 'bartawi-session',
       partialize: (s) => ({ token: s.token, user: s.user }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true)
+      },
     }
   )
 )

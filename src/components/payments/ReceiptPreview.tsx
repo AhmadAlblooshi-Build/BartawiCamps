@@ -6,12 +6,18 @@ import { motion } from 'motion/react'
 import { X, Download, Printer } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { formatAED, formatDate } from '@/lib/utils'
+import { generatePaymentReceipt } from '@/lib/pdf/receipt'
 
 export function ReceiptPreview({ paymentId, onClose }: { paymentId: string; onClose: () => void }) {
   const { data } = useQuery({
     queryKey: ['receipt', paymentId],
     queryFn: () => endpoints.paymentReceiptData(paymentId),
   })
+
+  const downloadPDF = () => {
+    if (!data) return
+    generatePaymentReceipt(data)
+  }
 
   return (
     <Dialog.Root open onOpenChange={o => !o && onClose()}>
@@ -65,6 +71,10 @@ export function ReceiptPreview({ paymentId, onClose }: { paymentId: string; onCl
                   </div>
                 </div>
                 <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">
+                  <button onClick={downloadPDF}
+                    className="h-9 px-3 rounded-full bg-sand-100 text-espresso text-[12px] font-medium hover:bg-sand-200 transition-all flex items-center gap-1.5">
+                    <Icon icon={Download} size={12} /> Download PDF
+                  </button>
                   <button onClick={() => window.print()}
                     className="h-9 px-3 rounded-full bg-sand-100 text-espresso text-[12px] font-medium hover:bg-sand-200 transition-all flex items-center gap-1.5">
                     <Icon icon={Printer} size={12} /> Print

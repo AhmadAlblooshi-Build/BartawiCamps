@@ -13,7 +13,7 @@ import { spring } from '@/lib/motion'
 import { useHasPermission } from '@/lib/auth'
 
 const MAIN = [
-  { href: '/dashboard',   label: 'Dashboard',   icon: House,      perm: null },
+  { href: '/',            label: 'Dashboard',   icon: House,      perm: null },
   { href: '/camps',       label: 'Camps',       icon: Buildings,  perm: 'rooms.read' },
   { href: '/rooms',       label: 'Rooms',       icon: Bed,        perm: 'rooms.read' },
   { href: '/contracts',   label: 'Contracts',   icon: Files,      perm: 'contracts.read' },
