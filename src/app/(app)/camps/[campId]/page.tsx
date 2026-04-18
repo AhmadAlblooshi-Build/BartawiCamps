@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
@@ -31,8 +31,22 @@ export default function CampDetailPage() {
   const { month: cm, year: cy } = getCurrentMonthYear()
   const [month, setMonth] = useState(cm)
   const [year, setYear] = useState(cy)
+  const [initialized, setInitialized] = useState(false)
 
   const { data: camp } = useQuery({ queryKey: ['camp', params.campId], queryFn: () => endpoints.camp(params.campId) })
+  const { data: latestMonth } = useQuery({
+    queryKey: ['camp-latest-month', params.campId],
+    queryFn: () => endpoints.campLatestMonth(params.campId),
+  })
+
+  // Initialize month/year from latest available data
+  useEffect(() => {
+    if (latestMonth && !initialized) {
+      setMonth(latestMonth.month)
+      setYear(latestMonth.year)
+      setInitialized(true)
+    }
+  }, [latestMonth, initialized])
 
   const setActiveTab = (t: Tab) => {
     setTab(t)

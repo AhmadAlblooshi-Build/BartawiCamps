@@ -64,6 +64,7 @@ export const endpoints = {
   // --- camps ---
   camps:  () => api.get<{ data: any[] }>('/camps'),
   camp:   (id: string) => api.get<any>(`/camps/${id}`),
+  campLatestMonth: (id: string) => api.get<{ month: number; year: number }>(`/camps/${id}/latest-month`),
 
   // --- rooms ---
   rooms: (params?: Record<string, any>) => api.get<{ data: any[]; pagination: any }>(`/rooms${toQS(params)}`),
