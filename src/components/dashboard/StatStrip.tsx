@@ -2,9 +2,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { formatAEDShort, formatPct, cn } from '@/lib/utils'
-import { Users, CurrencyDollar, Warning, House } from '@phosphor-icons/react'
+import { Users, CurrencyDollar, Warning, House, TrendUp, TrendDown } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { motion } from 'motion/react'
+import { useCountUp, staggerItem, cardHover } from '@/lib/motion'
 
 interface Props { month: number; year: number }
 
@@ -23,12 +24,17 @@ export function StatStrip({ month, year }: Props) {
   const t = aggregate(summaries)
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
-      <StatCard eyebrow="Occupancy"       value={formatPct(t.occupancy_rate)}     sub={`${t.occupied}/${t.leasable} leasable`}                icon={House}           delay={0}    tone="neutral" />
-      <StatCard eyebrow="Collection rate" value={formatPct(t.collection_rate)}    sub={`${formatAEDShort(t.total_paid)} of ${formatAEDShort(t.total_rent)}`} icon={CurrencyDollar} delay={0.08} tone={t.collection_rate >= 95 ? 'teal' : t.collection_rate >= 85 ? 'ochre' : 'rust'} />
-      <StatCard eyebrow="Outstanding"     value={formatAEDShort(t.total_balance)} sub={t.total_balance > 0 ? 'needs collection' : 'nothing owed'} icon={Warning}         delay={0.16} tone={t.total_balance > 0 ? 'rust' : 'neutral'} />
-      <StatCard eyebrow="Active tenants"  value={String(t.people_count)}          sub="across both camps"                                      icon={Users}           delay={0.24} tone="neutral" />
-    </div>
+    <motion.div
+      className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5"
+      initial="hidden"
+      animate="visible"
+      variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.04, delayChildren: 0.02 } } }}
+    >
+      <StatCard eyebrow="Occupancy"       numericValue={t.occupancy_rate} isPercent value={formatPct(t.occupancy_rate)} sub={`${t.occupied}/${t.leasable} leasable`} icon={House} tone="neutral" trend={null} />
+      <StatCard eyebrow="Collection rate" numericValue={t.collection_rate} isPercent value={formatPct(t.collection_rate)} sub={`${formatAEDShort(t.total_paid)} of ${formatAEDShort(t.total_rent)}`} icon={CurrencyDollar} tone={t.collection_rate >= 95 ? 'teal' : t.collection_rate >= 85 ? 'ochre' : 'rust'} trend={null} />
+      <StatCard eyebrow="Outstanding"     numericValue={t.total_balance} value={formatAEDShort(t.total_balance)} sub={t.total_balance > 0 ? 'needs collection' : 'nothing owed'} icon={Warning} tone={t.total_balance > 0 ? 'rust' : 'neutral'} trend={null} />
+      <StatCard eyebrow="Active tenants"  numericValue={t.people_count} value={String(t.people_count)} sub="across both camps" icon={Users} tone="neutral" trend={null} />
+    </motion.div>
   )
 }
 
@@ -49,18 +55,31 @@ function aggregate(summaries: any[] | undefined) {
   }
 }
 
-function StatCard({ eyebrow, value, sub, icon, delay, tone }: {
-  eyebrow: string; value: string; sub: string; icon: any; delay: number
+function StatCard({ eyebrow, numericValue, isPercent, value, sub, icon, tone, trend }: {
+  eyebrow: string; numericValue?: number; isPercent?: boolean; value: string; sub: string; icon: any
   tone: 'neutral' | 'teal' | 'rust' | 'ochre'
+  trend: { value: number; direction: 'up' | 'down' } | null
 }) {
+  const animatedValue = useCountUp(numericValue ?? 0, 800)
+  const displayValue = numericValue !== undefined
+    ? isPercent
+      ? `${animatedValue.toFixed(1)}%`
+      : numericValue >= 1000
+        ? formatAEDShort(animatedValue)
+        : String(Math.round(animatedValue))
+    : value
+
   const toneColors = { neutral: 'text-espresso', teal: 'text-teal', rust: 'text-rust', ochre: 'text-ochre' }
   const iconTones  = { neutral: 'bg-sand-100 text-espresso-muted', teal: 'bg-teal-pale text-teal', rust: 'bg-rust-pale text-rust', ochre: 'bg-ochre-pale text-ochre' }
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16, filter: 'blur(6px)' }}
-      animate={{ opacity: 1, y: 0, filter: 'blur(0)' }}
-      transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay }}
-      className="bezel p-5 relative overflow-hidden"
+      variants={staggerItem}
+      whileHover="hover"
+      whileTap="tap"
+      initial="rest"
+      className="bezel p-5 relative overflow-hidden cursor-default"
+      style={{ boxShadow: cardHover.rest.boxShadow }}
     >
       <div className="flex items-start justify-between mb-4">
         <div className="eyebrow">{eyebrow}</div>
@@ -68,8 +87,16 @@ function StatCard({ eyebrow, value, sub, icon, delay, tone }: {
           <Icon icon={icon} size={15} />
         </div>
       </div>
-      <div className={cn('display-md tabular font-mono mb-1', toneColors[tone])}>{value}</div>
-      <div className="text-[12px] text-espresso-muted tabular">{sub}</div>
+      <div className="flex items-baseline gap-2">
+        <div className={cn('display-md tabular font-mono', toneColors[tone])}>{displayValue}</div>
+        {trend && (
+          <div className={cn('text-[11px] font-medium flex items-center gap-0.5', trend.direction === 'up' ? 'text-teal' : 'text-rust')}>
+            <Icon icon={trend.direction === 'up' ? TrendUp : TrendDown} size={12} />
+            {Math.abs(trend.value).toFixed(1)}%
+          </div>
+        )}
+      </div>
+      <div className="text-[12px] text-espresso-muted">{sub}</div>
     </motion.div>
   )
 }

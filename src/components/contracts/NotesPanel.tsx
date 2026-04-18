@@ -10,11 +10,10 @@ import { Icon } from '@/components/ui/Icon'
 import { formatDateTime, cn } from '@/lib/utils'
 
 const CATEGORIES = [
-  { value: 'general', label: 'General', tone: 'bg-sand-100 text-espresso-muted' },
-  { value: 'legal',   label: 'Legal',   tone: 'bg-plum-pale text-plum' },
-  { value: 'payment', label: 'Payment', tone: 'bg-teal-pale text-teal' },
-  { value: 'renewal', label: 'Renewal', tone: 'bg-amber-50 text-amber-600' },
-  { value: 'dispute', label: 'Dispute', tone: 'bg-rust-pale text-rust' },
+  { value: 'general',     label: 'General',     tone: 'bg-sand-100 text-espresso-muted' },
+  { value: 'financial',   label: 'Financial',   tone: 'bg-teal-pale text-teal' },
+  { value: 'legal',       label: 'Legal',       tone: 'bg-plum-pale text-plum' },
+  { value: 'maintenance', label: 'Maintenance', tone: 'bg-ochre-pale text-ochre' },
 ]
 
 export function NotesPanel({ contract, onClose }: { contract: any; onClose: () => void }) {
@@ -66,19 +65,34 @@ export function NotesPanel({ contract, onClose }: { contract: any; onClose: () =
               ) : notes.data.length === 0 ? (
                 <div className="py-8 text-center text-[13px] text-espresso-muted">No notes yet.</div>
               ) : (
-                <div className="space-y-3">
-                  {notes.data.map((n: any) => {
-                    const cat = CATEGORIES.find(c => c.value === n.category) ?? CATEGORIES[0]
+                <div className="space-y-4">
+                  {/* Group notes by category */}
+                  {CATEGORIES.map(cat => {
+                    const categoryNotes = notes.data.filter((n: any) => n.category === cat.value)
+                    if (categoryNotes.length === 0) return null
+
                     return (
-                      <div key={n.id} className="bezel p-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium', cat.tone)}>{cat.label}</span>
-                          <span className="text-[10px] text-espresso-subtle">{formatDateTime(n.created_at)}</span>
+                      <div key={cat.value}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={cn('px-2 py-0.5 rounded text-[10px] font-medium', cat.tone)}>
+                            {cat.label}
+                          </span>
+                          <div className="flex-1 h-px bg-sand-200" />
+                          <span className="text-[10px] text-espresso-subtle font-mono tabular">{categoryNotes.length}</span>
                         </div>
-                        <div className="text-[13px] text-espresso whitespace-pre-wrap">{n.content}</div>
-                        {n.created_by_user && (
-                          <div className="text-[10px] text-espresso-subtle mt-2">by {n.created_by_user.full_name || n.created_by_user.email}</div>
-                        )}
+                        <div className="space-y-2">
+                          {categoryNotes.map((n: any) => (
+                            <div key={n.id} className="bezel p-3 space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="text-[13px] text-espresso whitespace-pre-wrap flex-1">{n.content}</div>
+                              </div>
+                              <div className="flex items-center justify-between text-[10px] text-espresso-subtle">
+                                <span>{n.created_by_user?.full_name || n.created_by_user?.email || 'System'}</span>
+                                <time className="font-mono tabular">{formatDateTime(n.created_at)}</time>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )
                   })}

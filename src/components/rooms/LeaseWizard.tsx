@@ -159,28 +159,63 @@ export function LeaseWizard({ room, onClose }: Props) {
               </button>
             </header>
 
-            <div className="px-6 pt-5 pb-2">
-              <div className="flex items-center gap-1.5">
-                {STEPS.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => s.id <= step && setStep(s.id)}
-                    disabled={s.id > step}
-                    className={cn('flex-1 h-1 rounded-full transition-all',
-                      s.id < step ? 'bg-teal' : s.id === step ? 'bg-amber-500' : 'bg-sand-200')}
-                  />
+            <div className="px-6 pt-5 pb-4">
+              {/* Step indicator with numbered circles */}
+              <div className="flex items-center justify-between mb-3">
+                {STEPS.map((s, idx) => (
+                  <div key={s.id} className="flex items-center" style={{ flex: idx === STEPS.length - 1 ? '0 0 auto' : '1 1 0%' }}>
+                    <button
+                      onClick={() => s.id <= step && setStep(s.id)}
+                      disabled={s.id > step}
+                      className={cn(
+                        'relative w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-semibold transition-colors z-10',
+                        s.id < step ? 'bg-teal text-white' :
+                        s.id === step ? 'bg-amber text-white' :
+                        'bg-sand-200 text-espresso-muted'
+                      )}
+                    >
+                      {s.id < step ? <Icon icon={CheckCircle} size={14} emphasis /> : s.id}
+                      {/* Pulse ring for current step */}
+                      {s.id === step && (
+                        <motion.div
+                          className="absolute inset-0 rounded-full border-2 border-amber"
+                          initial={{ scale: 1, opacity: 1 }}
+                          animate={{ scale: 1.4, opacity: 0 }}
+                          transition={{ duration: 1.5, repeat: Infinity, ease: 'easeOut' }}
+                        />
+                      )}
+                      {/* layoutId for smooth slide between steps */}
+                      {s.id === step && (
+                        <motion.div
+                          layoutId="activeStep"
+                          className="absolute inset-0 rounded-full bg-amber -z-10"
+                          transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                        />
+                      )}
+                    </button>
+                    {/* Connection line */}
+                    {idx < STEPS.length - 1 && (
+                      <div className={cn(
+                        'h-0.5 flex-1 mx-2 transition-colors',
+                        s.id < step ? 'bg-teal' : 'bg-sand-200'
+                      )} />
+                    )}
+                  </div>
                 ))}
               </div>
-              <div className="mt-2 text-[11px] text-espresso-muted">{STEPS[step - 1].description}</div>
+              <div className="text-center">
+                <div className="text-[11px] font-medium text-espresso">{STEPS[step - 1].label}</div>
+                <div className="text-[10px] text-espresso-muted">{STEPS[step - 1].description}</div>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-6">
               <AnimatePresence mode="wait">
                 <motion.div key={step}
-                  initial={{ opacity: 0, x: 16 }}
+                  initial={{ opacity: 0, x: 100 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.3 }}>
+                  exit={{ opacity: 0, x: -100 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
                   {step === 1 && <Step1Tenant state={state} patchIndividual={patchIndividual} patchState={patchState} />}
                   {step === 2 && <Step2RoomConfirm room={room} state={state} />}
                   {step === 3 && <Step3Assignment state={state} patchState={patchState} room={room} />}
@@ -208,14 +243,16 @@ export function LeaseWizard({ room, onClose }: Props) {
                   Continue <Icon icon={CaretRight} size={12} />
                 </button>
               ) : (
-                <button
+                <motion.button
                   onClick={() => activate.mutate()}
                   disabled={activate.isPending}
                   className="flex items-center gap-1.5 px-4 h-9 rounded-full bg-teal text-white text-[12px] font-medium hover:bg-teal-light disabled:opacity-50 transition-all active:scale-[0.98]"
+                  animate={{ scale: [1, 1.05, 1] }}
+                  transition={{ duration: 0.6, times: [0, 0.5, 1], delay: 0.3 }}
                 >
                   <Icon icon={CheckCircle} size={13} emphasis />
                   {activate.isPending ? 'Activating…' : 'Activate lease'}
-                </button>
+                </motion.button>
               )}
             </footer>
           </motion.div>

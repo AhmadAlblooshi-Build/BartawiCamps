@@ -6,6 +6,7 @@ import { formatDate, daysUntil, cn, formatAED } from '@/lib/utils'
 import { ArrowRight } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { motion } from 'motion/react'
+import { staggerContainer, staggerItem } from '@/lib/motion'
 
 export function ExpiryPanel() {
   const { data } = useQuery({
@@ -46,9 +47,18 @@ export function ExpiryPanel() {
       ) : urgent.length === 0 ? (
         <div className="py-8 text-center text-[13px] text-espresso-muted">No contracts expiring soon.</div>
       ) : (
-        <div className="space-y-0.5">
-          {urgent.map((c: any) => <ExpiryRow key={c.id} contract={c} />)}
-        </div>
+        <motion.div
+          className="space-y-0.5"
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+        >
+          {urgent.map((c: any, i: number) => (
+            <motion.div key={c.id} variants={i < 8 ? staggerItem : undefined}>
+              <ExpiryRow contract={c} />
+            </motion.div>
+          ))}
+        </motion.div>
       )}
     </motion.div>
   )
@@ -56,27 +66,50 @@ export function ExpiryPanel() {
 
 function ExpiryRow({ contract }: { contract: any }) {
   const days = contract.days ?? 0
+  const isCritical = days >= 0 && days <= 7
+
+  // Color coding based on spec: ≤30=rust, 31-60=ochre, 61-90=sand-200
   const tone = days < 0 ? 'expired' : days <= 30 ? 'critical' : days <= 60 ? 'warning' : 'notice'
   const styles = {
-    expired:  { bar: 'bg-rust',      pill: 'bg-rust-pale text-rust' },
-    critical: { bar: 'bg-rust/70',   pill: 'bg-rust-pale text-rust' },
-    warning:  { bar: 'bg-ochre',     pill: 'bg-ochre-pale text-ochre' },
-    notice:   { bar: 'bg-sand-400',  pill: 'bg-sand-100 text-espresso-muted' },
+    expired:  { bg: 'bg-rust-pale',   pill: 'bg-rust-pale text-rust' },
+    critical: { bg: 'bg-rust-pale',   pill: 'bg-rust-pale text-rust' },
+    warning:  { bg: 'bg-ochre-pale',  pill: 'bg-ochre-pale text-ochre' },
+    notice:   { bg: 'bg-sand-200',    pill: 'bg-sand-200 text-espresso-muted' },
   }
   const s = styles[tone]
+
   return (
-    <Link href={`/contracts?open=${contract.id}`} className="flex items-stretch gap-3 p-2.5 rounded-lg hover:bg-sand-100 transition-colors">
-      <div className={cn('w-0.5 rounded-full shrink-0', s.bar)} />
+    <Link
+      href={`/contracts?open=${contract.id}`}
+      className={cn(
+        "flex items-stretch gap-3 p-2.5 rounded-lg hover:bg-sand-100 transition-colors",
+        s.bg
+      )}
+    >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-[13px] font-medium text-espresso truncate">{contract.companies?.name}</span>
-          <span className="font-mono text-[10px] text-espresso-subtle tabular">· {contract.rooms?.room_number}</span>
+          <span className={cn(
+            "text-[13px] font-medium text-espresso truncate",
+            isCritical && "font-bold"
+          )}>
+            {contract.companies?.name}
+          </span>
+          <span className={cn(
+            "font-mono text-[10px] text-espresso-subtle tabular",
+            isCritical && "font-bold"
+          )}>
+            · {contract.rooms?.room_number}
+          </span>
         </div>
         <div className="text-[11px] text-espresso-muted">
           {contract.end_date ? formatDate(contract.end_date) : '—'} · {formatAED(contract.monthly_rent)}/mo
         </div>
       </div>
-      <div className={cn('px-2 py-1 rounded-md text-[10px] font-medium self-center shrink-0 whitespace-nowrap', s.pill)}>
+      <div className={cn(
+        'px-2 py-1 rounded-md text-[10px] self-center shrink-0 whitespace-nowrap',
+        isCritical ? 'font-bold' : 'font-medium',
+        s.pill
+      )}>
         {days < 0 ? `${Math.abs(days)}d ago` : `${days}d left`}
       </div>
     </Link>

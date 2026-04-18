@@ -5,6 +5,7 @@ import { formatAED, cn } from '@/lib/utils'
 import { ArrowRight, Warning } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { motion } from 'motion/react'
+import { staggerContainer, staggerItem } from '@/lib/motion'
 import Link from 'next/link'
 
 interface Props { month: number; year: number }
@@ -65,19 +66,33 @@ export function OutstandingLeaderboard({ month, year }: Props) {
       ) : data.length === 0 ? (
         <EmptyAllClear />
       ) : (
-        <div className="space-y-0.5">
-          {data.map((item, i) => <LeaderRow key={item.name} item={item} rank={i + 1} />)}
-        </div>
+        <motion.div
+          className="space-y-0.5"
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+        >
+          {data.map((item, i) => (
+            <motion.div key={item.name} variants={i < 8 ? staggerItem : undefined}>
+              <LeaderRow item={item} rank={i + 1} />
+            </motion.div>
+          ))}
+        </motion.div>
       )}
     </motion.div>
   )
 }
 
 function LeaderRow({ item, rank }: { item: any; rank: number }) {
-  const severity = item.balance > 20000 ? 'high' : item.balance > 5000 ? 'medium' : 'low'
-  const styles = { high: 'text-rust', medium: 'text-ochre', low: 'text-espresso-muted' }
+  const isTopRow = rank === 1
   return (
-    <Link href={`/contracts?q=${encodeURIComponent(item.name)}`} className="flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-sand-100 transition-colors group">
+    <Link
+      href={`/contracts?q=${encodeURIComponent(item.name)}`}
+      className={cn(
+        "flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-sand-100 transition-colors group",
+        isTopRow && "border-l-2 border-rust pl-1.5"
+      )}
+    >
       <div className="w-6 font-mono text-[11px] tabular text-espresso-subtle">{String(rank).padStart(2, '0')}</div>
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-medium text-espresso truncate">{item.name}</div>
@@ -85,7 +100,7 @@ function LeaderRow({ item, rank }: { item: any; rank: number }) {
           {item.rooms.length} {item.rooms.length === 1 ? 'room' : 'rooms'} · {item.rooms.slice(0, 4).join(', ')}{item.rooms.length > 4 ? '…' : ''}
         </div>
       </div>
-      <div className={cn('font-mono tabular text-[13px] font-semibold', styles[severity])}>
+      <div className="font-mono tabular text-[13px] font-semibold text-espresso">
         {formatAED(item.balance)}
       </div>
     </Link>

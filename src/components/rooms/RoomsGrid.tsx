@@ -8,7 +8,8 @@ import { MagnifyingGlass, ArrowUpRight, ArrowDownLeft, X } from '@phosphor-icons
 import { Icon } from '@/components/ui/Icon'
 import { RoomDetailDrawer } from './RoomDetailDrawer'
 import { LeaseWizard } from './LeaseWizard'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
+import { staggerContainer, staggerItem, cardHover } from '@/lib/motion'
 
 interface Props { campId?: string }
 
@@ -30,7 +31,7 @@ export function RoomsGrid({ campId }: Props) {
 
   const [qDebounced, setQDebounced] = useState('')
   useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 250)
+    const t = setTimeout(() => setQDebounced(q), 200)
     return () => clearTimeout(t)
   }, [q])
 
@@ -46,6 +47,14 @@ export function RoomsGrid({ campId }: Props) {
     }),
   })
 
+  const hasActiveFilters = status || sizeFilter || hasBalance || q
+  const clearAllFilters = () => {
+    setStatus('')
+    setSizeFilter('')
+    setHasBalance(false)
+    setQ('')
+  }
+
   return (
     <div className="space-y-5">
       <div className="bezel p-3 flex items-center gap-2 flex-wrap">
@@ -58,14 +67,15 @@ export function RoomsGrid({ campId }: Props) {
             className="flex-1 bg-transparent outline-none font-body text-sm text-espresso placeholder:text-espresso-subtle py-1"
           />
           {q && (
-            <button onClick={() => setQ('')} className="w-6 h-6 rounded grid place-items-center hover:bg-sand-100">
+            <button onClick={() => setQ('')} className="w-6 h-6 rounded grid place-items-center hover:bg-sand-100 transition-colors">
               <Icon icon={X} size={12} />
             </button>
           )}
         </div>
 
         <select value={status} onChange={e => setStatus(e.target.value)}
-          className="h-9 px-3 rounded-lg bg-sand-100 text-[11px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 transition-colors cursor-pointer">
+          className={cn('h-9 px-3 rounded-lg text-[11px] font-medium border-0 outline-none transition-colors cursor-pointer',
+            status ? 'bg-amber-pale text-amber ring-1 ring-amber/20' : 'bg-sand-100 text-espresso hover:bg-sand-200')}>
           <option value="">All statuses</option>
           <option value="occupied">Occupied</option>
           <option value="vacant">Vacant</option>
@@ -75,7 +85,8 @@ export function RoomsGrid({ campId }: Props) {
         </select>
 
         <select value={sizeFilter} onChange={e => setSizeFilter(e.target.value)}
-          className="h-9 px-3 rounded-lg bg-sand-100 text-[11px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 transition-colors cursor-pointer">
+          className={cn('h-9 px-3 rounded-lg text-[11px] font-medium border-0 outline-none transition-colors cursor-pointer',
+            sizeFilter ? 'bg-amber-pale text-amber ring-1 ring-amber/20' : 'bg-sand-100 text-espresso hover:bg-sand-200')}>
           <option value="">All sizes</option>
           <option value="big">Big</option>
           <option value="small">Small</option>
@@ -85,15 +96,24 @@ export function RoomsGrid({ campId }: Props) {
         <button
           onClick={() => setHasBalance(v => !v)}
           className={cn('px-3 h-9 rounded-lg text-[11px] font-medium transition-colors',
-            hasBalance ? 'bg-rust text-white' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200')}
+            hasBalance ? 'bg-amber-pale text-amber ring-1 ring-amber/20' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200')}
         >
           Has balance
         </button>
+
+        {hasActiveFilters && (
+          <button
+            onClick={clearAllFilters}
+            className="text-[11px] font-medium text-amber hover:text-amber-hover transition-colors underline decoration-dotted underline-offset-2"
+          >
+            Clear all
+          </button>
+        )}
       </div>
 
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 12 }).map((_, i) => <div key={i} className="h-14 skeleton-shimmer rounded-lg" />)}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 12 }).map((_, i) => <div key={i} className="h-48 skeleton-shimmer rounded-xl" />)}
         </div>
       ) : !data?.data?.length ? (
         <div className="bezel p-12 text-center">
@@ -101,30 +121,38 @@ export function RoomsGrid({ campId }: Props) {
           <div className="text-[12px] text-espresso-muted">Try clearing a filter or the search.</div>
         </div>
       ) : (
-        <div className="bezel overflow-hidden">
-          <div className="grid grid-cols-[100px_1fr_1fr_140px_120px_120px_120px] gap-0 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-50">
-            <div className="eyebrow">Room</div>
-            <div className="eyebrow">Occupant</div>
-            <div className="eyebrow">Company</div>
-            <div className="eyebrow">Status</div>
-            <div className="eyebrow text-right">Rent</div>
-            <div className="eyebrow text-right">Balance</div>
-            <div className="eyebrow text-right">Actions</div>
-          </div>
-          <div className="divide-y divide-[color:var(--color-border-subtle)] max-h-[calc(100vh-380px)] overflow-y-auto">
-            {data.data.map((room: any) => (
-              <RoomRow
+        <>
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="visible"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+          >
+            {data.data.slice(0, 8).map((room: any, idx: number) => (
+              <RoomCard
                 key={room.id}
                 room={room}
                 onOpen={() => setOpenRoomId(room.id)}
                 onCheckin={() => setWizardRoom(room)}
               />
             ))}
-          </div>
-          <div className="px-4 py-3 border-t border-[color:var(--color-border-subtle)] bg-sand-50 text-[11px] text-espresso-muted">
+          </motion.div>
+          {data.data.length > 8 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {data.data.slice(8).map((room: any) => (
+                <RoomCard
+                  key={room.id}
+                  room={room}
+                  onOpen={() => setOpenRoomId(room.id)}
+                  onCheckin={() => setWizardRoom(room)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="px-4 py-3 text-[11px] text-espresso-muted text-center">
             Showing <span className="font-mono tabular text-espresso">{data.data.length}</span> rooms
           </div>
-        </div>
+        </>
       )}
 
       <AnimatePresence>
@@ -141,44 +169,70 @@ export function RoomsGrid({ campId }: Props) {
   )
 }
 
-function RoomRow({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; onCheckin: () => void }) {
+function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; onCheckin: () => void }) {
   const occupant = room.current_occupancy?.individual?.owner_name
     || room.current_occupancy?.individual?.full_name
-    || (room.status === 'vacant' ? '—' : '')
-  const company = room.current_occupancy?.company?.name || '—'
+    || null
+  const company = room.current_occupancy?.company?.name || null
   const balance = Number(room.outstanding_balance || 0)
 
   return (
-    <div onClick={onOpen}
-      className="grid grid-cols-[100px_1fr_1fr_140px_120px_120px_120px] gap-0 px-4 py-3 hover:bg-sand-50 cursor-pointer transition-colors items-center">
-      <div className="font-mono tabular text-[13px] font-semibold text-espresso">{room.room_number}</div>
-      <div className="text-[13px] text-espresso truncate pr-3">{occupant}</div>
-      <div className="text-[13px] text-espresso-muted truncate pr-3">{company}</div>
-      <div><StatusBadge status={room.status} /></div>
-      <div className="text-right font-mono tabular text-[12px] text-espresso">
-        {Number(room.standard_rent) > 0 ? formatAED(room.standard_rent) : '—'}
+    <motion.div
+      variants={staggerItem}
+      onClick={onOpen}
+      initial="rest"
+      whileHover="hover"
+      whileTap="tap"
+      className="bezel p-4 cursor-pointer group"
+      style={{
+        boxShadow: cardHover.rest.boxShadow,
+      }}
+    >
+      {/* Block eyebrow */}
+      {room.block?.code && (
+        <div className="eyebrow mb-2 text-espresso-faint">
+          Block {room.block.code}
+        </div>
+      )}
+
+      {/* Room number - display-sm Fraunces */}
+      <div className="display-sm mb-3">{room.room_number}</div>
+
+      {/* Status badge */}
+      <div className="mb-3">
+        <StatusBadge status={room.status} />
       </div>
-      <div className={cn('text-right font-mono tabular text-[12px]',
-        balance > 0 ? 'text-rust font-semibold' : 'text-espresso-subtle')}>
-        {balance > 0 ? formatAED(balance) : '—'}
-      </div>
-      <div className="flex items-center justify-end gap-1">
-        {room.status === 'vacant' && (
-          <button onClick={e => { e.stopPropagation(); onCheckin() }}
-            className="w-7 h-7 rounded-md grid place-items-center bg-teal-pale text-teal hover:bg-teal hover:text-white transition-colors"
-            aria-label="Check in">
-            <Icon icon={ArrowDownLeft} size={12} />
-          </button>
+
+      {/* Tenant name */}
+      <div className="mb-3 min-h-[40px]">
+        {occupant ? (
+          <div className="text-[13px] text-espresso font-medium">{occupant}</div>
+        ) : (
+          <div className="text-[13px] text-espresso-muted italic">Vacant</div>
         )}
-        {room.status === 'occupied' && (
-          <button onClick={e => { e.stopPropagation(); onOpen() }}
-            className="w-7 h-7 rounded-md grid place-items-center bg-sand-100 text-espresso-muted hover:bg-sand-200 transition-colors"
-            aria-label="Open">
-            <Icon icon={ArrowUpRight} size={12} />
-          </button>
+        {company && (
+          <div className="text-[11px] text-espresso-muted mt-0.5 truncate">{company}</div>
         )}
       </div>
-    </div>
+
+      {/* Monthly rent */}
+      <div className="mb-2">
+        <div className="eyebrow mb-1">Monthly rent</div>
+        <div className="font-mono tabular text-[13px] text-espresso">
+          {Number(room.standard_rent) > 0 ? formatAED(room.standard_rent) : '—'}
+        </div>
+      </div>
+
+      {/* Outstanding balance */}
+      {balance > 0 && (
+        <div className="pt-3 border-t border-sand-200">
+          <div className="eyebrow mb-1 text-rust">Outstanding</div>
+          <div className="font-mono tabular text-[14px] text-rust font-semibold">
+            {formatAED(balance)}
+          </div>
+        </div>
+      )}
+    </motion.div>
   )
 }
 

@@ -154,3 +154,25 @@ body::before {
   50%      { opacity: 1; }
 }
 .live-pulse { animation: live-pulse 2.4s ease-in-out infinite; }
+
+/* Button press feedback — applies to ALL buttons */
+button:not(:disabled):active,
+[role="button"]:not(:disabled):active {
+  transform: scale(0.97);
+  transition: transform 100ms ease-out;
+}
+
+/* Toast left-border styling by type */
+[data-sonner-toast][data-type="success"] {
+  border-left: 3px solid var(--color-teal) !important;
+}
+[data-sonner-toast][data-type="error"] {
+  border-left: 3px solid var(--color-rust) !important;
+}
+[data-sonner-toast][data-type="warning"] {
+  border-left: 3px solid var(--color-ochre) !important;
+}
+[data-sonner-toast][data-type="info"],
+[data-sonner-toast]:not([data-type]) {
+  border-left: 3px solid var(--color-amber) !important;
+}

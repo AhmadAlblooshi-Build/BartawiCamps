@@ -5,8 +5,33 @@ import { Sparkle, TrendDown, TrendUp } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { motion } from 'motion/react'
 import { cn, formatPct } from '@/lib/utils'
+import { useEffect, useState } from 'react'
 
 interface Props { month: number; year: number }
+
+function useTypewriter(text: string | null, speed = 30) {
+  const [displayed, setDisplayed] = useState('')
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    if (!text) { setDisplayed(''); setDone(true); return }
+    setDisplayed('')
+    setDone(false)
+    let i = 0
+    const words = text.split(' ')
+    const interval = setInterval(() => {
+      i++
+      setDisplayed(words.slice(0, i).join(' '))
+      if (i >= words.length) {
+        clearInterval(interval)
+        setDone(true)
+      }
+    }, speed)
+    return () => clearInterval(interval)
+  }, [text, speed])
+
+  return { displayed, done }
+}
 
 export function AnomalyNarrator({ month, year }: Props) {
   const { data: trend } = useQuery({
@@ -50,6 +75,10 @@ export function AnomalyNarrator({ month, year }: Props) {
   const significant = delta !== null && Math.abs(delta) >= 5
   const positive = delta !== null && delta > 0
 
+  // Typewriter effect for narration text
+  const narrationText = narration?.narration || null
+  const { displayed, done } = useTypewriter(narrationText, 30)
+
   if (!trend) return <NarratorSkeleton />
 
   return (
@@ -57,7 +86,7 @@ export function AnomalyNarrator({ month, year }: Props) {
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.7, delay: 0.32, ease: [0.16, 1, 0.3, 1] }}
-      className={cn('bezel-deep relative overflow-hidden', significant && !positive && 'ring-1 ring-rust/20')}
+      className={cn('bezel-deep relative overflow-hidden border-l-[3px] border-l-amber', significant && !positive && 'ring-1 ring-rust/20')}
     >
       <div className="bezel-inner p-6 relative">
         <div className={cn(
@@ -79,8 +108,11 @@ export function AnomalyNarrator({ month, year }: Props) {
               <div className="live-pulse w-1.5 h-1.5 rounded-full bg-amber-500" />
             </div>
 
-            {narration?.narration ? (
-              <p className="font-display text-[22px] leading-[1.35] tracking-tight text-espresso">{narration.narration}</p>
+            {narrationText ? (
+              <p className="font-display text-[22px] leading-[1.35] tracking-tight text-espresso">
+                {displayed}
+                {!done && <span className="inline-block w-0.5 h-4 bg-amber animate-pulse ml-0.5" />}
+              </p>
             ) : delta !== null ? (
               <p className="font-display text-[22px] leading-[1.35] tracking-tight text-espresso">
                 {currentRate !== null && (

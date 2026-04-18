@@ -6,6 +6,7 @@ import { formatAEDShort, formatPct, cn } from '@/lib/utils'
 import { MapTrifold, ArrowRight, Bed } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { motion } from 'motion/react'
+import { cardHover, staggerItem } from '@/lib/motion'
 
 interface Props { camp: any; month: number; year: number; delay?: number }
 
@@ -19,12 +20,28 @@ export function CampCard({ camp, month, year, delay = 0 }: Props) {
     queryFn: () => endpoints.rooms({ camp_id: camp.id, limit: 500 }),
   })
 
+  // Calculate occupancy for mini-heatmap (6×2 grid by block)
+  const blocks = camp?.blocks ?? []
+  const blockOccupancy: number[] = blocks.map((block: any) => {
+    const blockRooms = rooms?.data?.filter((r: any) => r.block_id === block.id) ?? []
+    const occupied = blockRooms.filter((r: any) => r.status === 'occupied').length
+    const total = blockRooms.length
+    return total > 0 ? (occupied / total) * 100 : 0
+  })
+
+  const collectionRate = summary?.financials?.collection_rate ?? 0
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: 24, filter: 'blur(6px)' }}
-      animate={{ opacity: 1, y: 0, filter: 'blur(0)' }}
-      transition={{ duration: 0.7, delay, ease: [0.16, 1, 0.3, 1] }}
-      className="bezel-deep group overflow-hidden"
+      variants={staggerItem}
+      whileHover="hover"
+      whileTap="tap"
+      initial="rest"
+      animate="rest"
+      className="bezel-deep group overflow-hidden cursor-pointer"
+      style={{
+        boxShadow: cardHover.rest.boxShadow,
+      }}
     >
       <div className="bezel-inner">
         <Link href={`/camps/${camp.id}`}>
@@ -52,17 +69,44 @@ export function CampCard({ camp, month, year, delay = 0 }: Props) {
           </div>
 
           <div className="p-6 pt-5 border-t border-[color:var(--color-border-subtle)]">
-            <div className="eyebrow mb-3">Room grid</div>
-            <div className="grid gap-0.5 md:gap-1" style={{ gridTemplateColumns: 'repeat(24, minmax(0, 1fr))' }}>
-              {rooms?.data?.slice(0, camp.total_rooms).map((r: any) => (
-                <HeatCell key={r.id} state={stateFromRoom(r)} />
-              )) || Array.from({ length: camp.total_rooms }).map((_, i) => <div key={i} className="aspect-square rounded-[2px] bg-sand-200" />)}
+            <div className="eyebrow mb-3">Occupancy by block</div>
+            {/* Mini-heatmap: 6×2 grid showing occupancy by block */}
+            <div className="grid grid-cols-6 gap-2 mb-4">
+              {blockOccupancy.slice(0, 12).map((rate: number, i: number) => (
+                <MiniHeatCell key={i} occupancyRate={rate} />
+              ))}
+              {/* Fill remaining cells if fewer than 12 blocks */}
+              {blockOccupancy.length < 12 && Array.from({ length: 12 - blockOccupancy.length }).map((_: unknown, i: number) => (
+                <div key={`empty-${i}`} className="aspect-square rounded bg-sand-200" />
+              ))}
             </div>
-            <div className="mt-4 flex items-center gap-3 text-[10px] font-mono text-espresso-subtle">
-              <Legend color="bg-teal"      label="Occupied" />
-              <Legend color="bg-sand-300"  label="Vacant" />
-              <Legend color="bg-amber-400" label="Bartawi" />
-              <Legend color="bg-rust"      label="Overdue" />
+
+            {/* Stats row with JetBrains Mono numbers */}
+            <div className="flex items-center gap-1 text-[11px] text-espresso-muted mb-3">
+              <span className="font-mono font-semibold text-espresso">{camp.total_rooms}</span>
+              <span>rooms</span>
+              <span className="mx-1">·</span>
+              <span className="font-mono font-semibold text-espresso">{summary?.occupancy?.total_occupied ?? 0}</span>
+              <span>occupied</span>
+              <span className="mx-1">·</span>
+              <span className="font-mono font-semibold text-espresso">{formatPct(summary?.occupancy?.occupancy_rate)}</span>
+              <span>occupancy</span>
+            </div>
+
+            {/* Collection rate progress bar */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-espresso-muted">Collection rate</span>
+                <span className="font-mono text-[11px] font-semibold text-espresso">{formatPct(collectionRate)}</span>
+              </div>
+              <div className="h-1.5 bg-sand-200 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-teal rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${collectionRate}%` }}
+                  transition={{ duration: 0.8, delay: delay + 0.3, ease: [0.22, 1, 0.36, 1] }}
+                />
+              </div>
             </div>
           </div>
 
@@ -107,22 +151,21 @@ function Stat({ label, value, tone = 'neutral' }: { label: string; value?: strin
   )
 }
 
-function HeatCell({ state }: { state: string }) {
-  const colors: Record<string, string> = {
-    occupied: 'bg-teal/80',
-    vacant:   'bg-sand-300',
-    bartawi:  'bg-amber-400',
-    overdue:  'bg-rust',
-    vacating: 'bg-ochre',
+// Mini-heatmap cell: color intensity based on occupancy
+function MiniHeatCell({ occupancyRate }: { occupancyRate: number }) {
+  let bgColor = 'bg-sand-200' // 0%
+  if (occupancyRate > 95) {
+    bgColor = 'bg-teal' // >95%
+  } else if (occupancyRate >= 80) {
+    bgColor = 'bg-teal-pale' // 80-95%
+  } else if (occupancyRate > 0) {
+    bgColor = 'bg-amber-pale' // <80%
   }
-  return <div className={cn('aspect-square rounded-[2px]', colors[state] || 'bg-sand-200')} />
-}
 
-function Legend({ color, label }: { color: string; label: string }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <span className={`w-2 h-2 rounded-[1px] ${color}`} />
-      <span>{label}</span>
-    </div>
+    <div
+      className={cn('aspect-square rounded transition-colors duration-300', bgColor)}
+      title={`${occupancyRate.toFixed(0)}% occupied`}
+    />
   )
 }

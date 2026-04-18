@@ -1,19 +1,20 @@
 'use client'
 import { useQuery } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
-import { formatRelative } from '@/lib/utils'
+import { formatRelative, cn } from '@/lib/utils'
 import { ArrowDownLeft, ArrowUpRight, CheckCircle, Warning, FileText, Wrench, CreditCard } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { motion } from 'motion/react'
+import { staggerContainer, staggerItem } from '@/lib/motion'
 
-const TYPE_MAP: Record<string, { icon: any; color: string; bg: string }> = {
-  checkin:     { icon: ArrowDownLeft, color: 'text-teal',      bg: 'bg-teal-pale' },
-  checkout:    { icon: ArrowUpRight,  color: 'text-rust',      bg: 'bg-rust-pale' },
-  payment:     { icon: CreditCard,    color: 'text-teal',      bg: 'bg-teal-pale' },
-  renewal:     { icon: FileText,      color: 'text-amber-600', bg: 'bg-amber-50' },
-  maintenance: { icon: Wrench,        color: 'text-ochre',     bg: 'bg-ochre-pale' },
-  resolved:    { icon: CheckCircle,   color: 'text-teal',      bg: 'bg-teal-pale' },
-  alert:       { icon: Warning,       color: 'text-rust',      bg: 'bg-rust-pale' },
+const TYPE_MAP: Record<string, { icon: any; dotColor: string }> = {
+  checkin:     { icon: ArrowDownLeft, dotColor: 'bg-teal' },
+  checkout:    { icon: ArrowUpRight,  dotColor: 'bg-rust' },
+  payment:     { icon: CreditCard,    dotColor: 'bg-teal' },
+  renewal:     { icon: FileText,      dotColor: 'bg-amber' },
+  maintenance: { icon: Wrench,        dotColor: 'bg-ochre' },
+  resolved:    { icon: CheckCircle,   dotColor: 'bg-teal' },
+  alert:       { icon: Warning,       dotColor: 'bg-rust' },
 }
 
 export function ActivityFeed() {
@@ -36,23 +37,35 @@ export function ActivityFeed() {
       ) : data.data.length === 0 ? (
         <div className="py-8 text-center text-[13px] text-espresso-muted">No recent activity.</div>
       ) : (
-        <div className="space-y-1">
-          {data.data.slice(0, 10).map((n: any) => {
+        <motion.div
+          className="space-y-1 relative pl-4"
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+        >
+          {/* Timeline line */}
+          <div className="absolute left-[7px] top-2 bottom-2 w-px bg-sand-200" />
+
+          {data.data.slice(0, 10).map((n: any, i: number) => {
             const tk = inferType(n.type)
             const t = TYPE_MAP[tk] || TYPE_MAP.alert
             return (
-              <div key={n.id} className="flex items-start gap-3 p-2 rounded-lg hover:bg-sand-100 transition-colors">
-                <div className={`w-7 h-7 rounded-lg grid place-items-center shrink-0 ${t.bg}`}>
-                  <Icon icon={t.icon} size={12} className={t.color} />
-                </div>
-                <div className="flex-1 min-w-0">
+              <motion.div
+                key={n.id}
+                variants={i < 8 ? staggerItem : undefined}
+                className="flex items-start gap-3 p-2 rounded-lg hover:bg-sand-100 transition-colors relative"
+              >
+                {/* Timeline dot */}
+                <div className={cn("absolute left-[-9px] top-[14px] w-3.5 h-3.5 rounded-full border-2 border-sand-50", t.dotColor)} />
+
+                <div className="flex-1 min-w-0 ml-4">
                   <div className="text-[12px] text-espresso leading-snug">{n.title}</div>
                   <div className="text-[10px] text-espresso-subtle mt-0.5">{formatRelative(n.created_at)}</div>
                 </div>
-              </div>
+              </motion.div>
             )
           })}
-        </div>
+        </motion.div>
       )}
     </motion.div>
   )

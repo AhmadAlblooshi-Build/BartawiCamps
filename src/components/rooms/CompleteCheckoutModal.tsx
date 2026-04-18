@@ -4,10 +4,11 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { toast } from 'sonner'
-import { motion } from 'motion/react'
+import { motion, AnimatePresence } from 'motion/react'
 import { X, ArrowUpRight, Warning } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { formatAED, cn } from '@/lib/utils'
+import { scaleUp, slideUp } from '@/lib/motion'
 
 export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: () => void }) {
   const today = new Date().toISOString().slice(0, 10)
@@ -60,10 +61,10 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
         <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+            variants={scaleUp}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
             className="fixed left-1/2 top-[6vh] -translate-x-1/2 w-[640px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-white rounded-2xl shadow-raise-4 z-50 flex flex-col overflow-hidden"
           >
             <Dialog.Title className="sr-only">Complete checkout</Dialog.Title>
@@ -77,7 +78,12 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
 
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
               {outstanding > 0 && (
-                <div className={cn('flex items-start gap-3 p-4 rounded-lg border', blocked ? 'bg-rust-pale border-rust/30' : 'bg-ochre-pale border-ochre/30')}>
+                <motion.div
+                  variants={slideUp}
+                  initial="hidden"
+                  animate="visible"
+                  className={cn('flex items-start gap-3 p-4 rounded-lg border-2', blocked ? 'bg-rust-pale border-rust' : 'bg-ochre-pale border-ochre')}
+                >
                   <Icon icon={Warning} size={16} className={blocked ? 'text-rust' : 'text-ochre'} emphasis />
                   <div className="flex-1">
                     <div className={cn('text-[13px] font-semibold', blocked ? 'text-rust' : 'text-ochre')}>
@@ -92,7 +98,7 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
                       <span className="text-[12px] font-medium text-espresso">Write off balance as unrecoverable</span>
                     </label>
                   </div>
-                </div>
+                </motion.div>
               )}
 
               <div className="grid grid-cols-2 gap-3">
@@ -120,46 +126,67 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
               {hasDeposit && (
                 <div>
                   <div className="eyebrow mb-3">Deposit handling</div>
-                  <div className="bezel p-4 space-y-3">
+                  <div className="bezel p-4 space-y-4">
                     <div className="text-[12px] text-espresso-muted">
                       Held deposits: {deposits?.data?.map((d: any) => formatAED(d.amount)).join(' + ')} total
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-2">
                       {[
-                        { v: 'refund_full',    l: 'Refund full' },
+                        { v: 'refund_full',    l: 'Refund full deposit' },
                         { v: 'refund_partial', l: 'Partial refund' },
-                        { v: 'forfeit_full',   l: 'Forfeit all' },
-                        { v: 'none',           l: 'Skip' },
+                        { v: 'forfeit_full',   l: 'Forfeit all deposits' },
+                        { v: 'none',           l: 'Skip deposit handling' },
                       ].map(opt => (
-                        <button key={opt.v} onClick={() => setDepositAction(opt.v as any)}
-                          className={cn('h-9 rounded-lg text-[11px] font-medium transition-all',
-                            depositAction === opt.v ? 'bg-espresso text-sand-50' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200')}>
-                          {opt.l}
-                        </button>
+                        <label key={opt.v} className="flex items-center gap-3 p-3 rounded-lg border border-sand-200 cursor-pointer hover:bg-sand-50 transition-colors">
+                          <input
+                            type="radio"
+                            name="depositAction"
+                            checked={depositAction === opt.v}
+                            onChange={() => setDepositAction(opt.v as any)}
+                            className="w-4 h-4 accent-espresso cursor-pointer"
+                          />
+                          <span className="text-[12px] font-medium text-espresso">{opt.l}</span>
+                        </label>
                       ))}
                     </div>
-                    {depositAction === 'refund_partial' && (
-                      <div className="grid grid-cols-2 gap-2 pt-2">
-                        <label className="flex flex-col gap-1">
-                          <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">Refund amount</span>
-                          <input type="number" value={refundAmt} onChange={e => setRefundAmt(Number(e.target.value) || 0)}
-                            className="h-9 px-2 bg-white border border-[color:var(--color-border-medium)] rounded text-[12px] font-mono tabular focus:border-amber-500 focus:outline-none" />
-                        </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">Forfeit amount</span>
-                          <input type="number" value={forfeitAmt} onChange={e => setForfeitAmt(Number(e.target.value) || 0)}
-                            className="h-9 px-2 bg-white border border-[color:var(--color-border-medium)] rounded text-[12px] font-mono tabular focus:border-amber-500 focus:outline-none" />
-                        </label>
-                      </div>
-                    )}
-                    {(depositAction === 'forfeit_full' || (depositAction === 'refund_partial' && forfeitAmt > 0)) && (
-                      <label className="flex flex-col gap-1 pt-2">
-                        <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">Forfeiture reason *</span>
-                        <input type="text" value={depositReason} onChange={e => setDepositReason(e.target.value)}
-                          placeholder="Damage, unpaid rent, early termination..."
-                          className="h-9 px-2 bg-white border border-[color:var(--color-border-medium)] rounded text-[12px] focus:border-amber-500 focus:outline-none" />
-                      </label>
-                    )}
+                    <AnimatePresence mode="wait">
+                      {depositAction === 'refund_partial' && (
+                        <motion.div
+                          variants={slideUp}
+                          initial="hidden"
+                          animate="visible"
+                          exit="exit"
+                          className="grid grid-cols-2 gap-3 pt-2"
+                        >
+                          <label className="flex flex-col gap-1.5">
+                            <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">Refund amount</span>
+                            <input type="number" value={refundAmt} onChange={e => setRefundAmt(Number(e.target.value) || 0)}
+                              className="h-9 px-2 bg-white border border-[color:var(--color-border-medium)] rounded text-[12px] font-mono tabular focus:border-amber-500 focus:outline-none" />
+                          </label>
+                          <label className="flex flex-col gap-1.5">
+                            <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">Forfeit amount</span>
+                            <input type="number" value={forfeitAmt} onChange={e => setForfeitAmt(Number(e.target.value) || 0)}
+                              className="h-9 px-2 bg-white border border-[color:var(--color-border-medium)] rounded text-[12px] font-mono tabular focus:border-amber-500 focus:outline-none" />
+                          </label>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    <AnimatePresence mode="wait">
+                      {(depositAction === 'forfeit_full' || (depositAction === 'refund_partial' && forfeitAmt > 0)) && (
+                        <motion.label
+                          variants={slideUp}
+                          initial="hidden"
+                          animate="visible"
+                          exit="exit"
+                          className="flex flex-col gap-1.5 pt-2"
+                        >
+                          <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">Forfeiture reason *</span>
+                          <input type="text" value={depositReason} onChange={e => setDepositReason(e.target.value)}
+                            placeholder="Damage, unpaid rent, early termination..."
+                            className="h-9 px-2 bg-white border border-[color:var(--color-border-medium)] rounded text-[12px] focus:border-amber-500 focus:outline-none" />
+                        </motion.label>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               )}

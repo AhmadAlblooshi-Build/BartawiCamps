@@ -82,22 +82,27 @@ export function ComplaintIntakeModal({ onClose }: { onClose: () => void }) {
               </label>
 
               {(classifying || category) && (
-                <div className="bezel p-3 flex items-start gap-3">
-                  <div className="w-7 h-7 rounded-lg bg-espresso text-sand-50 grid place-items-center shrink-0">
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="bezel p-3 flex items-start gap-3 bg-teal-pale border border-teal/10"
+                >
+                  <div className="w-7 h-7 rounded-lg bg-teal text-sand-50 grid place-items-center shrink-0">
                     <Icon icon={Sparkle} size={12} emphasis />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="eyebrow">AI classification</span>
-                      {classifying && <span className="live-pulse w-1.5 h-1.5 rounded-full bg-amber-500" />}
+                      <span className="eyebrow text-teal">AI Suggests</span>
+                      {classifying && <span className="live-pulse w-1.5 h-1.5 rounded-full bg-teal" />}
                     </div>
                     {category ? (
                       <div className="text-[12px] text-espresso">
-                        <strong>{category}</strong> · priority <strong className="capitalize">{priority}</strong>
+                        Category: <strong>{category}</strong> · Priority: <strong className="capitalize">{priority}</strong>
                       </div>
                     ) : <div className="text-[12px] text-espresso-muted">Analyzing…</div>}
                   </div>
-                </div>
+                </motion.div>
               )}
 
               <div className="grid grid-cols-2 gap-3">

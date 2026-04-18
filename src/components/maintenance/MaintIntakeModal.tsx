@@ -15,10 +15,26 @@ export function MaintIntakeModal({ onClose }: { onClose: () => void }) {
   const [roomNumber, setRoomNumber] = useState('')
   const [campId, setCampId] = useState('')
   const [categoryId, setCategoryId] = useState('')
+  const [suggestedTeam, setSuggestedTeam] = useState('')
 
   const { data: camps } = useQuery({ queryKey: ['camps'], queryFn: () => endpoints.camps() })
   // Categories endpoint — using complaint_categories since they share the table
   const { data: categories } = useQuery({ queryKey: ['categories'], queryFn: () => endpoints.complaints({ _categories: 'true' }).catch(() => ({ data: [] })) })
+
+  // Update suggested team when category changes
+  const handleCategoryChange = (newCategoryId: string) => {
+    setCategoryId(newCategoryId)
+    if (newCategoryId && (categories as any)?.data) {
+      const selectedCategory = (categories as any).data.find((c: any) => c.id === newCategoryId)
+      if (selectedCategory?.default_team) {
+        setSuggestedTeam(selectedCategory.default_team.name)
+      } else {
+        setSuggestedTeam('General Team')
+      }
+    } else {
+      setSuggestedTeam('General Team')
+    }
+  }
 
   const qc = useQueryClient()
   const mutation = useMutation({
@@ -88,7 +104,7 @@ export function MaintIntakeModal({ onClose }: { onClose: () => void }) {
                 </label>
                 <label className="flex flex-col gap-1.5">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Category</span>
-                  <select value={categoryId} onChange={e => setCategoryId(e.target.value)}
+                  <select value={categoryId} onChange={e => handleCategoryChange(e.target.value)}
                     className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none">
                     <option value="">Auto (will route to General team)</option>
                     {(categories as any)?.data?.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -105,10 +121,23 @@ export function MaintIntakeModal({ onClose }: { onClose: () => void }) {
                   </select>
                 </label>
               </div>
-              <div className="bezel p-3 text-[11px] text-espresso-muted">
-                <strong className="text-espresso">Auto-assignment:</strong> If you pick a category with a default team,
-                the request will be routed to them automatically and the team lead will be notified.
-              </div>
+              {suggestedTeam && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="bezel p-3 text-[12px] bg-teal-pale border border-teal/10"
+                >
+                  <span className="text-espresso-muted">Will be assigned to:</span>{' '}
+                  <strong className="text-teal">{suggestedTeam}</strong>
+                </motion.div>
+              )}
+              {!suggestedTeam && (
+                <div className="bezel p-3 text-[11px] text-espresso-muted">
+                  <strong className="text-espresso">Auto-assignment:</strong> If you pick a category with a default team,
+                  the request will be routed to them automatically and the team lead will be notified.
+                </div>
+              )}
             </div>
 
             <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">

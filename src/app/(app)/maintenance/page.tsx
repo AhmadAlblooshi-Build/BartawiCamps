@@ -7,6 +7,7 @@ import { Plus, Wrench } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { MaintIntakeModal } from '@/components/maintenance/MaintIntakeModal'
 import { motion } from 'motion/react'
+import { fadeIn, slideUp } from '@/lib/motion'
 import Link from 'next/link'
 
 export default function MaintenancePage() {
@@ -51,11 +52,16 @@ export default function MaintenancePage() {
           <div className="text-[13px] font-medium text-espresso">No maintenance requests in this view</div>
         </div>
       ) : (
-        <div className="space-y-3">
+        <motion.div
+          className="space-y-3"
+          initial="hidden"
+          animate="visible"
+          variants={fadeIn}
+        >
           {data.data.map((m: any, i: number) => (
             <motion.div key={m.id}
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: i * 0.03, ease: [0.16, 1, 0.3, 1] }}
+              variants={slideUp}
+              transition={{ delay: Math.min(i * 0.04, 0.32) }}
               className="bezel p-4 flex items-start gap-3">
               <PriorityBar priority={m.priority} />
               <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 grid place-items-center shrink-0">
@@ -70,14 +76,18 @@ export default function MaintenancePage() {
                 <div className="text-[12px] text-espresso-soft line-clamp-2">{m.description}</div>
                 <div className="flex items-center gap-3 mt-2 text-[10px] text-espresso-subtle flex-wrap">
                   {m.room && <span>Room <span className="font-mono tabular text-espresso">{m.room.room_number}</span></span>}
-                  {m.assigned_team && <span>Team · <span className="text-espresso">{m.assigned_team.name}</span></span>}
+                  {m.assigned_team && (
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-medium bg-teal-pale text-teal">
+                      {m.assigned_team.name}
+                    </span>
+                  )}
                   {m.assigned_user && <span>Assignee · <span className="text-espresso">{m.assigned_user.full_name}</span></span>}
                   <span>{formatDateTime(m.created_at)}</span>
                 </div>
               </div>
             </motion.div>
           ))}
-        </div>
+        </motion.div>
       )}
 
       {intakeOpen && <MaintIntakeModal onClose={() => setIntakeOpen(false)} />}
@@ -92,11 +102,11 @@ function PriorityBar({ priority }: { priority: string }) {
 
 function StatusChip({ status }: { status: string }) {
   const map: Record<string, string> = {
-    open:        'bg-rust-pale text-rust',
-    assigned:    'bg-amber-50 text-amber-600',
-    in_progress: 'bg-ochre-pale text-ochre',
-    blocked:     'bg-plum-pale text-plum',
-    resolved:    'bg-teal-pale text-teal',
+    open:        'bg-amber-50 text-amber-600',
+    assigned:    'bg-teal-pale text-teal',
+    in_progress: 'bg-plum-pale text-plum',
+    blocked:     'bg-rust-pale text-rust',
+    resolved:    'bg-sand-300 text-espresso-muted',
     closed:      'bg-sand-100 text-espresso-muted',
     cancelled:   'bg-sand-100 text-espresso-subtle',
   }

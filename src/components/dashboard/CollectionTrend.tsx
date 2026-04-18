@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { endpoints } from '@/lib/api'
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, CartesianGrid } from 'recharts'
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, CartesianGrid, Area, AreaChart } from 'recharts'
 import { formatAED, formatPct, getCurrentMonthYear, MONTHS, cn } from '@/lib/utils'
 import { motion } from 'motion/react'
 
@@ -67,25 +67,36 @@ export function CollectionTrend() {
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             {mode === 'rate' ? (
-              <LineChart data={trend} margin={{ top: 10, right: 12, bottom: 0, left: -10 }}>
-                <CartesianGrid vertical={false} stroke="#E8DFD1" strokeDasharray="2 3" />
-                <XAxis dataKey="label" stroke="#6A6159" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="#6A6159" fontSize={11} tickLine={false} axisLine={false} domain={[50, 100]} tickFormatter={v => `${v}%`} />
-                <Tooltip content={<TrendTooltip mode="rate" />} />
+              <AreaChart data={trend} margin={{ top: 10, right: 12, bottom: 0, left: -10 }}>
+                <defs>
+                  <linearGradient id="amberGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#B8883D" stopOpacity={0.1}/>
+                    <stop offset="95%" stopColor="#B8883D" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="#E8DFD3" strokeDasharray="2 3" />
+                <XAxis dataKey="label" stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} />
+                <YAxis stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} domain={[50, 100]} tickFormatter={v => `${v}%`} />
+                <Tooltip content={<TrendTooltip mode="rate" />} cursor={{ stroke: '#D6CFC5', strokeWidth: 1, strokeDasharray: '4 4' }} />
                 <ReferenceLine y={95} stroke="#1E4D52" strokeDasharray="3 3" strokeOpacity={0.4} />
-                <Line type="monotone" dataKey="rate" stroke="#B8883D" strokeWidth={2.5}
-                  dot={{ r: 3, fill: '#B8883D', strokeWidth: 0 }}
-                  activeDot={{ r: 5, fill: '#B8883D', stroke: 'white', strokeWidth: 2 }}
+                <Area type="monotone" dataKey="rate" stroke="#B8883D" strokeWidth={2} fill="url(#amberGradient)"
+                  dot={false}
+                  activeDot={{ r: 4, fill: '#B8883D', strokeWidth: 0 }}
+                  isAnimationActive={true}
+                  animationDuration={1200}
+                  animationEasing="ease-out"
                 />
-              </LineChart>
+              </AreaChart>
             ) : (
               <LineChart data={trend} margin={{ top: 10, right: 12, bottom: 0, left: -10 }}>
-                <CartesianGrid vertical={false} stroke="#E8DFD1" strokeDasharray="2 3" />
-                <XAxis dataKey="label" stroke="#6A6159" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="#6A6159" fontSize={11} tickLine={false} axisLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip content={<TrendTooltip mode="amount" />} />
-                <Line type="monotone" dataKey="rent" stroke="#1A1816" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="paid" stroke="#1E4D52" strokeWidth={2} dot={false} />
+                <CartesianGrid vertical={false} stroke="#E8DFD3" strokeDasharray="2 3" />
+                <XAxis dataKey="label" stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} />
+                <YAxis stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
+                <Tooltip content={<TrendTooltip mode="amount" />} cursor={{ stroke: '#D6CFC5', strokeWidth: 1, strokeDasharray: '4 4' }} />
+                <Line type="monotone" dataKey="rent" stroke="#1A1816" strokeWidth={2} dot={false}
+                  isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
+                <Line type="monotone" dataKey="paid" stroke="#1E4D52" strokeWidth={2} dot={false}
+                  isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
               </LineChart>
             )}
           </ResponsiveContainer>
@@ -101,7 +112,7 @@ function TrendTooltip({ active, payload, mode }: any) {
   if (!active || !payload?.length) return null
   const p = payload[0].payload
   return (
-    <div className="bg-white rounded-lg shadow-raise-3 p-3 border border-[color:var(--color-border-subtle)] min-w-[180px]">
+    <div className="bg-sand-50 rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_1px_3px_rgba(26,24,22,0.04),0_4px_12px_rgba(26,24,22,0.03)] p-3 border border-sand-200 min-w-[180px]">
       <div className="text-[11px] font-medium text-espresso-muted mb-1.5">{p.fullLabel}</div>
       {mode === 'rate' ? (
         <>

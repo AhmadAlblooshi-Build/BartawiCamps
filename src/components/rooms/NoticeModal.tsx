@@ -5,8 +5,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { toast } from 'sonner'
 import { motion } from 'motion/react'
-import { X, FileText } from '@phosphor-icons/react'
+import { X, FileText, User } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
+import { scaleUp } from '@/lib/motion'
 
 export function NoticeModal({ room, onClose }: { room: any; onClose: () => void }) {
   const today = new Date().toISOString().slice(0, 10)
@@ -37,21 +38,44 @@ export function NoticeModal({ room, onClose }: { room: any; onClose: () => void 
         <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+            variants={scaleUp}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
             className="fixed left-1/2 top-[12vh] -translate-x-1/2 w-[520px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-raise-4 z-50 overflow-hidden"
           >
             <Dialog.Title className="sr-only">Give notice</Dialog.Title>
             <header className="flex items-center justify-between px-6 h-14 border-b border-[color:var(--color-border-subtle)]">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-ochre-pale text-ochre grid place-items-center"><Icon icon={FileText} size={14} /></div>
-                <div className="display-xs">Give notice · Room {room.room_number}</div>
+                <div className="display-xs">Record Notice to Vacate</div>
               </div>
               <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100"><Icon icon={X} size={14} /></button>
             </header>
             <div className="px-6 py-5 space-y-4">
+              {/* Tenant info summary card */}
+              <div className="bezel p-4 bg-sand-50">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-espresso text-sand-50 grid place-items-center shrink-0">
+                    <Icon icon={User} size={14} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-medium text-espresso mb-0.5">
+                      {room.current_occupancy?.individual?.full_name || room.current_occupancy?.individual?.owner_name || 'Tenant'}
+                    </div>
+                    <div className="text-[11px] text-espresso-muted">
+                      Room {room.room_number}
+                      {room.current_occupancy?.company_name && <> · {room.current_occupancy.company_name}</>}
+                    </div>
+                    {room.current_occupancy?.check_in_date && (
+                      <div className="text-[11px] text-espresso-muted mt-1">
+                        Checked in {new Date(room.current_occupancy.check_in_date).toLocaleDateString('en-AE', { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="text-[13px] text-espresso-soft leading-relaxed">
                 Stage 1 of 2. Records that the tenant has given notice to vacate. Room will show as <strong>Vacating</strong> until you complete the checkout on or after the vacate date.
               </div>

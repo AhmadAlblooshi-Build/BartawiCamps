@@ -1,15 +1,15 @@
 'use client'
-import { useState } from 'react'
+import React, { useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { motion } from 'motion/react'
-import { ArrowRight, Warning } from '@phosphor-icons/react'
+import { ArrowRight, Warning, CircleNotch } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { endpoints } from '@/lib/api'
 import { useSession } from '@/lib/auth'
-import { ease } from '@/lib/motion'
+import { ease, useCountUp } from '@/lib/motion'
 
 const schema = z.object({
   email: z.string().email('Enter a valid email'),
@@ -22,6 +22,21 @@ export function LoginForm() {
   const search = useSearchParams()
   const setSession = useSession(s => s.setSession)
   const [err, setErr] = useState<string | null>(search.get('expired') ? 'Your session expired. Sign in again.' : null)
+  const [showErrorShake, setShowErrorShake] = useState(false)
+
+  // Count-up animations for stats
+  const roomsCount = useCountUp(453, 800)
+  const campsCount = useCountUp(2, 800)
+  const recordsCount = useCountUp(1359, 800)
+
+  // Parallax mouse tracking
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width - 0.5) * 10
+    const y = ((e.clientY - rect.top) / rect.height - 0.5) * 10
+    setMousePos({ x, y })
+  }, [])
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -31,6 +46,7 @@ export function LoginForm() {
   const onSubmit = async (data: FormData) => {
     try {
       setErr(null)
+      setShowErrorShake(false)
       const res = await endpoints.login(data.email, data.password)
       setSession(res.token, {
         id: res.user.id,
@@ -42,6 +58,9 @@ export function LoginForm() {
       router.replace(next)
     } catch (e: any) {
       setErr(e.message || 'Login failed')
+      setShowErrorShake(true)
+      // Reset shake animation after it completes
+      setTimeout(() => setShowErrorShake(false), 900)
     }
   }
 
@@ -52,11 +71,18 @@ export function LoginForm() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.8, ease }}
+        onMouseMove={handleMouseMove}
         className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden bg-gradient-to-br from-sand-100 via-sand-50 to-amber-50/30"
       >
-        {/* Decorative geometric anchor */}
+        {/* Decorative geometric anchor with parallax */}
         <div className="absolute inset-0 pointer-events-none">
-          <svg viewBox="0 0 800 1000" className="w-full h-full opacity-[0.04]" preserveAspectRatio="xMidYMid slice">
+          <motion.svg
+            viewBox="0 0 800 1000"
+            className="w-full h-full opacity-[0.04]"
+            preserveAspectRatio="xMidYMid slice"
+            animate={{ x: mousePos.x, y: mousePos.y }}
+            transition={{ type: 'spring', stiffness: 150, damping: 20 }}
+          >
             <defs>
               <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
                 <path d="M60 0L0 0 0 60" fill="none" stroke="#1A1816" strokeWidth="0.5" />
@@ -66,7 +92,7 @@ export function LoginForm() {
             <circle cx="400" cy="500" r="320" fill="none" stroke="#B8883D" strokeWidth="0.8" />
             <circle cx="400" cy="500" r="240" fill="none" stroke="#B8883D" strokeWidth="0.6" />
             <circle cx="400" cy="500" r="160" fill="none" stroke="#B8883D" strokeWidth="0.4" />
-          </svg>
+          </motion.svg>
         </div>
 
         <div className="relative z-10 flex items-center gap-3">
@@ -87,7 +113,12 @@ export function LoginForm() {
         >
           <div className="eyebrow mb-4">Phase 1 · Camps</div>
           <h1 className="display-xl mb-6">
-            Operations, <span className="text-amber-500">precisely.</span>
+            Operations, <motion.span
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.4, duration: 0.2 }}
+              className="italic"
+            >precisely.</motion.span>
           </h1>
           <p className="text-[15px] leading-relaxed text-espresso-soft max-w-[440px]">
             The operating system for Bartawi&rsquo;s camp properties. Real-time occupancy,
@@ -96,11 +127,11 @@ export function LoginForm() {
         </motion.div>
 
         <div className="relative z-10 flex items-center gap-6 text-[11px] font-body text-espresso-subtle">
-          <div><span className="tabular font-mono text-espresso">453</span> rooms</div>
+          <div><span className="tabular font-mono text-espresso">{roomsCount.toLocaleString()}</span> rooms</div>
           <div className="w-px h-3 bg-espresso-subtle/30" />
-          <div><span className="tabular font-mono text-espresso">2</span> camps</div>
+          <div><span className="tabular font-mono text-espresso">{campsCount}</span> camps</div>
           <div className="w-px h-3 bg-espresso-subtle/30" />
-          <div><span className="tabular font-mono text-espresso">1,359</span> records tracked</div>
+          <div><span className="tabular font-mono text-espresso">{recordsCount.toLocaleString()}</span> records tracked</div>
         </div>
       </motion.section>
 
@@ -124,7 +155,7 @@ export function LoginForm() {
                 type="email"
                 autoComplete="email"
                 autoFocus
-                className="w-full h-11 px-4 bg-white border border-[color:var(--color-border-medium)] rounded-lg font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber-500 focus:outline-none transition-colors"
+                className="w-full h-11 px-4 bg-white border border-[color:var(--color-border-medium)] rounded-lg font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber focus:ring-2 focus:ring-amber/20 focus:outline-none transition-all duration-200"
                 placeholder="ahmad@bartawi.com"
               />
             </Field>
@@ -134,28 +165,51 @@ export function LoginForm() {
                 {...register('password')}
                 type="password"
                 autoComplete="current-password"
-                className="w-full h-11 px-4 bg-white border border-[color:var(--color-border-medium)] rounded-lg font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber-500 focus:outline-none transition-colors"
+                className="w-full h-11 px-4 bg-white border border-[color:var(--color-border-medium)] rounded-lg font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber focus:ring-2 focus:ring-amber/20 focus:outline-none transition-all duration-200"
                 placeholder="••••••••••"
               />
             </Field>
 
             {err && (
-              <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-rust-pale border border-rust/20 text-[12px] text-rust">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: 1,
+                  x: showErrorShake ? [0, -4, 4, -4, 4, -2, 2, 0] : 0
+                }}
+                transition={{
+                  opacity: { duration: 0.2 },
+                  x: { duration: 0.3, times: [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 1] }
+                }}
+                className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-rust-pale border border-rust/20 text-[12px] text-rust"
+              >
                 <Icon icon={Warning} size={14} className="mt-0.5 shrink-0" />
                 <div>{err}</div>
-              </div>
+              </motion.div>
             )}
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="group w-full h-11 flex items-center justify-center gap-2 px-4 rounded-full bg-espresso text-sand-50 font-body text-[13px] font-medium hover:bg-espresso-soft transition-all duration-300 ease-spring active:scale-[0.98] disabled:opacity-60"
+              className="group w-full h-11 flex items-center justify-center gap-2 px-4 rounded-full bg-espresso text-sand-50 font-body text-[13px] font-medium hover:bg-espresso-soft transition-all duration-300 ease-spring active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"
             >
-              {isSubmitting ? 'Signing in…' : 'Sign in'}
-              {!isSubmitting && (
-                <span className="w-6 h-6 rounded-full bg-sand-50/10 grid place-items-center group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">
-                  <Icon icon={ArrowRight} size={12} />
-                </span>
+              {isSubmitting ? (
+                <>
+                  <motion.span
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                  >
+                    <Icon icon={CircleNotch} size={16} />
+                  </motion.span>
+                  <span>Signing in…</span>
+                </>
+              ) : (
+                <>
+                  Sign in
+                  <span className="w-6 h-6 rounded-full bg-sand-50/10 grid place-items-center group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">
+                    <Icon icon={ArrowRight} size={12} />
+                  </span>
+                </>
               )}
             </button>
           </form>
@@ -170,9 +224,13 @@ export function LoginForm() {
 }
 
 function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+  const [isFocused, setIsFocused] = React.useState(false)
+
   return (
-    <div className="flex flex-col gap-2">
-      <label className="font-body text-[11px] font-medium tracking-wide uppercase text-espresso-muted">{label}</label>
+    <div className="flex flex-col gap-2" onFocus={() => setIsFocused(true)} onBlur={() => setIsFocused(false)}>
+      <label className={`font-body text-[11px] font-medium tracking-wide uppercase transition-colors duration-200 ${isFocused ? 'text-amber' : 'text-espresso-muted'}`}>
+        {label}
+      </label>
       {children}
       {error && <div className="text-[11px] text-rust">{error}</div>}
     </div>

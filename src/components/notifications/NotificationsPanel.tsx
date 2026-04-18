@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { formatRelative, cn } from '@/lib/utils'
@@ -19,6 +19,25 @@ const TYPE_STYLES: Record<string, { icon: any; color: string; bg: string }> = {
   default:            { icon: Warning,   color: 'text-espresso-muted', bg: 'bg-sand-100' },
 }
 
+function getDateGroup(dateStr: string): 'today' | 'yesterday' | 'this_week' | 'older' {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffTime = now.getTime() - date.getTime()
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
+
+  if (diffDays === 0) return 'today'
+  if (diffDays === 1) return 'yesterday'
+  if (diffDays <= 7) return 'this_week'
+  return 'older'
+}
+
+const DATE_GROUP_LABELS = {
+  today: 'Today',
+  yesterday: 'Yesterday',
+  this_week: 'This Week',
+  older: 'Older',
+}
+
 export function NotificationsPanel() {
   const [tab, setTab] = useState<Tab>('unread')
   const qc = useQueryClient()
@@ -34,6 +53,22 @@ export function NotificationsPanel() {
       qc.invalidateQueries({ queryKey: ['notifications'] })
     },
   })
+
+  // Group notifications by date
+  const grouped = useMemo(() => {
+    if (!data?.data) return {}
+    const groups: Record<string, any[]> = {
+      today: [],
+      yesterday: [],
+      this_week: [],
+      older: [],
+    }
+    data.data.forEach((n: any) => {
+      const group = getDateGroup(n.created_at)
+      groups[group].push(n)
+    })
+    return groups
+  }, [data])
 
   return (
     <div className="flex flex-col max-h-[70vh]">
@@ -64,8 +99,20 @@ export function NotificationsPanel() {
             <div className="text-[11px] text-espresso-muted mt-1">No unread notifications.</div>
           </div>
         ) : (
-          <div className="divide-y divide-[color:var(--color-border-subtle)]">
-            {data.data.map((n: any) => <NotificationItem key={n.id} notif={n} />)}
+          <div className="space-y-4">
+            {(['today', 'yesterday', 'this_week', 'older'] as const).map(group => {
+              if (!grouped[group] || grouped[group].length === 0) return null
+              return (
+                <div key={group}>
+                  <div className="px-5 py-2 bg-sand-50 sticky top-0 z-10">
+                    <div className="eyebrow text-espresso-muted">{DATE_GROUP_LABELS[group]}</div>
+                  </div>
+                  <div className="divide-y divide-[color:var(--color-border-subtle)]">
+                    {grouped[group].map((n: any) => <NotificationItem key={n.id} notif={n} />)}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -84,6 +131,7 @@ export function NotificationsPanel() {
 
 function NotificationItem({ notif }: { notif: any }) {
   const [snoozeDays, setSnoozeDays] = useState(7)
+  const [showSnoozePicker, setShowSnoozePicker] = useState(false)
   const qc = useQueryClient()
   const style = TYPE_STYLES[notif.type] || TYPE_STYLES.default
 
@@ -96,6 +144,7 @@ function NotificationItem({ notif }: { notif: any }) {
     mutationFn: (days: number) => endpoints.snooze(notif.id, days),
     onSuccess: () => {
       toast.success(`Snoozed for ${snoozeDays} days`)
+      setShowSnoozePicker(false)
       qc.invalidateQueries({ queryKey: ['notifications'] })
     },
   })
@@ -115,7 +164,7 @@ function NotificationItem({ notif }: { notif: any }) {
     : null
 
   return (
-    <div className={cn('px-5 py-3', !notif.is_read && 'bg-amber-50/30')}>
+    <div className={cn('px-5 py-3 transition-colors', !notif.is_read ? 'bg-sand-100' : 'bg-transparent')}>
       <div className="flex items-start gap-3">
         <div className={`w-8 h-8 rounded-lg grid place-items-center shrink-0 ${style.bg}`}>
           <Icon icon={style.icon} size={13} className={style.color} />
@@ -128,31 +177,45 @@ function NotificationItem({ notif }: { notif: any }) {
           <div className="text-[11px] text-espresso-muted mt-0.5">{notif.message}</div>
           <div className="text-[10px] text-espresso-subtle mt-1">{formatRelative(notif.created_at)}</div>
           <div className="flex items-center gap-1 mt-2 flex-wrap">
+            {!notif.is_read && (
+              <button onClick={() => markRead.mutate()} className="px-2 py-1 rounded text-[10px] font-medium bg-teal-pale text-teal hover:bg-teal hover:text-white transition-colors flex items-center gap-1">
+                <Icon icon={CheckCircle} size={10} /> Mark read
+              </button>
+            )}
+            {showSnoozePicker ? (
+              <div className="flex items-center gap-0.5 bg-sand-50 rounded p-0.5">
+                {[1, 3, 7, 14, 30].map(d => (
+                  <button
+                    key={d}
+                    onClick={() => {
+                      setSnoozeDays(d)
+                      snooze.mutate(d)
+                    }}
+                    disabled={snooze.isPending}
+                    className="px-2 py-1 rounded text-[10px] font-medium bg-white text-espresso hover:bg-amber-50 hover:text-amber-600 transition-colors font-mono tabular"
+                  >
+                    {d}d
+                  </button>
+                ))}
+                <button
+                  onClick={() => setShowSnoozePicker(false)}
+                  className="px-2 py-1 rounded text-[10px] font-medium text-espresso-subtle hover:text-espresso transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowSnoozePicker(true)}
+                className="px-2 py-1 rounded text-[10px] font-medium bg-sand-100 text-espresso-muted hover:bg-sand-200 transition-colors flex items-center gap-1"
+              >
+                <Icon icon={Clock} size={10} /> Snooze
+              </button>
+            )}
             {href && (
               <Link href={href} className="px-2 py-1 rounded text-[10px] font-medium bg-sand-100 text-espresso hover:bg-sand-200 transition-colors">
                 Open
               </Link>
-            )}
-            {notif.resource_type === 'contract' && (
-              <button onClick={() => ackAlert.mutate()} disabled={ackAlert.isPending}
-                className="px-2 py-1 rounded text-[10px] font-medium bg-teal-pale text-teal hover:bg-teal hover:text-white transition-colors flex items-center gap-1">
-                <Icon icon={CheckCircle} size={10} /> Acknowledge
-              </button>
-            )}
-            <div className="flex items-center gap-0.5">
-              <select value={snoozeDays} onChange={e => setSnoozeDays(Number(e.target.value))}
-                className="px-1.5 py-1 rounded text-[10px] font-medium bg-sand-100 text-espresso-muted cursor-pointer outline-none border-0 tabular font-mono">
-                {[1, 3, 7, 14, 30].map(d => <option key={d} value={d}>{d}d</option>)}
-              </select>
-              <button onClick={() => snooze.mutate(snoozeDays)} disabled={snooze.isPending}
-                className="px-2 py-1 rounded text-[10px] font-medium bg-sand-100 text-espresso-muted hover:bg-sand-200 transition-colors flex items-center gap-1">
-                <Icon icon={Clock} size={10} /> Snooze
-              </button>
-            </div>
-            {!notif.is_read && (
-              <button onClick={() => markRead.mutate()} className="px-2 py-1 rounded text-[10px] font-medium text-espresso-subtle hover:text-espresso transition-colors">
-                Mark read
-              </button>
             )}
           </div>
         </div>

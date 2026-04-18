@@ -4,22 +4,59 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { toast } from 'sonner'
 import { cn, formatRelative } from '@/lib/utils'
-import { Plus, Pencil, ShieldStar, User as UserIcon } from '@phosphor-icons/react'
+import { Plus, Pencil, ShieldStar, User as UserIcon, CaretDown, WarningCircle } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import * as Dialog from '@radix-ui/react-dialog'
-import { motion } from 'motion/react'
+import { motion, AnimatePresence } from 'motion/react'
+import { scaleUp, slideUp, staggerContainer, staggerItem } from '@/lib/motion'
 
-// 27 permissions grouped into categories
-const PERMISSIONS: Record<string, { key: string; label: string }[]> = {
-  Rooms:         [{ key: 'rooms:view', label: 'View rooms' }, { key: 'rooms:edit', label: 'Edit rooms' }, { key: 'rooms:admin', label: 'Admin' }],
-  Occupancy:     [{ key: 'occupancy:checkin', label: 'Check-in' }, { key: 'occupancy:notice', label: 'Give notice' }, { key: 'occupancy:checkout', label: 'Complete checkout' }],
-  Contracts:     [{ key: 'contracts:view', label: 'View' }, { key: 'contracts:renew', label: 'Renew' }, { key: 'contracts:flag_legal', label: 'Flag legal' }, { key: 'contracts:notes', label: 'Manage notes' }],
-  Payments:      [{ key: 'payments:view', label: 'View' }, { key: 'payments:log', label: 'Log payment' }, { key: 'payments:refund', label: 'Refund' }],
-  Deposits:      [{ key: 'deposits:view', label: 'View' }, { key: 'deposits:collect', label: 'Collect' }, { key: 'deposits:refund', label: 'Refund/forfeit' }],
-  Complaints:    [{ key: 'complaints:view', label: 'View' }, { key: 'complaints:resolve', label: 'Resolve' }],
-  Maintenance:   [{ key: 'maintenance:view', label: 'View' }, { key: 'maintenance:assign', label: 'Assign' }, { key: 'maintenance:resolve', label: 'Resolve' }],
-  Reports:       [{ key: 'reports:view', label: 'View' }, { key: 'reports:export', label: 'Export PDF' }],
-  Admin:         [{ key: 'admin:users', label: 'Manage users' }, { key: 'admin:property_types', label: 'Manage types' }, { key: 'admin:teams', label: 'Manage teams' }, { key: 'admin:settings', label: 'System settings' }],
+// 27 permissions grouped into 9 categories
+const PERMISSIONS: Record<string, { key: string; label: string; description: string }[]> = {
+  Rooms:         [
+    { key: 'rooms:view', label: 'View rooms', description: 'View all room information' },
+    { key: 'rooms:edit', label: 'Edit rooms', description: 'Modify room details and assignments' },
+    { key: 'rooms:admin', label: 'Admin', description: 'Full administrative access to rooms' }
+  ],
+  Occupancy:     [
+    { key: 'occupancy:checkin', label: 'Check-in', description: 'Create new leases and check in tenants' },
+    { key: 'occupancy:notice', label: 'Give notice', description: 'Record notice to vacate' },
+    { key: 'occupancy:checkout', label: 'Complete checkout', description: 'Process final checkout and settlements' }
+  ],
+  Contracts:     [
+    { key: 'contracts:view', label: 'View', description: 'View contract details' },
+    { key: 'contracts:renew', label: 'Renew', description: 'Renew existing contracts' },
+    { key: 'contracts:flag_legal', label: 'Flag legal', description: 'Mark contracts for legal review' },
+    { key: 'contracts:notes', label: 'Manage notes', description: 'Add and edit contract notes' }
+  ],
+  Payments:      [
+    { key: 'payments:view', label: 'View', description: 'View payment history' },
+    { key: 'payments:log', label: 'Log payment', description: 'Record new payments' },
+    { key: 'payments:refund', label: 'Refund', description: 'Process payment refunds' }
+  ],
+  Deposits:      [
+    { key: 'deposits:view', label: 'View', description: 'View deposit information' },
+    { key: 'deposits:collect', label: 'Collect', description: 'Collect security deposits' },
+    { key: 'deposits:refund', label: 'Refund/forfeit', description: 'Process deposit refunds or forfeits' }
+  ],
+  Complaints:    [
+    { key: 'complaints:view', label: 'View', description: 'View complaints and issues' },
+    { key: 'complaints:resolve', label: 'Resolve', description: 'Mark complaints as resolved' }
+  ],
+  Maintenance:   [
+    { key: 'maintenance:view', label: 'View', description: 'View maintenance requests' },
+    { key: 'maintenance:assign', label: 'Assign', description: 'Assign requests to teams' },
+    { key: 'maintenance:resolve', label: 'Resolve', description: 'Mark requests as complete' }
+  ],
+  Reports:       [
+    { key: 'reports:view', label: 'View', description: 'Access reporting dashboard' },
+    { key: 'reports:export', label: 'Export PDF', description: 'Generate and download PDF reports' }
+  ],
+  Admin:         [
+    { key: 'admin:users', label: 'Manage users', description: 'Create and manage user accounts' },
+    { key: 'admin:property_types', label: 'Manage types', description: 'Manage property type classifications' },
+    { key: 'admin:teams', label: 'Manage teams', description: 'Create and manage teams' },
+    { key: 'admin:settings', label: 'System settings', description: 'Access system configuration' }
+  ],
 }
 
 export default function UsersPage() {
@@ -31,7 +68,7 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-end justify-between animate-rise flex-wrap gap-4">
+      <motion.div variants={slideUp} initial="hidden" animate="visible" className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <div className="eyebrow mb-2">Admin</div>
           <h1 className="display-lg">Users & roles</h1>
@@ -39,26 +76,26 @@ export default function UsersPage() {
             Manage staff access, permissions, and role assignments.
           </p>
         </div>
-        <button onClick={() => setCreating(true)}
-          className="h-10 px-4 rounded-full bg-espresso text-sand-50 text-[12px] font-medium hover:bg-espresso-soft transition-all flex items-center gap-2 active:scale-[0.98]">
+        <motion.button onClick={() => setCreating(true)} whileTap={{ scale: 0.97 }}
+          className="h-10 px-4 rounded-full bg-espresso text-sand-50 text-[12px] font-medium hover:bg-espresso-soft transition-all flex items-center gap-2">
           <Icon icon={Plus} size={13} /> Invite user
-        </button>
-      </div>
+        </motion.button>
+      </motion.div>
 
       {/* Roles strip */}
-      <div>
+      <motion.div variants={slideUp} initial="hidden" animate="visible">
         <div className="eyebrow mb-3">Roles</div>
         <div className="flex items-center gap-2 flex-wrap">
           {roles?.data?.map((r: any) => (
-            <div key={r.id} className="bezel px-4 py-2 flex items-center gap-2">
+            <motion.div key={r.id} whileHover={{ y: -1 }} className="bezel px-4 py-2 flex items-center gap-2">
               <Icon icon={ShieldStar} size={12} className="text-amber-600" />
               <span className="text-[12px] font-medium text-espresso">{r.name}</span>
               <span className="text-[10px] font-mono tabular text-espresso-subtle">· {r.permissions?.length || 0} perms</span>
               <span className="text-[10px] font-mono tabular text-espresso-subtle">· {r.user_count || 0} users</span>
-            </div>
+            </motion.div>
           ))}
         </div>
-      </div>
+      </motion.div>
 
       {/* Users list */}
       <div>
@@ -66,7 +103,7 @@ export default function UsersPage() {
         {!users ? (
           <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 skeleton-shimmer rounded-lg" />)}</div>
         ) : (
-          <div className="bezel overflow-hidden">
+          <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="bezel overflow-hidden">
             <div className="grid grid-cols-[1fr_1fr_180px_140px_120px] gap-0 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-50">
               <div className="eyebrow">User</div>
               <div className="eyebrow">Email</div>
@@ -76,9 +113,7 @@ export default function UsersPage() {
             </div>
             <div className="divide-y divide-[color:var(--color-border-subtle)]">
               {users.data.map((u: any, i: number) => (
-                <motion.div key={u.id}
-                  initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4, delay: i * 0.03 }}
+                <motion.div key={u.id} variants={staggerItem}
                   className="grid grid-cols-[1fr_1fr_180px_140px_120px] gap-0 px-4 py-3 items-center hover:bg-sand-50 transition-colors">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-espresso text-sand-50 grid place-items-center text-[11px] font-semibold">
@@ -90,37 +125,44 @@ export default function UsersPage() {
                     </div>
                   </div>
                   <div className="text-[12px] text-espresso-muted font-mono tabular truncate pr-3">{u.email}</div>
-                  <div className="text-[12px] text-espresso">{u.role?.name || '—'}</div>
+                  <div>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 text-[11px] font-medium">
+                      <Icon icon={ShieldStar} size={10} />
+                      {u.role?.name || '—'}
+                    </span>
+                  </div>
                   <div className="text-[11px] text-espresso-subtle">{u.last_login_at ? formatRelative(u.last_login_at) : 'Never'}</div>
                   <div className="text-right">
-                    <button onClick={() => setEditing(u)}
+                    <motion.button onClick={() => setEditing(u)} whileTap={{ scale: 0.95 }}
                       className="w-7 h-7 rounded-md grid place-items-center text-espresso-muted hover:bg-sand-100 transition-colors">
                       <Icon icon={Pencil} size={11} />
-                    </button>
+                    </motion.button>
                   </div>
                 </motion.div>
               ))}
             </div>
-          </div>
+          </motion.div>
         )}
       </div>
 
       {(creating || editing) && (
-        <UserFormModal initial={editing} roles={roles?.data || []} onClose={() => { setEditing(null); setCreating(false) }} />
+        <InviteUserModal initial={editing} roles={roles?.data || []} onClose={() => { setEditing(null); setCreating(false) }} />
       )}
     </div>
   )
 }
 
-function UserFormModal({ initial, roles, onClose }: { initial: any | null; roles: any[]; onClose: () => void }) {
+function InviteUserModal({ initial, roles, onClose }: { initial: any | null; roles: any[]; onClose: () => void }) {
   const [fullName, setFullName] = useState(initial?.full_name || '')
   const [email, setEmail] = useState(initial?.email || '')
   const [roleId, setRoleId] = useState(initial?.role_id || roles[0]?.id || '')
   const [isActive, setIsActive] = useState(initial?.is_active ?? true)
   const [customPerms, setCustomPerms] = useState<string[]>(initial?.custom_permissions || [])
-  const [showCustom, setShowCustom] = useState(false)
+  const [expandedCategories, setExpandedCategories] = useState<string[]>([])
 
   const qc = useQueryClient()
+  const { data: currentUser } = useQuery({ queryKey: ['me'], queryFn: () => endpoints.me() })
+
   const mutation = useMutation({
     mutationFn: () => initial
       ? endpoints.updateUser(initial.id, { full_name: fullName, role_id: roleId, is_active: isActive, custom_permissions: customPerms })
@@ -134,22 +176,26 @@ function UserFormModal({ initial, roles, onClose }: { initial: any | null; roles
   })
 
   const togglePerm = (key: string) => setCustomPerms(p => p.includes(key) ? p.filter(x => x !== key) : [...p, key])
+  const toggleCategory = (cat: string) => setExpandedCategories(c => c.includes(cat) ? c.filter(x => x !== cat) : [...c, cat])
+
+  const countSelected = (cat: string) => PERMISSIONS[cat].filter(p => customPerms.includes(p.key)).length
+  const isSelf = initial && currentUser?.id === initial.id
 
   return (
     <Dialog.Root open onOpenChange={o => !o && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
+        <Dialog.Overlay asChild>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50" />
+        </Dialog.Overlay>
         <Dialog.Content asChild>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="fixed left-1/2 top-[8vh] -translate-x-1/2 w-[640px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-white rounded-2xl shadow-raise-4 z-50 overflow-hidden flex flex-col"
-          >
+          <motion.div variants={scaleUp} initial="hidden" animate="visible" exit="exit"
+            className="fixed left-1/2 top-[8vh] -translate-x-1/2 w-[720px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-white rounded-2xl shadow-raise-4 z-50 overflow-hidden flex flex-col">
             <Dialog.Title className="sr-only">{initial ? 'Edit user' : 'Invite user'}</Dialog.Title>
-            <header className="px-6 h-14 border-b border-[color:var(--color-border-subtle)] flex items-center">
+            <header className="px-6 h-14 border-b border-[color:var(--color-border-subtle)] flex items-center shrink-0">
               <div className="display-xs">{initial ? 'Edit user' : 'Invite user'}</div>
             </header>
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
               <div className="grid grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1.5">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Full name *</span>
@@ -170,48 +216,86 @@ function UserFormModal({ initial, roles, onClose }: { initial: any | null; roles
                 </label>
                 {initial && (
                   <label className="col-span-2 flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)} className="w-4 h-4 accent-amber-500" />
-                    <span className="text-[13px] text-espresso">Account active</span>
+                    <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)}
+                      disabled={isSelf}
+                      className="w-4 h-4 accent-amber-500 disabled:opacity-50 disabled:cursor-not-allowed" />
+                    <div>
+                      <span className="text-[13px] text-espresso">Account active</span>
+                      {isSelf && <span className="text-[11px] text-espresso-muted ml-2">(Can't deactivate yourself)</span>}
+                    </div>
                   </label>
                 )}
               </div>
 
+              {/* Permission override section */}
               {initial && (
-                <div>
-                  <button onClick={() => setShowCustom(v => !v)}
-                    className="eyebrow hover:text-espresso transition-colors">
-                    {showCustom ? '− Hide' : '+ Override'} permissions
-                  </button>
-                  {showCustom && (
-                    <div className="mt-3 bezel p-4 space-y-4">
-                      <div className="text-[11px] text-espresso-muted">
-                        Custom permissions are added on top of the role's default permissions. Leave empty to use role defaults.
-                      </div>
-                      {Object.entries(PERMISSIONS).map(([group, perms]) => (
-                        <div key={group}>
-                          <div className="eyebrow mb-2">{group}</div>
-                          <div className="grid grid-cols-2 gap-2">
-                            {perms.map(p => (
-                              <label key={p.key} className="flex items-center gap-2 cursor-pointer text-[12px]">
-                                <input type="checkbox" checked={customPerms.includes(p.key)} onChange={() => togglePerm(p.key)}
-                                  className="w-3.5 h-3.5 accent-amber-500" />
-                                <span>{p.label}</span>
-                              </label>
-                            ))}
-                          </div>
+                <div className="pt-3 border-t border-[color:var(--color-border-subtle)]">
+                  <div className="eyebrow mb-3">Override permissions (optional)</div>
+                  <div className="text-[11px] text-espresso-muted mb-4">
+                    Custom permissions are added on top of the role's default permissions. Leave empty to use role defaults.
+                  </div>
+                  <div className="space-y-2">
+                    {Object.entries(PERMISSIONS).map(([category, perms]) => {
+                      const isExpanded = expandedCategories.includes(category)
+                      const selected = countSelected(category)
+                      return (
+                        <div key={category} className="bezel overflow-hidden">
+                          <motion.button onClick={() => toggleCategory(category)} whileTap={{ scale: 0.995 }}
+                            className="w-full px-4 py-3 flex items-center justify-between hover:bg-sand-50 transition-colors">
+                            <div className="flex items-center gap-2">
+                              <motion.div animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                                <Icon icon={CaretDown} size={12} className="text-espresso-muted" />
+                              </motion.div>
+                              <span className="text-[13px] font-medium text-espresso">{category}</span>
+                              {selected > 0 && (
+                                <span className="px-2 py-0.5 rounded-full bg-teal text-white text-[10px] font-medium">
+                                  {selected}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-espresso-muted">{perms.length} permissions</span>
+                          </motion.button>
+                          <AnimatePresence>
+                            {isExpanded && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden border-t border-[color:var(--color-border-subtle)]">
+                                <div className="px-4 py-3 space-y-3 bg-sand-50">
+                                  {perms.map(p => (
+                                    <label key={p.key} className="flex items-start gap-3 cursor-pointer group">
+                                      <div className="relative flex items-center h-5">
+                                        <input type="checkbox" checked={customPerms.includes(p.key)} onChange={() => togglePerm(p.key)}
+                                          className="w-4 h-4 accent-teal cursor-pointer" />
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-[12px] font-medium text-espresso group-hover:text-teal transition-colors">{p.label}</div>
+                                        <div className="text-[11px] text-espresso-muted mt-0.5">{p.description}</div>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      )
+                    })}
+                  </div>
                 </div>
               )}
             </div>
-            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">
-              <button onClick={onClose} className="px-4 h-9 rounded-full text-[12px] font-medium text-espresso-muted hover:text-espresso">Cancel</button>
-              <button onClick={() => mutation.mutate()} disabled={!fullName || !email || !roleId || mutation.isPending}
+            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2 shrink-0">
+              <motion.button onClick={onClose} whileTap={{ scale: 0.97 }}
+                className="px-4 h-9 rounded-full text-[12px] font-medium text-espresso-muted hover:text-espresso">
+                Cancel
+              </motion.button>
+              <motion.button onClick={() => mutation.mutate()} disabled={!fullName || !email || !roleId || mutation.isPending} whileTap={{ scale: 0.97 }}
                 className="px-4 h-9 rounded-full bg-espresso text-sand-50 text-[12px] font-medium hover:bg-espresso-soft disabled:opacity-50 transition-all">
                 {mutation.isPending ? 'Saving…' : (initial ? 'Save' : 'Send invite')}
-              </button>
+              </motion.button>
             </footer>
           </motion.div>
         </Dialog.Content>

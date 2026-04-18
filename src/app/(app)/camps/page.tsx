@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { getCurrentMonthYear } from '@/lib/utils'
 import { CampCard } from '@/components/camps/CampCard'
+import { motion } from 'motion/react'
+import { staggerContainer } from '@/lib/motion'
 
 export default function CampsPage() {
   const { month, year } = getCurrentMonthYear()
@@ -24,11 +26,16 @@ export default function CampsPage() {
           <div className="h-80 skeleton-shimmer rounded-2xl" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <motion.div
+          className="grid grid-cols-1 md:grid-cols-2 gap-6"
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+        >
           {camps.data.map((camp: any, i: number) => (
-            <CampCard key={camp.id} camp={camp} month={month} year={year} delay={i * 0.1} />
+            <CampCard key={camp.id} camp={camp} month={month} year={year} delay={i * 0.08} />
           ))}
-        </div>
+        </motion.div>
       )}
     </div>
   )

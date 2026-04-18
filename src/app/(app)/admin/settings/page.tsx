@@ -4,8 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { Gear, Key, FlagBanner, Buildings } from '@phosphor-icons/react'
+import { Gear, Key, FlagBanner, Buildings, LockKey } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
+import { motion, AnimatePresence } from 'motion/react'
+import { slideUp, staggerContainer, staggerItem } from '@/lib/motion'
 
 type Tab = 'tenant' | 'features' | 'keys'
 
@@ -22,29 +24,31 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('tenant')
   return (
     <div className="space-y-8">
-      <div className="animate-rise">
+      <motion.div variants={slideUp} initial="hidden" animate="visible">
         <div className="eyebrow mb-2">Admin</div>
         <h1 className="display-lg">Settings</h1>
-      </div>
+      </motion.div>
 
-      <div className="flex gap-1 p-1 rounded-xl bg-sand-100 w-fit">
+      <motion.div variants={slideUp} initial="hidden" animate="visible" className="flex gap-1 p-1 rounded-xl bg-sand-100 w-fit">
         {([
           ['tenant',   Buildings,  'Tenant info'],
           ['features', FlagBanner, 'Feature flags'],
           ['keys',     Key,        'API keys'],
         ] as [Tab, any, string][]).map(([v, icon, label]) => (
-          <button key={v} onClick={() => setTab(v)}
-            className={cn('px-4 py-2 rounded-lg text-[12px] font-medium flex items-center gap-2 transition-all',
+          <motion.button key={v} onClick={() => setTab(v)} whileTap={{ scale: 0.97 }}
+            className={cn('px-4 py-2 rounded-lg text-[12px] font-medium flex items-center gap-2 transition-all relative',
               tab === v ? 'bg-white text-espresso shadow-raise-1' : 'text-espresso-muted hover:text-espresso')}>
             <Icon icon={icon} size={12} />
             {label}
-          </button>
+          </motion.button>
         ))}
-      </div>
+      </motion.div>
 
-      {tab === 'tenant' && <TenantTab />}
-      {tab === 'features' && <FeaturesTab />}
-      {tab === 'keys' && <KeysTab />}
+      <AnimatePresence mode="wait">
+        {tab === 'tenant' && <TenantTab key="tenant" />}
+        {tab === 'features' && <FeaturesTab key="features" />}
+        {tab === 'keys' && <KeysTab key="keys" />}
+      </AnimatePresence>
     </div>
   )
 }
@@ -70,7 +74,12 @@ function TenantTab() {
   })
 
   return (
-    <div className="bezel p-6 max-w-[640px]">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="bezel p-6 max-w-[640px]">
       <div className="eyebrow mb-4">Organization</div>
       <div className="space-y-4">
         <Field label="Display name"   value={name}       onChange={setName} />
@@ -78,12 +87,12 @@ function TenantTab() {
         <Field label="TRN"            value={trn}        onChange={setTrn} mono />
       </div>
       <div className="mt-5 flex justify-end">
-        <button onClick={() => save.mutate()} disabled={save.isPending}
+        <motion.button onClick={() => save.mutate()} disabled={save.isPending} whileTap={{ scale: 0.97 }}
           className="h-9 px-4 rounded-full bg-espresso text-sand-50 text-[12px] font-medium hover:bg-espresso-soft disabled:opacity-50 transition-all">
           {save.isPending ? 'Saving…' : 'Save changes'}
-        </button>
+        </motion.button>
       </div>
-    </div>
+    </motion.div>
   )
 }
 
@@ -92,41 +101,90 @@ function FeaturesTab() {
   const qc = useQueryClient()
   const toggle = useMutation({
     mutationFn: ({ key, enabled }: { key: string; enabled: boolean }) => endpoints.setFeatureFlag(key, enabled),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['feature-flags'] }),
+    onSuccess: () => {
+      toast.success('Feature flag updated')
+      qc.invalidateQueries({ queryKey: ['feature-flags'] })
+    },
   })
 
   const get = (k: string) => flags?.data?.find((f: any) => f.key === k)?.enabled ?? false
 
   return (
-    <div className="bezel p-6 max-w-[720px]">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="bezel p-6 max-w-[720px]">
       <div className="eyebrow mb-4">Feature flags</div>
-      <div className="divide-y divide-[color:var(--color-border-subtle)]">
-        {FEATURE_FLAGS.map(f => (
-          <label key={f.key} className="flex items-start gap-4 py-4 cursor-pointer">
-            <input type="checkbox" checked={get(f.key)} onChange={e => toggle.mutate({ key: f.key, enabled: e.target.checked })}
-              className="mt-0.5 w-4 h-4 accent-amber-500 cursor-pointer" />
-            <div className="flex-1">
-              <div className="text-[13px] font-medium text-espresso">{f.label}</div>
-              <div className="text-[11px] text-espresso-muted mt-0.5">{f.description}</div>
-            </div>
-          </label>
-        ))}
-      </div>
-    </div>
+      <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="divide-y divide-[color:var(--color-border-subtle)]">
+        {FEATURE_FLAGS.map((f, i) => {
+          const isEnabled = get(f.key)
+          return (
+            <motion.label key={f.key} variants={staggerItem}
+              className="flex items-start gap-4 py-4 cursor-pointer group">
+              <div className="relative mt-0.5">
+                <input
+                  type="checkbox"
+                  checked={isEnabled}
+                  onChange={e => toggle.mutate({ key: f.key, enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <motion.div
+                  className={cn(
+                    'w-11 h-6 rounded-full transition-all relative',
+                    isEnabled ? 'bg-teal' : 'bg-sand-200'
+                  )}
+                  whileTap={{ scale: 0.95 }}>
+                  <motion.div
+                    className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm"
+                    animate={{
+                      left: isEnabled ? '22px' : '2px',
+                    }}
+                    transition={{
+                      type: 'spring',
+                      stiffness: 400,
+                      damping: 30,
+                    }}
+                  />
+                </motion.div>
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-medium text-espresso group-hover:text-teal transition-colors">{f.label}</div>
+                <div className="text-[11px] text-espresso-muted mt-0.5">{f.description}</div>
+              </div>
+            </motion.label>
+          )
+        })}
+      </motion.div>
+    </motion.div>
   )
 }
 
 function KeysTab() {
   return (
-    <div className="bezel p-6 max-w-[640px]">
-      <div className="eyebrow mb-3">API access</div>
-      <div className="text-[13px] text-espresso-muted leading-relaxed">
-        API keys for third-party integrations (Ejari system, payment gateway, accounting software) will be managed here in a future release.
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="bezel p-6 max-w-[640px]">
+      <div className="flex items-start gap-4 mb-4">
+        <div className="w-12 h-12 rounded-xl bg-sand-100 grid place-items-center text-espresso-muted">
+          <Icon icon={LockKey} size={20} />
+        </div>
+        <div className="flex-1">
+          <div className="eyebrow mb-1">API access</div>
+          <div className="text-[13px] text-espresso-muted leading-relaxed">
+            API keys for third-party integrations (Ejari system, payment gateway, accounting software) will be managed here in a future release.
+          </div>
+        </div>
       </div>
-      <div className="mt-4 px-3 py-2 rounded bg-amber-50 text-amber-600 text-[11px] font-medium inline-block">
+      <div className="mt-4 px-3 py-2 rounded-lg bg-amber-50 border border-amber-100 text-amber-600 text-[11px] font-medium inline-flex items-center gap-2">
+        <Icon icon={LockKey} size={12} />
         Coming soon
       </div>
-    </div>
+    </motion.div>
   )
 }
 

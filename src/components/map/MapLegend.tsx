@@ -2,20 +2,32 @@
 export function MapLegend() {
   return (
     <div className="flex items-center gap-4 text-[11px] font-body text-espresso-muted flex-wrap">
-      <LegendDot color="bg-teal"      label="Occupied" />
-      <LegendDot color="bg-sand-300"  label="Vacant" />
-      <LegendDot color="bg-ochre"     label="Vacating" />
-      <LegendDot color="bg-amber-500" label="Bartawi" />
-      <LegendDot color="bg-rust"      label="Overdue" />
-      <LegendDot color="bg-plum"      label="Legal" />
+      <LegendSquare fill="#D8E3E4" stroke="#1E4D52" label="Occupied" />
+      <LegendSquare fill="#FAF7F2" stroke="#B8883D" dashed label="Vacant" />
+      <LegendSquare fill="#F4E5C1" stroke="#C48A1E" label="Vacating" />
+      <LegendSquare fill="#E8DFD3" stroke="#D6CFC5" label="Bartawi Use" />
+      <LegendSquare fill="#F0DDD9" stroke="#A84A3B" label="Overdue/Maint" />
+      <LegendSquare fill="#EAE3F3" stroke="#5A3E8A" label="Legal" />
     </div>
   )
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+function LegendSquare({ fill, stroke, dashed, label }: { fill: string; stroke: string; dashed?: boolean; label: string }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className={`w-2.5 h-2.5 rounded-sm ${color}`} />
+      <svg width="14" height="14" className="shrink-0">
+        <rect
+          x="0.5"
+          y="0.5"
+          width="13"
+          height="13"
+          rx="2"
+          fill={fill}
+          stroke={stroke}
+          strokeWidth="1"
+          strokeDasharray={dashed ? '2,2' : undefined}
+        />
+      </svg>
       <span>{label}</span>
     </div>
   )

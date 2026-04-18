@@ -7,6 +7,7 @@ import { Plus } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { ComplaintIntakeModal } from '@/components/complaints/ComplaintIntakeModal'
 import { motion } from 'motion/react'
+import { fadeIn, slideUp } from '@/lib/motion'
 
 export default function ComplaintsPage() {
   const [status, setStatus] = useState<string>('open')
@@ -34,7 +35,7 @@ export default function ComplaintsPage() {
       </div>
 
       <div className="flex items-center gap-1">
-        {['open', 'in_progress', 'resolved', 'all'].map(s => (
+        {['all', 'open', 'in_progress', 'resolved', 'closed'].map(s => (
           <button key={s} onClick={() => setStatus(s)}
             className={cn('px-3 h-9 rounded-lg text-[11px] font-medium capitalize transition-colors',
               status === s ? 'bg-espresso text-sand-50' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200')}>
@@ -50,11 +51,16 @@ export default function ComplaintsPage() {
           <div className="text-[13px] font-medium text-espresso">No complaints in this view</div>
         </div>
       ) : (
-        <div className="space-y-3">
+        <motion.div
+          className="space-y-3"
+          initial="hidden"
+          animate="visible"
+          variants={fadeIn}
+        >
           {data.data.map((c: any, i: number) => (
             <motion.div key={c.id}
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: i * 0.03, ease: [0.16, 1, 0.3, 1] }}
+              variants={slideUp}
+              transition={{ delay: Math.min(i * 0.04, 0.32) }}
               className="bezel p-4">
               <div className="flex items-start gap-3">
                 <PriorityDot priority={c.priority} />
@@ -74,7 +80,7 @@ export default function ComplaintsPage() {
               </div>
             </motion.div>
           ))}
-        </div>
+        </motion.div>
       )}
 
       {intakeOpen && <ComplaintIntakeModal onClose={() => setIntakeOpen(false)} />}
@@ -83,7 +89,7 @@ export default function ComplaintsPage() {
 }
 
 function PriorityDot({ priority }: { priority: string }) {
-  const colors: Record<string, string> = { urgent: 'bg-rust', high: 'bg-ochre', medium: 'bg-amber-400', low: 'bg-sand-400' }
+  const colors: Record<string, string> = { urgent: 'bg-rust', high: 'bg-ochre', medium: 'bg-amber', low: 'bg-teal' }
   return <span className={`w-2 h-2 rounded-full mt-2 shrink-0 ${colors[priority] || 'bg-sand-300'}`} title={priority} />
 }
 

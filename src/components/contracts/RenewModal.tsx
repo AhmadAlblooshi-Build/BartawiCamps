@@ -61,10 +61,77 @@ export function RenewModal({ contract, onClose }: { contract: any; onClose: () =
             </header>
 
             <div className="px-6 py-5 space-y-4">
-              <div className="bezel p-3 text-[12px] text-espresso-muted">
-                Current: <span className="text-espresso">{contract.companies?.name}</span> · Room <span className="font-mono tabular text-espresso">{contract.rooms?.room_number}</span> · <span className="font-mono tabular text-espresso">{formatAED(contract.monthly_rent)}</span>
+              {/* Current vs Proposed Terms Side-by-Side */}
+              <div className="grid grid-cols-2 gap-3">
+                {/* Current Terms */}
+                <div className="bezel p-4 space-y-3">
+                  <div className="eyebrow text-espresso-muted">Current Terms</div>
+                  <div className="space-y-2">
+                    <div>
+                      <div className="text-[10px] text-espresso-muted mb-0.5">Tenant</div>
+                      <div className="text-[12px] text-espresso font-medium truncate">{contract.companies?.name}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-espresso-muted mb-0.5">Room</div>
+                      <div className="text-[12px] text-espresso font-mono tabular">{contract.rooms?.room_number}</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-[10px] text-espresso-muted mb-0.5">Start</div>
+                        <div className="text-[11px] text-espresso">{contract.start_date ? new Date(contract.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-espresso-muted mb-0.5">End</div>
+                        <div className="text-[11px] text-espresso">{contract.end_date ? new Date(contract.end_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-espresso-muted mb-0.5">Monthly Rent</div>
+                      <div className="text-[13px] text-espresso font-mono tabular font-medium">{formatAED(contract.monthly_rent)}</div>
+                    </div>
+                    {contract.ejari_number && (
+                      <div>
+                        <div className="text-[10px] text-espresso-muted mb-0.5">Ejari</div>
+                        <div className="text-[11px] text-espresso font-mono tabular">{contract.ejari_number}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Proposed Terms */}
+                <div className="bezel p-4 space-y-3 bg-amber-50/30 border-amber-500/20">
+                  <div className="eyebrow text-amber-600">Proposed Terms</div>
+                  <div className="space-y-2">
+                    <div>
+                      <div className="text-[10px] text-espresso-muted mb-0.5">Start Date</div>
+                      <div className="text-[11px] text-espresso font-medium">{new Date(startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-espresso-muted mb-0.5">End Date</div>
+                      <div className="text-[11px] text-espresso font-medium">{new Date(endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-espresso-muted mb-0.5">Monthly Rent</div>
+                      <div className="text-[13px] text-espresso font-mono tabular font-medium">
+                        {formatAED(newRent)}
+                        {newRent !== Number(contract.monthly_rent) && (
+                          <span className={`ml-2 text-[10px] ${newRent > Number(contract.monthly_rent) ? 'text-rust' : 'text-teal'}`}>
+                            {newRent > Number(contract.monthly_rent) ? '↑' : '↓'} {formatAED(Math.abs(newRent - Number(contract.monthly_rent)))}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {newEjari && (
+                      <div>
+                        <div className="text-[10px] text-espresso-muted mb-0.5">Ejari</div>
+                        <div className="text-[11px] text-espresso font-mono tabular">{newEjari}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
+              {/* Editable fields */}
               <div className="grid grid-cols-2 gap-3">
                 <Field label="New start date *" type="date" value={startDate} onChange={setStartDate} />
                 <Field label="New end date *"   type="date" value={endDate}   onChange={setEndDate} />

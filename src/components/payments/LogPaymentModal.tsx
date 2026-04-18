@@ -12,12 +12,29 @@ export function LogPaymentModal({ onClose }: { onClose: () => void }) {
   const today = new Date().toISOString().slice(0, 10)
   const [roomNumber, setRoomNumber] = useState('')
   const [amount, setAmount] = useState(0)
+  const [amountDisplay, setAmountDisplay] = useState('')
   const [method, setMethod] = useState<'cash' | 'cheque' | 'bank_transfer' | 'other'>('cash')
   const [reference, setReference] = useState('')
   const [paymentDate, setPaymentDate] = useState(today)
   const [forMonth, setForMonth] = useState(new Date().getMonth() + 1)
   const [forYear, setForYear] = useState(new Date().getFullYear())
   const [notes, setNotes] = useState('')
+
+  const handleAmountChange = (value: string) => {
+    // Remove non-digit characters except decimal point
+    const cleanValue = value.replace(/[^\d.]/g, '')
+    const numericValue = parseFloat(cleanValue) || 0
+    setAmount(numericValue)
+
+    // Format with thousand separator
+    if (cleanValue) {
+      const parts = cleanValue.split('.')
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+      setAmountDisplay(parts.join('.'))
+    } else {
+      setAmountDisplay('')
+    }
+  }
 
   const qc = useQueryClient()
   const mutation = useMutation({
@@ -70,9 +87,17 @@ export function LogPaymentModal({ onClose }: { onClose: () => void }) {
                     className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Amount (AED) *</span>
-                  <input type="number" value={amount || ''} onChange={e => setAmount(Number(e.target.value) || 0)}
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Amount *</span>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] font-mono text-espresso-muted">AED</span>
+                    <input
+                      type="text"
+                      value={amountDisplay}
+                      onChange={e => handleAmountChange(e.target.value)}
+                      placeholder="0"
+                      className="h-10 pl-14 pr-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none w-full"
+                    />
+                  </div>
                 </label>
                 <label className="flex flex-col gap-1.5">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Method</span>
@@ -93,7 +118,9 @@ export function LogPaymentModal({ onClose }: { onClose: () => void }) {
                   <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">For month</span>
                   <select value={forMonth} onChange={e => setForMonth(Number(e.target.value))}
                     className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none">
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}</option>)}
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+                      <option key={m} value={m}>{new Date(2000, m - 1).toLocaleString('default', { month: 'long' })}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="flex flex-col gap-1.5">

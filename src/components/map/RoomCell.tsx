@@ -14,14 +14,14 @@ interface Props {
 }
 
 export function RoomCell({ room, x, y, w, h, label, dim = false, onClick }: Props) {
-  const { fill, stroke, labelColor } = colorForRoom(room)
+  const { fill, stroke, strokeDasharray, labelColor } = colorForRoom(room)
   const displayLabel = label ?? compactLabel(room.room_number)
 
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <g
-          className="cursor-pointer group transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+          className="cursor-pointer group transition-all duration-200 ease-out"
           onClick={onClick}
           opacity={dim ? 0.25 : 1}
           tabIndex={0}
@@ -32,8 +32,9 @@ export function RoomCell({ room, x, y, w, h, label, dim = false, onClick }: Prop
             x={x} y={y} width={w} height={h} rx={2.5}
             fill={fill}
             stroke={stroke}
-            strokeWidth={0.6}
-            className="transition-all duration-200 group-hover:stroke-espresso group-hover:stroke-[1.2] group-focus:stroke-espresso"
+            strokeWidth={0.8}
+            strokeDasharray={strokeDasharray}
+            className="transition-all duration-200 group-hover:stroke-amber group-hover:stroke-[1.8] group-focus:stroke-amber group-focus:stroke-[1.8]"
           />
           <text
             x={x + w / 2}
@@ -51,17 +52,25 @@ export function RoomCell({ room, x, y, w, h, label, dim = false, onClick }: Prop
         </g>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content side="top" sideOffset={6} className="bg-espresso text-sand-50 rounded-md px-2.5 py-1.5 text-[11px] font-body shadow-raise-3 z-50 animate-fade">
-          <div className="font-mono tabular font-semibold mb-0.5">Room {room.room_number}</div>
-          <div className="text-sand-300">
+        <Tooltip.Content
+          side="top"
+          sideOffset={8}
+          className="bezel bg-sand-50 text-espresso rounded-lg px-3 py-2 text-[11px] font-body shadow-raise-3 z-50 max-w-[200px]"
+        >
+          <div className="font-mono tabular font-semibold mb-1 text-[12px]">
+            Room {room.room_number}
+          </div>
+          <div className="text-espresso-muted mb-0.5">
             {room.current_occupancy?.individual?.owner_name
               || room.current_occupancy?.company?.name
               || 'Vacant'}
           </div>
           {room.standard_rent > 0 && (
-            <div className="text-sand-400 mt-1 font-mono tabular">{formatAED(Number(room.standard_rent))}/mo</div>
+            <div className="text-espresso-muted font-mono tabular text-[10px] mt-1">
+              {formatAED(Number(room.standard_rent))}/mo
+            </div>
           )}
-          <Tooltip.Arrow fill="#1A1816" />
+          <Tooltip.Arrow fill="var(--color-sand-200)" />
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
@@ -75,16 +84,23 @@ function compactLabel(roomNumber: string): string {
   return parts[parts.length - 1]
 }
 
-function colorForRoom(room: any): { fill: string; stroke: string; labelColor: string } {
+function colorForRoom(room: any): { fill: string; stroke: string; strokeDasharray?: string; labelColor: string } {
   const status = resolveStatus(room)
-  const map: Record<string, { fill: string; stroke: string; labelColor: string }> = {
+  const map: Record<string, { fill: string; stroke: string; strokeDasharray?: string; labelColor: string }> = {
+    // Occupied: teal-pale fill, teal border
     occupied:      { fill: '#D8E3E4', stroke: '#1E4D52', labelColor: '#1E4D52' },
-    vacant:        { fill: '#F4EFE7', stroke: '#B5A17E', labelColor: '#5E4D37' },
+    // Vacant: sand-50 fill, amber dashed border
+    vacant:        { fill: '#FAF7F2', stroke: '#B8883D', strokeDasharray: '3,3', labelColor: '#6A6159' },
+    // Vacating: ochre-pale fill, ochre border
     vacating:      { fill: '#F4E5C1', stroke: '#C48A1E', labelColor: '#5F4F2C' },
-    bartawi_use:   { fill: '#FBF5E8', stroke: '#B8883D', labelColor: '#785621' },
-    overdue:       { fill: '#F1DDD6', stroke: '#A84A3B', labelColor: '#A84A3B' },
+    // Bartawi use: sand-200 fill, sand-300 border
+    bartawi_use:   { fill: '#E8DFD3', stroke: '#D6CFC5', labelColor: '#6A6159' },
+    // Overdue/maintenance: rust-pale fill, rust border
+    overdue:       { fill: '#F0DDD9', stroke: '#A84A3B', labelColor: '#A84A3B' },
+    maintenance:   { fill: '#F0DDD9', stroke: '#A84A3B', labelColor: '#A84A3B' },
+    // Legal dispute: plum colors
     legal_dispute: { fill: '#EAE3F3', stroke: '#5A3E8A', labelColor: '#5A3E8A' },
-    maintenance:   { fill: '#F0E8D1', stroke: '#5F4F2C', labelColor: '#5F4F2C' },
+    // Service/utility
     service:       { fill: '#E8DFD1', stroke: '#8A7558', labelColor: '#5E4D37' },
   }
   return map[status] || map.vacant

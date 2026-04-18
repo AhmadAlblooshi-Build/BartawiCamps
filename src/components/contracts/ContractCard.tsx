@@ -16,19 +16,23 @@ export function ContractCard({ contract, delay = 0 }: { contract: any; delay?: n
   const qc = useQueryClient()
 
   const days = contract.end_date ? daysUntil(contract.end_date) : null
-  const urgency: 'expired' | 'critical' | 'warning' | 'notice' | 'healthy' =
-    days === null ? 'healthy'
+
+  // Determine urgency and styling based on contract status and days remaining
+  // Legal dispute gets special plum color regardless of expiry
+  const isLegal = contract.status === 'legal_dispute'
+  const urgency: 'legal' | 'expired' | 'critical' | 'warning' | 'healthy' =
+    isLegal ? 'legal'
+    : days === null ? 'healthy'
     : days < 0 ? 'expired'
     : days <= 30 ? 'critical'
-    : days <= 60 ? 'warning'
-    : days <= 90 ? 'notice'
+    : days <= 90 ? 'warning'
     : 'healthy'
 
   const tones = {
+    legal:    { bar: 'bg-plum',  pill: 'bg-plum-pale text-plum',     label: 'Legal Dispute' },
     expired:  { bar: 'bg-rust',  pill: 'bg-rust-pale text-rust',     label: `${Math.abs(days ?? 0)}d overdue` },
     critical: { bar: 'bg-rust',  pill: 'bg-rust-pale text-rust',     label: `${days ?? 0}d left` },
     warning:  { bar: 'bg-ochre', pill: 'bg-ochre-pale text-ochre',   label: `${days ?? 0}d left` },
-    notice:   { bar: 'bg-sand-400', pill: 'bg-sand-100 text-espresso-muted', label: `${days ?? 0}d left` },
     healthy:  { bar: 'bg-teal',  pill: 'bg-teal-pale text-teal',     label: 'Active' },
   }[urgency]
 

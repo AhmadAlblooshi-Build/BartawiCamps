@@ -11,6 +11,8 @@ import { CampBlocksTab } from '@/components/camps/CampBlocksTab'
 import { RoomsGrid } from '@/components/rooms/RoomsGrid'
 import { CampAnalyticsTab } from '@/components/camps/CampAnalyticsTab'
 import { MonthSelector } from '@/components/shared/MonthSelector'
+import { motion, AnimatePresence } from 'motion/react'
+import { fadeIn } from '@/lib/motion'
 
 type Tab = 'overview' | 'map' | 'blocks' | 'rooms' | 'analytics'
 const TAB_LABELS: [Tab, string][] = [
@@ -50,28 +52,47 @@ export default function CampDetailPage() {
       </div>
 
       <Tabs.Root value={tab} onValueChange={v => setActiveTab(v as Tab)}>
-        <Tabs.List className="flex gap-1 p-1 rounded-xl bg-sand-100 w-fit">
+        {/* Tab bar with smooth sliding active indicator */}
+        <Tabs.List className="relative flex gap-0 border-b border-sand-200">
           {TAB_LABELS.map(([v, label]) => (
             <Tabs.Trigger
               key={v}
               value={v}
               className={cn(
-                'px-4 py-2 rounded-lg font-body text-[12px] font-medium transition-all',
-                'data-[state=active]:bg-white data-[state=active]:text-espresso data-[state=active]:shadow-raise-1',
+                'relative px-6 py-3 font-body text-[13px] font-medium transition-colors',
+                'data-[state=active]:text-espresso',
                 'data-[state=inactive]:text-espresso-muted hover:text-espresso'
               )}
             >
               {label}
+              {tab === v && (
+                <motion.div
+                  layoutId="activeTab"
+                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber"
+                  transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                />
+              )}
             </Tabs.Trigger>
           ))}
         </Tabs.List>
 
+        {/* Tab content with fade transition */}
         <div className="mt-8">
-          <Tabs.Content value="overview"><CampOverviewTab campId={params.campId} month={month} year={year} /></Tabs.Content>
-          <Tabs.Content value="map"><CampMapView campId={params.campId} /></Tabs.Content>
-          <Tabs.Content value="blocks"><CampBlocksTab campId={params.campId} month={month} year={year} /></Tabs.Content>
-          <Tabs.Content value="rooms"><RoomsGrid campId={params.campId} /></Tabs.Content>
-          <Tabs.Content value="analytics"><CampAnalyticsTab campId={params.campId} /></Tabs.Content>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={tab}
+              variants={fadeIn}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+            >
+              <Tabs.Content value="overview"><CampOverviewTab campId={params.campId} month={month} year={year} /></Tabs.Content>
+              <Tabs.Content value="map"><CampMapView campId={params.campId} /></Tabs.Content>
+              <Tabs.Content value="blocks"><CampBlocksTab campId={params.campId} month={month} year={year} /></Tabs.Content>
+              <Tabs.Content value="rooms"><RoomsGrid campId={params.campId} /></Tabs.Content>
+              <Tabs.Content value="analytics"><CampAnalyticsTab campId={params.campId} /></Tabs.Content>
+            </motion.div>
+          </AnimatePresence>
         </div>
       </Tabs.Root>
     </div>

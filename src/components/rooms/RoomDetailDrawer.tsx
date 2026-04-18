@@ -9,6 +9,7 @@ import { motion } from 'motion/react'
 import { useState } from 'react'
 import { NoticeModal } from './NoticeModal'
 import { CompleteCheckoutModal } from './CompleteCheckoutModal'
+import { slideRight, slideUp, staggerContainer } from '@/lib/motion'
 
 interface Props {
   roomId: string
@@ -36,11 +37,11 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
           <Dialog.Overlay className="fixed inset-0 bg-espresso/20 backdrop-blur-sm z-40 animate-fade" />
           <Dialog.Content asChild>
             <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', stiffness: 260, damping: 30 }}
-              className="fixed right-0 top-0 bottom-0 w-full sm:w-[560px] bg-white shadow-raise-4 z-50 flex flex-col"
+              variants={slideRight}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className="fixed right-0 top-0 bottom-0 w-full sm:w-[560px] bg-sand-50 shadow-raise-4 z-50 flex flex-col border-l border-sand-200"
             >
               <Dialog.Title className="sr-only">Room details</Dialog.Title>
               <header className="flex items-center justify-between px-6 h-16 border-b border-[color:var(--color-border-subtle)]">
@@ -53,14 +54,19 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                 </button>
               </header>
 
-              <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+              <motion.div
+                variants={staggerContainer}
+                initial="hidden"
+                animate="visible"
+                className="flex-1 overflow-y-auto px-6 py-6 space-y-6"
+              >
                 {!room ? (
                   <div className="space-y-3">
                     {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-14 skeleton-shimmer rounded-lg" />)}
                   </div>
                 ) : (
                   <>
-                    <section>
+                    <motion.section variants={slideUp}>
                       <div className="flex items-center gap-2 mb-4">
                         <StatusPill status={room.status} />
                         {room.property_type?.name && (
@@ -75,10 +81,10 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                         <Field label="Room size"     value={room.room_size} />
                         <Field label="Block"         value={room.block?.code || '—'} mono />
                       </div>
-                    </section>
+                    </motion.section>
 
                     {occ && (person || company) && (
-                      <section>
+                      <motion.section variants={slideUp}>
                         <div className="eyebrow mb-3">Current occupant</div>
                         <div className="bezel p-4 space-y-3">
                           {person && (
@@ -119,11 +125,11 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                             {contract?.end_date && <Field label="Contract ends" value={formatDate(contract.end_date)} />}
                           </div>
                         </div>
-                      </section>
+                      </motion.section>
                     )}
 
                     {balance && balance.outstanding > 0 && (
-                      <section>
+                      <motion.section variants={slideUp}>
                         <div className="flex items-center justify-between mb-3">
                           <div className="eyebrow">Outstanding</div>
                           <div className="font-mono tabular text-[14px] font-semibold text-rust">{formatAED(balance.outstanding)}</div>
@@ -136,10 +142,10 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                             </div>
                           ))}
                         </div>
-                      </section>
+                      </motion.section>
                     )}
 
-                    <section>
+                    <motion.section variants={slideUp}>
                       <div className="eyebrow mb-3">Monthly history · 6 months</div>
                       {history?.data && history.data.length > 0 ? (
                         <div className="bezel p-3 divide-y divide-[color:var(--color-border-subtle)]">
@@ -157,10 +163,10 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                       ) : (
                         <div className="text-[12px] text-espresso-muted">No history records.</div>
                       )}
-                    </section>
+                    </motion.section>
                   </>
                 )}
-              </div>
+              </motion.div>
 
               {room && (
                 <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex items-center gap-2">
