@@ -66,7 +66,8 @@
       "Bash(__NEW_LINE_123cca3ba2547cec__ curl -s 'http://localhost:3001/api/v1/camps/4c935f2b-23b9-b94c-99ca-cb2ee0620045' -H \"Authorization: Bearer $TOKEN\")",
       "Bash(python3 -m json.tool:*)",
       "Bash(cat:*)",
-      "Bash(PORT=3000 npm run dev:*)"
+      "Bash(PORT=3000 npm run dev:*)",
+      "Bash(python3:*)"
     ]
   }
 }
