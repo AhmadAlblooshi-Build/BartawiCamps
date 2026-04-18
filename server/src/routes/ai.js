@@ -18,7 +18,7 @@ router.post('/classify-complaint',
   validate(classifySchema),
   async (req, res) => {
     try {
-      const result = await classifyComplaint(req.valid.text)
+      const result = await classifyComplaint(req.validBody.text)
       res.json(result)
     } catch (err) {
       console.error('[ai/classify]', err)
@@ -53,17 +53,17 @@ router.post('/narrate-anomaly',
   requirePermission('reports.read'),
   validate(narrateSchema),
   async (req, res) => {
-    const key = `${req.tenantId}:${JSON.stringify(req.valid)}`
+    const key = `${req.tenantId}:${JSON.stringify(req.validBody)}`
     const cached = narrateCache.get(key)
     if (cached && Date.now() - cached.ts < TTL) {
       return res.json({ narration: cached.narration, cached: true })
     }
     try {
       const narration = await narrateAnomaly(
-        req.valid.metric,
-        req.valid.current_value,
-        req.valid.baseline,
-        req.valid.breakdown || req.valid.series || null
+        req.validBody.metric,
+        req.validBody.current_value,
+        req.validBody.baseline,
+        req.validBody.breakdown || req.validBody.series || null
       )
       narrateCache.set(key, { narration, ts: Date.now() })
       res.json({ narration })
@@ -87,7 +87,7 @@ router.post('/match-entity',
   validate(matchSchema),
   async (req, res) => {
     try {
-      const result = await matchEntity(req.valid.name, req.valid.candidates)
+      const result = await matchEntity(req.validBody.name, req.validBody.candidates)
       res.json(result || { match_index: null, confidence: 0, reason: 'No candidates' })
     } catch (err) {
       console.error('[ai/match]', err)
