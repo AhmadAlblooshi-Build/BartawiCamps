@@ -59,16 +59,16 @@ export default function ContractsPage() {
   }, [data, urgency])
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 atmosphere">
       <div className="animate-rise">
-        <div className="eyebrow mb-2">Legal & contractual</div>
         <h1 className="display-lg">Contracts</h1>
-        <p className="mt-2 text-[13px] text-espresso-muted max-w-[520px]">
-          Yearly, Ejari, and BGC contracts. Renew, flag for legal, or add notes.
+        <p className="overline mt-2">
+          Yearly, Ejari, and BGC contracts · Renew, flag for legal, or add notes
         </p>
       </div>
 
-      <div className="bezel p-3 flex items-center gap-2 flex-wrap">
+      {/* Filter bar - evolved styling */}
+      <div className="rounded-[14px] p-3 flex items-center gap-2 flex-wrap" style={{ background: 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.6)' }}>
         <div className="flex-1 flex items-center gap-2 min-w-[240px]">
           <Icon icon={MagnifyingGlass} size={14} className="text-espresso-muted ml-2" />
           <input placeholder="Search by company, room, or ejari number..." value={q} onChange={e => setQ(e.target.value)}
@@ -89,13 +89,14 @@ export default function ContractsPage() {
             onClick={() => setUrgency(v)}
             className={cn(
               'px-3 h-9 rounded-lg text-[11px] font-medium transition-colors flex items-center gap-2',
-              urgency === v ? 'bg-espresso text-sand-50' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200'
+              urgency === v ? 'text-amber' : 'bg-sand-200 text-espresso-muted hover:bg-sand-200'
             )}
+            style={urgency === v ? { background: 'rgba(184, 136, 61, 0.1)' } : {}}
           >
             {l}
             <span className={cn(
               'px-1.5 py-0.5 rounded text-[10px] font-mono tabular',
-              urgency === v ? 'bg-sand-50/20 text-sand-50' : 'bg-sand-200 text-espresso-muted'
+              urgency === v ? 'bg-sand-50/20 text-amber' : 'bg-sand-200 text-espresso-muted'
             )}>
               {counts[v]}
             </span>

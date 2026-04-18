@@ -58,36 +58,36 @@ export function ContractCard({ contract, delay = 0 }: { contract: any; delay?: n
         initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
         animate={{ opacity: 1, y: 0, filter: 'blur(0)' }}
         transition={{ duration: 0.6, delay, ease: [0.16, 1, 0.3, 1] }}
-        className="bezel overflow-hidden group"
+        className="bezel elevation-hover overflow-hidden group"
       >
         <div className="flex items-stretch">
-          <div className={cn('w-1 shrink-0', tones.bar)} />
+          <div className={cn('w-[3px] shrink-0', tones.bar)} />
           <div className="flex-1 p-5">
             <div className="flex items-start justify-between gap-3 mb-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="eyebrow">{contract.contract_type?.toUpperCase()}</span>
+                  <span className="overline">{contract.contract_type?.toUpperCase()}</span>
                   {contract.ejari_number && <span className="font-mono tabular text-[10px] text-espresso-subtle">· {contract.ejari_number}</span>}
                 </div>
-                <div className="text-[15px] font-medium text-espresso truncate">{contract.companies?.name || '—'}</div>
-                <div className="text-[11px] text-espresso-muted mt-0.5">Room <span className="font-mono tabular">{contract.rooms?.room_number}</span></div>
+                <div className="display-sm truncate">{contract.companies?.name || '—'}</div>
+                <div className="overline mt-0.5">Room <span className="font-mono tabular">{contract.rooms?.room_number}</span></div>
               </div>
-              <div className={cn('px-2 py-1 rounded text-[10px] font-medium whitespace-nowrap', tones.pill)}>
+              <div className={cn('px-2 py-1 rounded-full text-[11px] font-medium uppercase whitespace-nowrap', tones.pill)}>
                 {tones.label}
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-3 py-3 border-y border-[color:var(--color-border-subtle)]">
               <div>
-                <div className="eyebrow mb-0.5">Rent</div>
-                <div className="font-mono tabular text-[13px] text-espresso">{formatAED(contract.monthly_rent)}</div>
+                <div className="overline mb-0.5">Rent</div>
+                <div className="data-md text-espresso">{formatAED(contract.monthly_rent)}</div>
               </div>
               <div>
-                <div className="eyebrow mb-0.5">Start</div>
+                <div className="overline mb-0.5">Start</div>
                 <div className="text-[12px] text-espresso">{formatDate(contract.start_date)}</div>
               </div>
               <div>
-                <div className="eyebrow mb-0.5">Ends</div>
+                <div className="overline mb-0.5">Ends</div>
                 <div className="text-[12px] text-espresso">{contract.end_date ? formatDate(contract.end_date) : '—'}</div>
               </div>
             </div>

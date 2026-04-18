@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   experimental: {
-    webpackBuildWorker: true,
+    webpackBuildWorker: false,
     optimizePackageImports: ['@phosphor-icons/react'],
   },
   async rewrites() {

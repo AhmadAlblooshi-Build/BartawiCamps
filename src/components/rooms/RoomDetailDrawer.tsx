@@ -41,15 +41,17 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
               initial="hidden"
               animate="visible"
               exit="exit"
-              className="fixed right-0 top-0 bottom-0 w-full sm:w-[560px] bg-sand-50 shadow-raise-4 z-50 flex flex-col border-l border-sand-200"
+              className="fixed right-0 top-0 bottom-0 w-full sm:w-[480px] glass-surface elevation-float z-50 flex flex-col border-l border-sand-200"
             >
               <Dialog.Title className="sr-only">Room details</Dialog.Title>
-              <header className="flex items-center justify-between px-6 h-16 border-b border-[color:var(--color-border-subtle)]">
+              <header className="flex items-center justify-between px-6 h-16 border-b border-sand-200">
                 <div>
-                  <div className="eyebrow mb-0.5">Room</div>
-                  <div className="font-mono tabular text-[22px] font-semibold text-espresso">{room?.room_number}</div>
+                  <div className="display-md text-espresso">{room?.room_number}</div>
+                  <div className="eyebrow mb-0.5 text-espresso-muted">
+                    {room?.block?.code || '—'} · {room?.block?.floor === 0 ? 'Ground' : 'First'} Floor
+                  </div>
                 </div>
-                <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100 transition-colors" aria-label="Close">
+                <button onClick={onClose} className="w-9 h-9 rounded-full bg-sand-200 grid place-items-center hover:bg-amber transition-colors hover:text-white" aria-label="Close">
                   <Icon icon={X} size={16} />
                 </button>
               </header>
@@ -70,11 +72,12 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                       <div className="flex items-center gap-2 mb-4">
                         <StatusPill status={room.status} />
                         {room.property_type?.name && (
-                          <span className="text-[10px] font-medium uppercase tracking-wide text-espresso-muted">
+                          <span className="overline text-espresso-muted">
                             · {room.property_type.name}
                           </span>
                         )}
                       </div>
+                      <div className="divider-warm my-4" />
                       <div className="grid grid-cols-2 gap-3">
                         <Field label="Standard rent" value={formatAED(room.standard_rent)} mono />
                         <Field label="Max capacity"  value={`${room.max_capacity || 0} ppl`} mono />
@@ -85,19 +88,23 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
 
                     {occ && (person || company) && (
                       <motion.section variants={slideUp}>
-                        <div className="eyebrow mb-3">Current occupant</div>
+                        <div className="divider-warm my-6" />
+                        <div className="eyebrow mb-3">CURRENT TENANT</div>
+                        {person && (
+                          <div className="display-sm mb-2">{person.owner_name || person.full_name}</div>
+                        )}
+                        {company && (
+                          <div className="body text-espresso-muted mb-3">{company.name}</div>
+                        )}
                         <div className="bezel p-4 space-y-3">
                           {person && (
                             <>
-                              <div className="flex items-start gap-3">
-                                <div className="w-8 h-8 rounded-full bg-espresso text-sand-50 grid place-items-center text-[11px] font-semibold">
-                                  {(person.owner_name || person.full_name || '??').slice(0, 2).toUpperCase()}
+                              {person.nationality && (
+                                <div>
+                                  <div className="overline mb-1">Nationality</div>
+                                  <div className="text-[13px] text-espresso">{person.nationality}</div>
                                 </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-medium text-espresso text-[14px]">{person.owner_name || person.full_name}</div>
-                                  {person.nationality && <div className="text-[11px] text-espresso-muted mt-0.5">{person.nationality}</div>}
-                                </div>
-                              </div>
+                              )}
                               {person.mobile_number && (
                                 <div className="flex items-center gap-2 text-[12px]">
                                   <Icon icon={Phone} size={12} className="text-espresso-muted" />
@@ -105,7 +112,7 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                                 </div>
                               )}
                               {person.emergency_contact_name && (
-                                <div className="pt-2 border-t border-[color:var(--color-border-subtle)]">
+                                <div className="pt-2 border-t border-sand-200">
                                   <div className="eyebrow mb-1">Emergency contact</div>
                                   <div className="text-[12px] text-espresso">{person.emergency_contact_name}</div>
                                   <div className="text-[11px] text-espresso-muted font-mono tabular">{person.emergency_contact_phone || '—'}</div>
@@ -113,16 +120,29 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                               )}
                             </>
                           )}
-                          {company && (
-                            <div className="pt-2 border-t border-[color:var(--color-border-subtle)]">
-                              <div className="eyebrow mb-1">Company</div>
-                              <div className="text-[13px] font-medium text-espresso">{company.name}</div>
-                              {company.contact_person && <div className="text-[11px] text-espresso-muted">{company.contact_person}</div>}
+                          {company && company.contact_person && (
+                            <div className="pt-2 border-t border-sand-200">
+                              <div className="eyebrow mb-1">Company contact</div>
+                              <div className="text-[12px] text-espresso">{company.contact_person}</div>
                             </div>
                           )}
-                          <div className="pt-2 border-t border-[color:var(--color-border-subtle)] grid grid-cols-2 gap-3">
-                            <Field label="Check-in" value={formatDate(occ.check_in_date)} />
-                            {contract?.end_date && <Field label="Contract ends" value={formatDate(contract.end_date)} />}
+                          <div className="pt-2 border-t border-sand-200 grid grid-cols-2 gap-3">
+                            <div>
+                              <div className="overline mb-1">Check-in</div>
+                              <div className="text-[12px] text-espresso">{formatDate(occ.check_in_date)}</div>
+                            </div>
+                            {contract?.end_date && (
+                              <div>
+                                <div className="overline mb-1">Contract ends</div>
+                                <div className="text-[12px] text-espresso">{formatDate(contract.end_date)}</div>
+                              </div>
+                            )}
+                            {occ.people_count && (
+                              <div>
+                                <div className="overline mb-1">Occupants</div>
+                                <div className="text-[12px] text-espresso">{occ.people_count} people</div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </motion.section>
@@ -130,15 +150,20 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
 
                     {balance && balance.outstanding > 0 && (
                       <motion.section variants={slideUp}>
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="eyebrow">Outstanding</div>
-                          <div className="font-mono tabular text-[14px] font-semibold text-rust">{formatAED(balance.outstanding)}</div>
+                        <div className="divider-warm my-6" />
+                        <div className="eyebrow mb-3">FINANCIAL OVERVIEW</div>
+                        <div className="mb-4">
+                          <div className="data-lg text-rust">{formatAED(balance.outstanding)}</div>
+                          <div className="overline text-espresso-muted">Total Outstanding</div>
                         </div>
                         <div className="bezel p-3 space-y-1.5">
                           {balance.by_month.slice(0, 5).map((m: any) => (
-                            <div key={`${m.year}-${m.month}`} className="flex items-center justify-between text-[12px]">
-                              <span className="text-espresso-muted tabular">{m.month}/{m.year}</span>
-                              <span className="font-mono tabular text-rust">{formatAED(m.balance)}</span>
+                            <div key={`${m.year}-${m.month}`} className={cn(
+                              "flex items-center justify-between text-[12px] p-2 rounded",
+                              Number(m.balance) > 0 && "bg-rust/5"
+                            )}>
+                              <span className="text-espresso-muted tabular font-mono">{m.month}/{m.year}</span>
+                              <span className="font-mono tabular text-rust data-md">{formatAED(m.balance)}</span>
                             </div>
                           ))}
                         </div>
@@ -146,15 +171,19 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                     )}
 
                     <motion.section variants={slideUp}>
-                      <div className="eyebrow mb-3">Monthly history · 6 months</div>
+                      <div className="divider-warm my-6" />
+                      <div className="eyebrow mb-3">LAST 6 MONTHS</div>
                       {history?.data && history.data.length > 0 ? (
-                        <div className="bezel p-3 divide-y divide-[color:var(--color-border-subtle)]">
+                        <div className="bezel p-3 divide-y divide-sand-200">
                           {history.data.slice(0, 6).map((h: any) => (
-                            <div key={`${h.year}-${h.month}`} className="py-2 flex items-center justify-between text-[12px]">
+                            <div key={`${h.year}-${h.month}`} className={cn(
+                              "py-2 flex items-center justify-between text-[12px]",
+                              Number(h.balance) > 0 && "bg-rust/5 -mx-3 px-3 rounded"
+                            )}>
                               <span className="text-espresso-muted tabular font-mono">{String(h.month).padStart(2, '0')}/{h.year}</span>
                               <span className="flex-1 text-espresso ml-4 truncate">{h.company_name || h.owner_name || '—'}</span>
-                              <span className="font-mono tabular text-espresso">{formatAED(h.rent)}</span>
-                              <span className={cn('ml-4 font-mono tabular font-semibold', Number(h.balance) > 0 ? 'text-rust' : 'text-teal')}>
+                              <span className="font-mono tabular text-espresso data-md">{formatAED(h.rent)}</span>
+                              <span className={cn('ml-4 font-mono tabular font-semibold data-md', Number(h.balance) > 0 ? 'text-rust' : 'text-teal')}>
                                 {Number(h.balance) > 0 ? formatAED(h.balance) : 'Paid'}
                               </span>
                             </div>
@@ -169,29 +198,29 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
               </motion.div>
 
               {room && (
-                <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex items-center gap-2">
+                <footer className="px-6 py-4 border-t border-sand-200 bg-sand-50 flex items-center gap-2">
                   {room.status === 'vacant' && onStartCheckin && (
                     <button onClick={() => onStartCheckin(room)}
-                      className="flex-1 h-10 flex items-center justify-center gap-2 rounded-full bg-espresso text-sand-50 font-body text-[13px] font-medium hover:bg-espresso-soft transition-all active:scale-[0.98]">
-                      <Icon icon={ArrowDownLeft} size={13} /> Check in tenant
+                      className="flex-1 h-11 flex items-center justify-center gap-2 rounded-full bg-amber text-espresso font-body text-[13px] font-medium hover:bg-amber/90 transition-all active:scale-[0.98]">
+                      <Icon icon={ArrowDownLeft} size={13} /> New Lease
                     </button>
                   )}
                   {room.status === 'occupied' && (
                     <>
                       <button onClick={() => setNoticeOpen(true)}
-                        className="flex-1 h-10 flex items-center justify-center gap-2 rounded-full bg-ochre-pale text-ochre font-body text-[13px] font-medium hover:bg-ochre hover:text-white transition-all">
-                        <Icon icon={FileText} size={13} /> Give notice
+                        className="flex-1 h-11 flex items-center justify-center gap-2 rounded-full border-2 border-espresso text-espresso font-body text-[13px] font-medium hover:bg-espresso hover:text-sand-50 transition-all">
+                        <Icon icon={FileText} size={13} /> Give Notice
                       </button>
                       <button onClick={() => setCheckoutOpen(true)}
-                        className="h-10 px-4 flex items-center justify-center gap-2 rounded-full bg-rust text-white font-body text-[13px] font-medium hover:bg-rust/90 transition-all">
-                        <Icon icon={ArrowUpRight} size={13} /> Checkout
+                        className="h-11 px-5 flex items-center justify-center gap-2 rounded-full bg-amber text-espresso font-body text-[13px] font-medium hover:bg-amber/90 transition-all">
+                        Log Payment
                       </button>
                     </>
                   )}
                   {room.status === 'vacating' && (
                     <button onClick={() => setCheckoutOpen(true)}
-                      className="flex-1 h-10 flex items-center justify-center gap-2 rounded-full bg-rust text-white font-body text-[13px] font-medium hover:bg-rust/90 transition-all">
-                      <Icon icon={ArrowUpRight} size={13} /> Complete checkout
+                      className="flex-1 h-11 flex items-center justify-center gap-2 rounded-full bg-rust text-white font-body text-[13px] font-medium hover:bg-rust/90 transition-all active:scale-[0.98]">
+                      <Icon icon={ArrowUpRight} size={13} /> Complete Checkout
                     </button>
                   )}
                 </footer>
@@ -218,12 +247,12 @@ function Field({ label, value, mono = false }: { label: string; value: string; m
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string; label: string }> = {
-    occupied:    { bg: 'bg-teal-pale',    fg: 'text-teal',    label: 'Occupied' },
-    vacant:      { bg: 'bg-sand-100',     fg: 'text-espresso-muted', label: 'Vacant' },
-    vacating:    { bg: 'bg-ochre-pale',   fg: 'text-ochre',   label: 'Vacating · notice given' },
-    bartawi_use: { bg: 'bg-amber-50',     fg: 'text-amber-600', label: 'Bartawi use' },
-    maintenance: { bg: 'bg-ochre-pale',   fg: 'text-ochre',   label: 'Maintenance' },
+    occupied:    { bg: 'bg-teal-pale',    fg: 'text-teal',    label: 'OCCUPIED' },
+    vacant:      { bg: 'bg-sand-100',     fg: 'text-espresso-muted', label: 'VACANT' },
+    vacating:    { bg: 'bg-ochre-pale',   fg: 'text-ochre',   label: 'VACATING' },
+    bartawi_use: { bg: 'bg-amber-50',     fg: 'text-amber-600', label: 'BARTAWI USE' },
+    maintenance: { bg: 'bg-ochre-pale',   fg: 'text-ochre',   label: 'MAINTENANCE' },
   }
   const s = map[status] || map.vacant
-  return <span className={cn('inline-flex items-center px-3 py-1 rounded-full text-[11px] font-medium', s.bg, s.fg)}>{s.label}</span>
+  return <span className={cn('inline-flex items-center px-3 py-1.5 rounded-full text-[11px] font-medium uppercase tracking-wide', s.bg, s.fg)}>{s.label}</span>
 }

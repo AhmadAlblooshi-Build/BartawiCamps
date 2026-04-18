@@ -75,7 +75,22 @@ function CampMap2FloorPlan({ rooms, filter, onSelect }: { rooms: any[]; filter: 
   return (
     <div className="w-full overflow-auto">
       <svg viewBox={`0 0 ${maxX} ${maxY}`} className="w-full h-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
-        <rect width={maxX} height={maxY} fill="#FAF7F2" rx={10} />
+        {/* SVG gradient definitions for room status fills */}
+        <defs>
+          <linearGradient id="grad-occupied" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(30,77,82,0.12)" />
+            <stop offset="100%" stopColor="rgba(30,77,82,0.08)" />
+          </linearGradient>
+          <linearGradient id="grad-vacating" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(196,138,30,0.1)" />
+            <stop offset="100%" stopColor="rgba(196,138,30,0.06)" />
+          </linearGradient>
+          <linearGradient id="grad-maintenance" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(168,74,59,0.1)" />
+            <stop offset="100%" stopColor="rgba(168,74,59,0.06)" />
+          </linearGradient>
+        </defs>
+        <rect width={maxX} height={maxY} fill="transparent" rx={10} />
         {rooms.filter(r => r.fp_x !== null && r.fp_y !== null).map(r => (
           <RoomCell
             key={r.id}
@@ -174,6 +189,20 @@ function BlockGrid({ spec, byNumber, onSelect, isDim }: {
         <span className="text-[11px] text-espresso-muted tabular">{spec.count} rooms</span>
       </div>
       <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto">
+        <defs>
+          <linearGradient id={`grad-occupied-${spec.code}`} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(30,77,82,0.12)" />
+            <stop offset="100%" stopColor="rgba(30,77,82,0.08)" />
+          </linearGradient>
+          <linearGradient id={`grad-vacating-${spec.code}`} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(196,138,30,0.1)" />
+            <stop offset="100%" stopColor="rgba(196,138,30,0.06)" />
+          </linearGradient>
+          <linearGradient id={`grad-maintenance-${spec.code}`} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(168,74,59,0.1)" />
+            <stop offset="100%" stopColor="rgba(168,74,59,0.06)" />
+          </linearGradient>
+        </defs>
         {Array.from({ length: spec.count }).map((_, i) => {
           const roomNumber = `${spec.code}-${i + 1}`
           const room = byNumber.get(roomNumber)

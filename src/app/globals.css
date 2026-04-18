@@ -51,28 +51,37 @@ body {
   background-attachment: fixed;
 }
 
-/* Paper grain overlay — fixed, pointer-none, z at 1000 */
+/* Enhanced paper grain overlay — premium parchment feel */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.09 0 0 0 0 0.07 0 0 0 0.018 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
   pointer-events: none;
-  z-index: 1000;
-  opacity: 0.7;
+  z-index: 9999;
+  opacity: 0.045;
   mix-blend-mode: multiply;
 }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
+/* Smooth scrollbar styling */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 80px;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-sand-200);
-  border-radius: 5px;
-  border: 2px solid var(--color-bg-page);
+  background: var(--color-sand-300);
+  border-radius: 3px;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--color-sand-300); }
+::-webkit-scrollbar-thumb:hover { background: var(--color-espresso-faint); }
 
-::selection { background: var(--color-amber-500); color: white; }
+::selection {
+  background: rgba(184, 136, 61, 0.2);
+  color: var(--color-espresso);
+}
 
 *:focus-visible {
   outline: 2px solid var(--color-amber-500);
@@ -80,38 +89,112 @@ body::before {
   border-radius: 4px;
 }
 
-/* Typography helpers */
-.display-xl { font-family: var(--font-display); font-size: 4rem;    font-weight: 400; line-height: 1.02; letter-spacing: -0.04em; font-style: italic; }
-.display-lg { font-family: var(--font-display); font-size: 3rem;    font-weight: 400; line-height: 1.05; letter-spacing: -0.035em; }
-.display-md { font-family: var(--font-display); font-size: 2rem;    font-weight: 400; line-height: 1.1;  letter-spacing: -0.03em; }
-.display-sm { font-family: var(--font-display); font-size: 1.5rem;  font-weight: 500; line-height: 1.15; letter-spacing: -0.02em; }
-.display-xs { font-family: var(--font-display); font-size: 1.125rem; font-weight: 500; line-height: 1.2;  letter-spacing: -0.015em; }
+/* ─── Dramatic type scale ─── */
+.display-hero {
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 500;
+  font-style: italic;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--color-espresso);
+}
 
+.display-lg {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  color: var(--color-espresso);
+}
+
+.display-md {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.display-sm {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.008em;
+}
+
+/* Data numbers — large, heavy, monospaced */
+.data-xl {
+  font-family: var(--font-mono);
+  font-size: 36px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--color-espresso);
+}
+
+.data-lg {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.data-md {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+/* Eyebrow — tiny, uppercase, spaced, whispered */
 .eyebrow {
   font-family: var(--font-body);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  letter-spacing: 0.12em;
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  color: var(--color-text-muted);
+  letter-spacing: 0.12em;
+  color: var(--color-espresso-faint);
+}
+
+/* Overline label — between eyebrow and body */
+.overline {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--color-espresso-muted);
 }
 
 .tabular { font-variant-numeric: tabular-nums; }
 
-/* Double-bezel card primitive */
+/* ─── Bezel evolved — the signature Bartawi card ─── */
 .bezel {
-  background: var(--color-bg-elevated);
+  background: var(--color-sand-50);
+  border: 1px solid rgba(214, 207, 197, 0.5);
   border-radius: 14px;
-  box-shadow: 0 0 0 1px var(--color-border-subtle);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 0 rgba(26, 24, 22, 0.02),
+    0 1px 3px rgba(26, 24, 22, 0.04),
+    0 4px 16px rgba(26, 24, 22, 0.03);
+  transition: all 250ms cubic-bezier(0.22, 1, 0.36, 1);
   position: relative;
 }
-.bezel::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  pointer-events: none;
+.bezel:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 0 rgba(26, 24, 22, 0.02),
+    0 4px 12px rgba(26, 24, 22, 0.06),
+    0 12px 40px rgba(26, 24, 22, 0.04);
+  transform: translateY(-1px);
+  border-color: rgba(184, 136, 61, 0.15);
 }
 
 .bezel-deep {
@@ -175,4 +258,520 @@ button:not(:disabled):active,
 [data-sonner-toast][data-type="info"],
 [data-sonner-toast]:not([data-type]) {
   border-left: 3px solid var(--color-amber) !important;
+}
+
+/* ─── Atmosphere: ambient warm light ─── */
+.atmosphere {
+  position: relative;
+}
+.atmosphere::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 80% 50% at 50% 0%,
+    rgba(184, 136, 61, 0.03) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Stronger glow for hero/primary sections */
+.atmosphere-strong::before {
+  background: radial-gradient(
+    ellipse 60% 40% at 50% 0%,
+    rgba(184, 136, 61, 0.06) 0%,
+    rgba(184, 136, 61, 0.02) 40%,
+    transparent 70%
+  );
+}
+
+/* Accent glow — for AI narrator, active selections */
+.glow-amber {
+  box-shadow:
+    0 0 0 1px rgba(184, 136, 61, 0.1),
+    0 0 20px rgba(184, 136, 61, 0.05),
+    0 0 60px rgba(184, 136, 61, 0.03);
+}
+
+/* Teal glow — for success/occupied states */
+.glow-teal {
+  box-shadow:
+    0 0 0 1px rgba(30, 77, 82, 0.1),
+    0 0 15px rgba(30, 77, 82, 0.04);
+}
+
+/* ─── Elevation scale (multi-layer shadows for depth) ─── */
+.elevation-0 {
+  box-shadow: none;
+  border: 1px solid var(--color-sand-200);
+}
+
+.elevation-1 {
+  box-shadow:
+    0 1px 2px rgba(26, 24, 22, 0.04),
+    0 2px 8px rgba(26, 24, 22, 0.02);
+  border: 1px solid rgba(214, 207, 197, 0.6);
+}
+
+.elevation-2 {
+  box-shadow:
+    0 2px 4px rgba(26, 24, 22, 0.04),
+    0 4px 16px rgba(26, 24, 22, 0.03),
+    0 8px 32px rgba(26, 24, 22, 0.02);
+  border: 1px solid rgba(214, 207, 197, 0.4);
+}
+
+.elevation-3 {
+  box-shadow:
+    0 4px 8px rgba(26, 24, 22, 0.05),
+    0 8px 24px rgba(26, 24, 22, 0.04),
+    0 16px 48px rgba(26, 24, 22, 0.03);
+  border: 1px solid rgba(214, 207, 197, 0.3);
+}
+
+/* Floating — for modals and popovers */
+.elevation-float {
+  box-shadow:
+    0 8px 16px rgba(26, 24, 22, 0.06),
+    0 16px 48px rgba(26, 24, 22, 0.08),
+    0 24px 80px rgba(26, 24, 22, 0.04);
+  border: 1px solid rgba(214, 207, 197, 0.2);
+}
+
+/* Hover lift — interactive cards */
+.elevation-hover {
+  transition: all 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.elevation-hover:hover {
+  box-shadow:
+    0 4px 12px rgba(26, 24, 22, 0.06),
+    0 8px 32px rgba(26, 24, 22, 0.04),
+    0 16px 56px rgba(26, 24, 22, 0.03);
+  transform: translateY(-2px);
+  border-color: rgba(184, 136, 61, 0.2);
+}
+
+/* Inner glow — for selected/active cards */
+.elevation-active {
+  box-shadow:
+    inset 0 0 0 1px rgba(184, 136, 61, 0.15),
+    0 2px 8px rgba(26, 24, 22, 0.04),
+    0 0 20px rgba(184, 136, 61, 0.04);
+}
+
+/* ─── Warm glass overlay ─── */
+.glass-overlay {
+  background: rgba(250, 247, 242, 0.7);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+}
+
+/* For drawer backgrounds */
+.glass-surface {
+  background: rgba(250, 247, 242, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Scrim — for behind modals (warmer than standard black) */
+.scrim {
+  background: rgba(26, 24, 22, 0.3);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ─── Warm section divider ─── */
+.divider-warm {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(214, 207, 197, 0.5) 20%,
+    rgba(214, 207, 197, 0.8) 50%,
+    rgba(214, 207, 197, 0.5) 80%,
+    transparent 100%
+  );
+  border: none;
+  margin: 24px 0;
+}
+
+/* Section gap with ambient light */
+.section-break {
+  height: 48px;
+  position: relative;
+}
+.section-break::after {
+  content: '';
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 50%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(184, 136, 61, 0.1) 30%,
+    rgba(184, 136, 61, 0.15) 50%,
+    rgba(184, 136, 61, 0.1) 70%,
+    transparent
+  );
+}
+
+/* ─── Scrollbar utilities ─── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Cursor refinement ─── */
+* {
+  cursor: default;
+}
+a, button, [role="button"], input[type="submit"],
+label[for], select, .clickable, [onclick] {
+  cursor: pointer;
+}
+input, textarea {
+  cursor: text;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DESERT NOIR — Dark Mode Token Overrides
+   Not cold. Not blue. Warm espresso darkness with amber light.
+   ═══════════════════════════════════════════════════════════ */
+
+/* Force html and body backgrounds to override Tailwind v4 @theme */
+html.dark {
+  background-color: #1A1816 !important;
+  color: #E8E0D6 !important;
+}
+
+html.dark body {
+  background-color: #1A1816 !important;
+  background-image: radial-gradient(circle at 15% 10%, rgba(201, 153, 62, 0.04), transparent 50%),
+                    radial-gradient(circle at 85% 90%, rgba(42, 122, 130, 0.03), transparent 50%) !important;
+  color: #E8E0D6 !important;
+}
+
+.dark {
+  /* ─── @theme tokens (Tailwind v4) ─── */
+  --color-bg-page:     #1A1816 !important;  /* was #FAF7F2 */
+  --color-bg-elevated: #222019 !important;  /* was #FFFFFF */
+  --color-bg-inset:    #2E2B26 !important;  /* was #F4EFE7 */
+  --color-bg-deep:     #0D0C0B !important;  /* was #1A1612 */
+
+  --color-border-subtle: rgba(255, 255, 255, 0.06) !important;  /* was rgba(26, 24, 22, 0.06) */
+  --color-border-hair:   rgba(255, 255, 255, 0.08) !important;  /* was rgba(26, 24, 22, 0.08) */
+  --color-border-medium: rgba(255, 255, 255, 0.12) !important;  /* was rgba(26, 24, 22, 0.12) */
+
+  --color-text-primary:   #E8E0D6 !important;  /* was #1A1816 */
+  --color-text-secondary: #C9C1B3 !important;  /* was #2A2622 */
+  --color-text-muted:     #A09889 !important;  /* was #4A433C */
+  --color-text-subtle:    #6A6159 !important;  /* was #6A6159 */
+
+  --color-status-occupied-bg:    #1A2E30 !important;  /* was #D8E3E4 */
+  --color-status-occupied-fg:    #2A7A82 !important;  /* was #1E4D52 */
+  --color-status-vacant-bg:      #2E2518 !important;  /* was #F4EFE7 */
+  --color-status-vacant-fg:      #C9993E !important;  /* was #8A7558 */
+  --color-status-vacating-bg:    #2E2518 !important;  /* was #F4E5C1 */
+  --color-status-vacating-fg:    #D49A2E !important;  /* was #C48A1E */
+  --color-status-bartawi-bg:     #2E2518 !important;  /* was #FBF5E8 */
+  --color-status-bartawi-fg:     #C9993E !important;  /* was #B8883D */
+  --color-status-overdue-bg:     #2E1E1A !important;  /* was #F1DDD6 */
+  --color-status-overdue-fg:     #C9604F !important;  /* was #A84A3B */
+  --color-status-legal-bg:       #2E2433 !important;  /* was #EAE3F3 */
+  --color-status-legal-fg:       #7A5EAA !important;  /* was #5A3E8A */
+  --color-status-maintenance-bg: #2E2518 !important;  /* was #F0E8D1 */
+  --color-status-maintenance-fg: #C9993E !important;  /* was #5F4F2C */
+
+  /* ─── Canvas & surfaces ─── */
+  --color-sand-50:  #1A1816 !important;    /* was #FAF7F2 — now espresso (deepest) */
+  --color-sand-100: #222019 !important;    /* was #F4EFE7 — card surface */
+  --color-sand-200: #2E2B26 !important;    /* was #E8DFD3 — elevated surface */
+  --color-sand-300: #3A3634 !important;    /* was #D6CFC5 — borders */
+
+  /* ─── Text ─── */
+  --color-espresso:       #E8E0D6 !important;    /* was #1A1816 — primary text (warm off-white) */
+  --color-espresso-muted: #A09889 !important;    /* was #6A6159 — secondary text */
+  --color-espresso-faint: #6A6159 !important;    /* was #9C948B — tertiary text */
+
+  /* ─── Accent (slightly brighter for dark bg contrast) ─── */
+  --color-amber:      #C9993E !important;    /* was #B8883D — primary accent */
+  --color-amber-hover: #D4A44A !important;   /* was #A07832 — hover */
+  --color-amber-pale: #2E2518 !important;    /* was #F4EFE7 — amber wash on dark */
+
+  /* ─── Status colors (brighter for dark bg) ─── */
+  --color-teal:      #2A7A82 !important;    /* was #1E4D52 — success */
+  --color-teal-pale: #1A2E30 !important;    /* was #D8E3E4 — success bg */
+  --color-rust:      #C9604F !important;    /* was #A84A3B — alert */
+  --color-rust-pale: #2E1E1A !important;    /* was #F0DDD9 — alert bg */
+  --color-ochre:     #D49A2E !important;    /* was #C48A1E — warning */
+  --color-plum:      #7A5EAA !important;    /* was #5A3E8A — legal */
+
+  /* ─── Specific overrides ─── */
+  color-scheme: dark;
+}
+
+/* ─── Dark Mode Elevation Overrides ─── */
+.dark .elevation-1 {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dark .elevation-2 {
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.25),
+    0 4px 16px rgba(0, 0, 0, 0.2),
+    0 8px 32px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.dark .elevation-3 {
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.3),
+    0 8px 24px rgba(0, 0, 0, 0.25),
+    0 16px 48px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.dark .elevation-float {
+  box-shadow:
+    0 8px 16px rgba(0, 0, 0, 0.35),
+    0 16px 48px rgba(0, 0, 0, 0.3),
+    0 24px 80px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dark .elevation-hover:hover {
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    0 8px 32px rgba(0, 0, 0, 0.25),
+    0 16px 56px rgba(0, 0, 0, 0.2);
+  border-color: rgba(201, 153, 62, 0.25);
+}
+
+.dark .elevation-active {
+  box-shadow:
+    inset 0 0 0 1px rgba(201, 153, 62, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.25),
+    0 0 20px rgba(201, 153, 62, 0.08);
+}
+
+/* Bezel card in dark mode */
+.dark .bezel {
+  background: var(--color-sand-100);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1),
+    0 1px 3px rgba(0, 0, 0, 0.2),
+    0 4px 16px rgba(0, 0, 0, 0.15);
+}
+.dark .bezel:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    0 12px 40px rgba(0, 0, 0, 0.2);
+  border-color: rgba(201, 153, 62, 0.2);
+}
+
+/* ─── Dark Mode Atmosphere Overrides ─── */
+/* Atmosphere glows are MORE visible on dark — increase slightly */
+.dark .atmosphere::before {
+  background: radial-gradient(
+    ellipse 80% 50% at 50% 0%,
+    rgba(201, 153, 62, 0.06) 0%,
+    transparent 70%
+  );
+}
+
+.dark .atmosphere-strong::before {
+  background: radial-gradient(
+    ellipse 60% 40% at 50% 0%,
+    rgba(201, 153, 62, 0.1) 0%,
+    rgba(201, 153, 62, 0.04) 40%,
+    transparent 70%
+  );
+}
+
+/* Amber glow is the star of dark mode */
+.dark .glow-amber {
+  box-shadow:
+    0 0 0 1px rgba(201, 153, 62, 0.15),
+    0 0 24px rgba(201, 153, 62, 0.1),
+    0 0 80px rgba(201, 153, 62, 0.05);
+}
+
+.dark .glow-teal {
+  box-shadow:
+    0 0 0 1px rgba(42, 122, 130, 0.15),
+    0 0 20px rgba(42, 122, 130, 0.08);
+}
+
+/* ─── Dark Mode Glass Overrides ─── */
+.dark .glass-overlay {
+  background: rgba(26, 24, 22, 0.75);
+  backdrop-filter: blur(12px) saturate(1.1);
+}
+
+.dark .glass-surface {
+  background: rgba(34, 32, 25, 0.95);
+  backdrop-filter: blur(8px);
+}
+
+.dark .scrim {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+}
+
+/* ─── Dark Mode Dividers ─── */
+.dark .divider-warm {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 20%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.06) 80%,
+    transparent 100%
+  );
+}
+
+.dark .section-break::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(201, 153, 62, 0.12) 30%,
+    rgba(201, 153, 62, 0.18) 50%,
+    rgba(201, 153, 62, 0.12) 70%,
+    transparent
+  );
+}
+
+/* ─── Dark Mode Paper Grain ─── */
+.dark body::before {
+  opacity: 0.03;  /* slightly reduced on dark — grain is more visible on dark bg */
+  mix-blend-mode: screen;  /* inverted blend mode for dark backgrounds */
+}
+
+/* ─── Dark Mode Scrollbar ─── */
+.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ─── Dark Mode Selection ─── */
+.dark ::selection {
+  background: rgba(201, 153, 62, 0.3);
+  color: #E8E0D6;
+}
+
+/* ─── Dark Mode Focus Ring ─── */
+.dark :focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+}
+
+/* ─── Dark Mode Input Overrides ─── */
+.dark input,
+.dark textarea,
+.dark select {
+  background: var(--color-sand-200);
+  border-color: var(--color-sand-300);
+  color: var(--color-espresso);
+}
+
+.dark input:focus,
+.dark textarea:focus,
+.dark select:focus {
+  border-color: var(--color-amber);
+  box-shadow: 0 0 0 3px rgba(201, 153, 62, 0.15);
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: var(--color-espresso-faint);
+}
+
+/* ─── Login Page Dark Override ─── */
+.dark .login-right-panel {
+  background: var(--color-sand-100) !important;
+}
+
+/* ─── Chart/Recharts Dark Overrides ─── */
+/* Recharts renders SVG — override text fills */
+.dark .recharts-text {
+  fill: var(--color-espresso-muted) !important;
+}
+
+.dark .recharts-cartesian-grid-horizontal line,
+.dark .recharts-cartesian-grid-vertical line {
+  stroke: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* ─── Room Cell Status Gradients — Dark Mode ─── */
+.dark .room-occupied {
+  background: linear-gradient(135deg, rgba(42, 122, 130, 0.2) 0%, rgba(42, 122, 130, 0.12) 100%) !important;
+  border-color: rgba(42, 122, 130, 0.5) !important;
+}
+.dark .room-vacant {
+  border-color: rgba(201, 153, 62, 0.5) !important;
+}
+.dark .room-vacating {
+  background: linear-gradient(135deg, rgba(212, 154, 46, 0.15) 0%, rgba(212, 154, 46, 0.08) 100%) !important;
+  border-color: rgba(212, 154, 46, 0.5) !important;
+}
+.dark .room-maintenance {
+  background: linear-gradient(135deg, rgba(201, 96, 79, 0.15) 0%, rgba(201, 96, 79, 0.08) 100%) !important;
+  border-color: rgba(201, 96, 79, 0.5) !important;
+}
+.dark .room-bartawi {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ─── Sidebar Gradient Dark Override ─── */
+.dark .sidebar-gradient {
+  background: linear-gradient(180deg, var(--color-sand-100) 0%, var(--color-sand-50) 100%) !important;
+}
+
+/* ─── Theme Transition ─── */
+/* Smooth theme transition — only on background and color, not on all */
+html.transitioning,
+html.transitioning *,
+html.transitioning *::before,
+html.transitioning *::after {
+  transition: background-color 300ms ease-out,
+              color 200ms ease-out,
+              border-color 200ms ease-out,
+              box-shadow 300ms ease-out !important;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NUCLEAR OPTION — Force backgrounds in dark mode
+   These rules are at the END to maximize specificity.
+   ═══════════════════════════════════════════════════════════ */
+
+/* Force all surface colors in dark mode */
+html.dark .bg-sand-50,
+html.dark .bg-\[var\(--color-sand-50\)\] {
+  background-color: #1A1816 !important;
+}
+
+html.dark .bg-white,
+html.dark .bg-\[\#FFFFFF\],
+html.dark .bg-\[white\] {
+  background-color: #222019 !important;
 }

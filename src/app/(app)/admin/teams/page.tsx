@@ -50,7 +50,11 @@ export default function TeamsPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30, delay: 0.05 }}
+      className="atmosphere space-y-8">
       <motion.div variants={slideUp} initial="hidden" animate="visible" className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <div className="eyebrow mb-2">Admin</div>
@@ -67,8 +71,12 @@ export default function TeamsPage() {
 
       <AnimatePresence>
         {creating && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
-            className="bezel p-4 flex items-end gap-3 overflow-hidden">
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="bezel elevation-hover p-4 flex items-end gap-3 overflow-hidden">
             <label className="flex-1 flex flex-col gap-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Team name</span>
               <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
@@ -99,9 +107,9 @@ export default function TeamsPage() {
           const lead = team.members?.find((m: any) => m.is_lead)
           return (
             <motion.div key={team.id} variants={staggerItem} layout
-              className="bezel overflow-hidden">
+              className="bezel elevation-hover overflow-hidden">
               <motion.div
-                className="p-5 cursor-pointer hover:bg-sand-50 transition-colors"
+                className="p-5 cursor-pointer hover:bg-sand-50 transition-all duration-200"
                 onClick={() => toggleExpanded(team.id)}
                 whileTap={{ scale: 0.995 }}>
                 <div className="flex items-start justify-between gap-3">
@@ -134,7 +142,7 @@ export default function TeamsPage() {
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: 'auto', opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                     className="overflow-hidden border-t border-[color:var(--color-border-subtle)]">
                     <div className="p-4 bg-sand-50 space-y-3">
                       <div className="eyebrow">Members</div>
@@ -144,6 +152,7 @@ export default function TeamsPage() {
                             <motion.div key={m.user_id}
                               initial={{ opacity: 0, x: -8 }}
                               animate={{ opacity: 1, x: 0 }}
+                              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                               className="flex items-center justify-between px-3 py-2 rounded bg-white hover:bg-sand-50 transition-colors group">
                               <div className="flex items-center gap-2">
                                 {m.is_lead && <Icon icon={Crown} size={12} className="text-amber-600" />}
@@ -172,7 +181,7 @@ export default function TeamsPage() {
           )
         })}
       </motion.div>
-    </div>
+    </motion.div>
   )
 }
 

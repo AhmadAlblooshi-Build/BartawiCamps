@@ -18,15 +18,16 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-end justify-between animate-rise">
+      <div className="atmosphere-strong flex items-end justify-between animate-rise pb-6">
         <div>
-          <div className="eyebrow mb-2">Today · {new Date().toLocaleDateString('en-AE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           <h1 className="display-lg">{greeting}, {firstName}</h1>
+          <div className="overline mt-2">{new Date().toLocaleDateString('en-AE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
         </div>
         <div className="text-[12px] text-espresso-muted tabular">
           Last sync · <span className="font-mono text-espresso">just now</span>
         </div>
       </div>
+      <div className="divider-warm" />
 
       <StatStrip month={month} year={year} />
 

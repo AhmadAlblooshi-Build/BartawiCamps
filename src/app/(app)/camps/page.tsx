@@ -10,13 +10,19 @@ export default function CampsPage() {
   const { month, year } = getCurrentMonthYear()
   const { data: camps } = useQuery({ queryKey: ['camps'], queryFn: () => endpoints.camps() })
 
+  const totalRooms = camps?.data?.reduce((sum: number, camp: any) => sum + (camp.total_rooms || 0), 0) || 0
+  const locationCount = camps?.data?.length || 0
+
   return (
-    <div className="space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30, delay: 0.05 }}
+      className="atmosphere space-y-8">
       <div className="animate-rise">
-        <div className="eyebrow mb-2">Properties</div>
         <h1 className="display-lg">Camps</h1>
-        <p className="mt-2 text-[13px] text-espresso-muted max-w-[520px]">
-          Overview of both operational camps. Click through for rooms, map view, and analytics.
+        <p className="overline mt-2">
+          {locationCount} {locationCount === 1 ? 'location' : 'locations'} · {totalRooms} rooms
         </p>
       </div>
 
@@ -33,10 +39,10 @@ export default function CampsPage() {
           animate="visible"
         >
           {camps.data.map((camp: any, i: number) => (
-            <CampCard key={camp.id} camp={camp} month={month} year={year} delay={i * 0.08} />
+            <CampCard key={camp.id} camp={camp} month={month} year={year} delay={i * 0.1} />
           ))}
         </motion.div>
       )}
-    </div>
+    </motion.div>
   )
 }

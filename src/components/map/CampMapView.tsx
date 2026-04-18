@@ -39,9 +39,12 @@ export function CampMapView({ campId }: Props) {
           initial={{ opacity: 0, scale: 0.99 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-          className="bezel-deep overflow-hidden"
+          className="bezel atmosphere-strong overflow-hidden"
+          style={{ padding: '32px' }}
         >
-          <div className="bezel-inner bg-sand-50 p-4 md:p-6 min-h-[640px]">
+          <div className="relative min-h-[640px]" style={{
+            backgroundImage: 'repeating-linear-gradient(0deg, rgba(214,207,197,0.03) 0px, rgba(214,207,197,0.03) 1px, transparent 1px, transparent 20px), repeating-linear-gradient(90deg, rgba(214,207,197,0.03) 0px, rgba(214,207,197,0.03) 1px, transparent 1px, transparent 20px)'
+          }}>
             {code === 'C1' && rooms && <CampMap1 rooms={rooms.data} floor={floor} filter={filter} onSelect={setOpenRoomId} />}
             {code === 'C2' && rooms && <CampMap2 rooms={rooms.data} floor={floor} filter={filter} onSelect={setOpenRoomId} />}
             {!rooms && <div className="h-full min-h-[560px] skeleton-shimmer rounded-xl" />}

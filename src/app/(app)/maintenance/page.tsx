@@ -20,13 +20,12 @@ export default function MaintenancePage() {
   })
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 atmosphere">
       <div className="flex items-end justify-between animate-rise flex-wrap gap-4">
         <div>
-          <div className="eyebrow mb-2">Operations</div>
           <h1 className="display-lg">Maintenance</h1>
-          <p className="mt-2 text-[13px] text-espresso-muted max-w-[520px]">
-            Physical repair requests. Auto-routed to teams. Separate from tenant complaints.
+          <p className="overline mt-2">
+            Physical repair requests · Auto-routed to teams
           </p>
         </div>
         <button onClick={() => setIntakeOpen(true)}
@@ -35,11 +34,13 @@ export default function MaintenancePage() {
         </button>
       </div>
 
-      <div className="flex items-center gap-1 flex-wrap">
+      {/* Filter pills - evolved styling */}
+      <div className="flex items-center gap-2 flex-wrap">
         {['open', 'assigned', 'in_progress', 'resolved', 'closed', 'all'].map(s => (
           <button key={s} onClick={() => setStatus(s)}
             className={cn('px-3 h-9 rounded-lg text-[11px] font-medium capitalize transition-colors',
-              status === s ? 'bg-espresso text-sand-50' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200')}>
+              status === s ? 'text-amber' : 'bg-sand-200 text-espresso-muted hover:bg-sand-200')}
+            style={status === s ? { background: 'rgba(184, 136, 61, 0.1)' } : {}}>
             {s.replace('_', ' ')}
           </button>
         ))}
@@ -58,46 +59,51 @@ export default function MaintenancePage() {
           animate="visible"
           variants={fadeIn}
         >
-          {data.data.map((m: any, i: number) => (
-            <motion.div key={m.id}
-              variants={slideUp}
-              transition={{ delay: Math.min(i * 0.04, 0.32) }}
-              className="bezel p-4 flex items-start gap-3">
-              <PriorityBar priority={m.priority} />
-              <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 grid place-items-center shrink-0">
-                <Icon icon={Wrench} size={14} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <span className="font-mono tabular text-[11px] text-espresso-subtle">{m.request_number}</span>
-                  <span className="font-medium text-[14px] text-espresso">{m.title}</span>
-                  <StatusChip status={m.status} />
+          {data.data.map((m: any, i: number) => {
+            const priorityColors: Record<string, string> = {
+              urgent: '#A84A3B',
+              high: '#C48A1E',
+              medium: '#B8883D',
+              low: '#D6CFC5'
+            }
+            const priorityColor = priorityColors[m.priority] || '#D6CFC5'
+
+            return (
+              <motion.div key={m.id}
+                variants={slideUp}
+                transition={{ delay: Math.min(i * 0.04, 0.32) }}
+                className="bezel elevation-hover p-4 flex items-start gap-3"
+                style={{ borderLeft: `3px solid ${priorityColor}` }}>
+                <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 grid place-items-center shrink-0">
+                  <Icon icon={Wrench} size={14} />
                 </div>
-                <div className="text-[12px] text-espresso-soft line-clamp-2">{m.description}</div>
-                <div className="flex items-center gap-3 mt-2 text-[10px] text-espresso-subtle flex-wrap">
-                  {m.room && <span>Room <span className="font-mono tabular text-espresso">{m.room.room_number}</span></span>}
-                  {m.assigned_team && (
-                    <span className="px-2 py-0.5 rounded-full text-[9px] font-medium bg-teal-pale text-teal">
-                      {m.assigned_team.name}
-                    </span>
-                  )}
-                  {m.assigned_user && <span>Assignee · <span className="text-espresso">{m.assigned_user.full_name}</span></span>}
-                  <span>{formatDateTime(m.created_at)}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="font-mono tabular overline text-espresso-subtle">{m.request_number}</span>
+                    <span className="display-sm">{m.title}</span>
+                    <StatusChip status={m.status} />
+                  </div>
+                  <div className="text-[12px] text-espresso-soft line-clamp-2">{m.description}</div>
+                  <div className="flex items-center gap-3 mt-2 flex-wrap">
+                    {m.room && <span className="overline">Room <span className="font-mono tabular text-espresso">{m.room.room_number}</span></span>}
+                    {m.assigned_team && (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-medium uppercase bg-teal-pale text-teal">
+                        {m.assigned_team.name}
+                      </span>
+                    )}
+                    {m.assigned_user && <span className="overline">Assignee · <span className="text-espresso">{m.assigned_user.full_name}</span></span>}
+                    <span className="overline">{formatDateTime(m.created_at)}</span>
+                  </div>
                 </div>
-              </div>
-            </motion.div>
-          ))}
+              </motion.div>
+            )
+          })}
         </motion.div>
       )}
 
       {intakeOpen && <MaintIntakeModal onClose={() => setIntakeOpen(false)} />}
     </div>
   )
-}
-
-function PriorityBar({ priority }: { priority: string }) {
-  const colors: Record<string, string> = { urgent: 'bg-rust', high: 'bg-ochre', medium: 'bg-amber-400', low: 'bg-sand-400' }
-  return <div className={`w-1 self-stretch rounded-full ${colors[priority] || 'bg-sand-300'}`} />
 }
 
 function StatusChip({ status }: { status: string }) {
@@ -110,5 +116,5 @@ function StatusChip({ status }: { status: string }) {
     closed:      'bg-sand-100 text-espresso-muted',
     cancelled:   'bg-sand-100 text-espresso-subtle',
   }
-  return <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${map[status] || map.open}`}>{status.replace('_', ' ')}</span>
+  return <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium uppercase ${map[status] || map.open}`}>{status.replace('_', ' ')}</span>
 }

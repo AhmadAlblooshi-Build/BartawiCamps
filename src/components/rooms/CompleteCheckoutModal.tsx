@@ -58,25 +58,24 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
   return (
     <Dialog.Root open onOpenChange={open => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
+        <Dialog.Overlay className="scrim fixed inset-0 z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            variants={scaleUp}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            className="fixed left-1/2 top-[6vh] -translate-x-1/2 w-[640px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-white rounded-2xl shadow-raise-4 z-50 flex flex-col overflow-hidden"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30, duration: 0.3 }}
+            className="fixed left-1/2 top-[6vh] -translate-x-1/2 w-[640px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-sand-50 rounded-2xl elevation-float z-50 flex flex-col overflow-hidden"
           >
             <Dialog.Title className="sr-only">Complete checkout</Dialog.Title>
-            <header className="flex items-center justify-between px-6 h-14 border-b border-[color:var(--color-border-subtle)]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-rust text-white grid place-items-center"><Icon icon={ArrowUpRight} size={14} /></div>
-                <div className="display-xs">Complete checkout · Room {room.room_number}</div>
-              </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100"><Icon icon={X} size={14} /></button>
+            <header className="px-8 pt-6 pb-4">
+              <div className="display-md mb-1">Complete Checkout · Room {room.room_number}</div>
+              <div className="overline text-espresso-muted">Finalize tenant departure</div>
+              <div className="divider-warm mt-4" />
+              <button onClick={onClose} className="absolute top-6 right-8 w-8 h-8 rounded-full bg-sand-200 grid place-items-center hover:bg-amber hover:text-white transition-colors"><Icon icon={X} size={14} /></button>
             </header>
 
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+            <div className="flex-1 overflow-y-auto px-8 py-5 space-y-5">
               {outstanding > 0 && (
                 <motion.div
                   variants={slideUp}
@@ -103,22 +102,22 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Actual checkout date *</span>
+                  <span className="overline text-espresso-muted">Actual checkout date *</span>
                   <input type="date" value={checkoutDate} onChange={e => setCheckoutDate(e.target.value)}
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Reason for leaving *</span>
+                  <span className="overline text-espresso-muted">Reason for leaving *</span>
                   <input type="text" value={reason} onChange={e => setReason(e.target.value)}
                     placeholder="Contract end, termination, company change..."
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none" />
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none" />
                 </label>
                 <div className="col-span-2">
                   <label className="flex flex-col gap-1.5">
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Inspection notes</span>
+                    <span className="overline text-espresso-muted">Inspection notes</span>
                     <textarea value={inspection} onChange={e => setInspection(e.target.value)} rows={3}
                       placeholder="Room condition, damages, keys returned..."
-                      className="px-3 py-2 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none resize-none" />
+                      className="px-3 py-2 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none resize-none" />
                   </label>
                 </div>
               </div>
@@ -192,10 +191,11 @@ export function CompleteCheckoutModal({ room, onClose }: { room: any; onClose: (
               )}
             </div>
 
-            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">
-              <button onClick={onClose} className="px-4 h-9 rounded-full text-[12px] font-medium text-espresso-muted hover:text-espresso">Cancel</button>
+            <footer className="px-8 py-4 bg-sand-50 flex justify-end gap-3">
+              <div className="divider-warm mb-4 -mx-8" />
+              <button onClick={onClose} className="px-5 h-11 rounded-full border-2 border-espresso text-espresso text-[12px] font-medium hover:bg-espresso hover:text-sand-50 transition-all">Cancel</button>
               <button onClick={() => mutation.mutate()} disabled={mutation.isPending || blocked || !reason}
-                className="px-4 h-9 rounded-full bg-rust text-white text-[12px] font-medium hover:bg-rust/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98]">
+                className="px-5 h-11 rounded-full bg-rust text-white text-[12px] font-medium hover:bg-rust/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98]">
                 {mutation.isPending ? 'Completing…' : 'Complete checkout'}
               </button>
             </footer>

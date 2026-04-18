@@ -57,7 +57,8 @@ export function RoomsGrid({ campId }: Props) {
 
   return (
     <div className="space-y-5">
-      <div className="bezel p-3 flex items-center gap-2 flex-wrap">
+      {/* Filter bar - evolved styling */}
+      <div className="rounded-[14px] p-3 flex items-center gap-2 flex-wrap" style={{ background: 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.6)' }}>
         <div className="flex-1 flex items-center gap-2 min-w-[240px]">
           <Icon icon={MagnifyingGlass} size={14} className="text-espresso-muted ml-2" />
           <input
@@ -75,7 +76,8 @@ export function RoomsGrid({ campId }: Props) {
 
         <select value={status} onChange={e => setStatus(e.target.value)}
           className={cn('h-9 px-3 rounded-lg text-[11px] font-medium border-0 outline-none transition-colors cursor-pointer',
-            status ? 'bg-amber-pale text-amber ring-1 ring-amber/20' : 'bg-sand-100 text-espresso hover:bg-sand-200')}>
+            status ? 'bg-amber text-amber' : 'bg-sand-200 text-espresso hover:bg-sand-200')}
+          style={status ? { background: 'rgba(184, 136, 61, 0.1)' } : {}}>
           <option value="">All statuses</option>
           <option value="occupied">Occupied</option>
           <option value="vacant">Vacant</option>
@@ -86,7 +88,8 @@ export function RoomsGrid({ campId }: Props) {
 
         <select value={sizeFilter} onChange={e => setSizeFilter(e.target.value)}
           className={cn('h-9 px-3 rounded-lg text-[11px] font-medium border-0 outline-none transition-colors cursor-pointer',
-            sizeFilter ? 'bg-amber-pale text-amber ring-1 ring-amber/20' : 'bg-sand-100 text-espresso hover:bg-sand-200')}>
+            sizeFilter ? 'bg-amber text-amber' : 'bg-sand-200 text-espresso hover:bg-sand-200')}
+          style={sizeFilter ? { background: 'rgba(184, 136, 61, 0.1)' } : {}}>
           <option value="">All sizes</option>
           <option value="big">Big</option>
           <option value="small">Small</option>
@@ -96,19 +99,25 @@ export function RoomsGrid({ campId }: Props) {
         <button
           onClick={() => setHasBalance(v => !v)}
           className={cn('px-3 h-9 rounded-lg text-[11px] font-medium transition-colors',
-            hasBalance ? 'bg-amber-pale text-amber ring-1 ring-amber/20' : 'bg-sand-100 text-espresso-muted hover:bg-sand-200')}
+            hasBalance ? 'text-amber' : 'bg-sand-200 text-espresso-muted hover:bg-sand-200')}
+          style={hasBalance ? { background: 'rgba(184, 136, 61, 0.1)' } : {}}
         >
           Has balance
         </button>
 
-        {hasActiveFilters && (
-          <button
-            onClick={clearAllFilters}
-            className="text-[11px] font-medium text-amber hover:text-amber-hover transition-colors underline decoration-dotted underline-offset-2"
-          >
-            Clear all
-          </button>
-        )}
+        <AnimatePresence>
+          {hasActiveFilters && (
+            <motion.button
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={clearAllFilters}
+              className="text-[11px] font-medium text-amber hover:text-amber-hover transition-colors"
+            >
+              Clear all
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
       {isLoading ? (
@@ -176,21 +185,28 @@ function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; 
   const company = room.current_occupancy?.company?.name || null
   const balance = Number(room.outstanding_balance || 0)
 
+  // Status indicator color
+  const statusBorder: Record<string, string> = {
+    occupied: '#1E4D52',
+    vacant: '#C48A1E',
+    vacating: '#C48A1E',
+    bartawi_use: '#D6CFC5',
+    maintenance: '#A84A3B',
+  }
+  const borderColor = statusBorder[room.status] || '#D6CFC5'
+
   return (
     <motion.div
       variants={staggerItem}
       onClick={onOpen}
-      initial="rest"
-      whileHover="hover"
-      whileTap="tap"
-      className="bezel p-4 cursor-pointer group"
+      className="bezel elevation-hover p-4 cursor-pointer group relative overflow-hidden"
       style={{
-        boxShadow: cardHover.rest.boxShadow,
+        borderLeft: `3px solid ${borderColor}`,
       }}
     >
       {/* Block eyebrow */}
       {room.block?.code && (
-        <div className="eyebrow mb-2 text-espresso-faint">
+        <div className="overline mb-2 text-espresso-faint">
           Block {room.block.code}
         </div>
       )}
@@ -211,14 +227,14 @@ function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; 
           <div className="text-[13px] text-espresso-muted italic">Vacant</div>
         )}
         {company && (
-          <div className="text-[11px] text-espresso-muted mt-0.5 truncate">{company}</div>
+          <div className="overline mt-0.5 truncate text-espresso-muted">{company}</div>
         )}
       </div>
 
       {/* Monthly rent */}
       <div className="mb-2">
-        <div className="eyebrow mb-1">Monthly rent</div>
-        <div className="font-mono tabular text-[13px] text-espresso">
+        <div className="overline mb-1">Monthly rent</div>
+        <div className="data-md text-espresso">
           {Number(room.standard_rent) > 0 ? formatAED(room.standard_rent) : '—'}
         </div>
       </div>
@@ -226,8 +242,8 @@ function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; 
       {/* Outstanding balance */}
       {balance > 0 && (
         <div className="pt-3 border-t border-sand-200">
-          <div className="eyebrow mb-1 text-rust">Outstanding</div>
-          <div className="font-mono tabular text-[14px] text-rust font-semibold">
+          <div className="overline mb-1 text-rust">Outstanding</div>
+          <div className="data-md text-rust font-semibold">
             {formatAED(balance)}
           </div>
         </div>

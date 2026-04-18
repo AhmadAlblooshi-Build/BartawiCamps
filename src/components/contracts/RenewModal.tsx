@@ -42,25 +42,24 @@ export function RenewModal({ contract, onClose }: { contract: any; onClose: () =
   return (
     <Dialog.Root open onOpenChange={open => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
+        <Dialog.Overlay className="scrim fixed inset-0 z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 26 }}
-            className="fixed left-1/2 top-[10vh] -translate-x-1/2 w-[520px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-raise-4 z-50 overflow-hidden"
+            transition={{ type: 'spring', stiffness: 300, damping: 30, duration: 0.3 }}
+            className="fixed left-1/2 top-[10vh] -translate-x-1/2 w-[520px] max-w-[calc(100vw-2rem)] bg-sand-50 rounded-2xl elevation-float z-50 overflow-hidden"
           >
             <Dialog.Title className="sr-only">Renew contract</Dialog.Title>
-            <header className="flex items-center justify-between px-6 h-14 border-b border-[color:var(--color-border-subtle)]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 grid place-items-center"><Icon icon={FileText} size={14} /></div>
-                <div className="display-xs">Renew contract</div>
-              </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100"><Icon icon={X} size={14} /></button>
+            <header className="px-8 pt-6 pb-4">
+              <div className="display-md mb-1">Renew Contract</div>
+              <div className="overline text-espresso-muted">Extend existing contract terms</div>
+              <div className="divider-warm mt-4" />
+              <button onClick={onClose} className="absolute top-6 right-8 w-8 h-8 rounded-full bg-sand-200 grid place-items-center hover:bg-amber hover:text-white transition-colors"><Icon icon={X} size={14} /></button>
             </header>
 
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-8 py-5 space-y-4">
               {/* Current vs Proposed Terms Side-by-Side */}
               <div className="grid grid-cols-2 gap-3">
                 {/* Current Terms */}
@@ -146,10 +145,11 @@ export function RenewModal({ contract, onClose }: { contract: any; onClose: () =
               </label>
             </div>
 
-            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">
-              <button onClick={onClose} className="px-4 h-9 rounded-full text-[12px] font-medium text-espresso-muted hover:text-espresso">Cancel</button>
+            <footer className="px-8 py-4 bg-sand-50 flex justify-end gap-3">
+              <div className="divider-warm mb-4 -mx-8" />
+              <button onClick={onClose} className="px-5 h-11 rounded-full border-2 border-espresso text-espresso text-[12px] font-medium hover:bg-espresso hover:text-sand-50 transition-all">Cancel</button>
               <button onClick={() => mutation.mutate()} disabled={mutation.isPending}
-                className="px-4 h-9 rounded-full bg-teal text-white text-[12px] font-medium hover:bg-teal-light disabled:opacity-50 transition-all active:scale-[0.98]">
+                className="px-5 h-11 rounded-full bg-amber text-espresso text-[12px] font-medium hover:bg-amber/90 disabled:opacity-50 transition-all active:scale-[0.98]">
                 {mutation.isPending ? 'Renewing…' : 'Confirm renewal'}
               </button>
             </footer>
@@ -165,9 +165,9 @@ function Field({ label, type, value, onChange, mono = false }: {
 }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">{label}</span>
+      <span className="overline text-espresso-muted">{label}</span>
       <input type={type} value={value} onChange={e => onChange(e.target.value)}
-        className={`h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none ${mono ? 'font-mono tabular' : ''}`} />
+        className={`h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none ${mono ? 'font-mono tabular' : ''}`} />
     </label>
   )
 }

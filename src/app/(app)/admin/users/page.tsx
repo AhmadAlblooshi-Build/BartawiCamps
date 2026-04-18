@@ -67,7 +67,11 @@ export default function UsersPage() {
   const { data: roles } = useQuery({ queryKey: ['roles'], queryFn: () => endpoints.roles() })
 
   return (
-    <div className="space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30, delay: 0.05 }}
+      className="atmosphere space-y-8">
       <motion.div variants={slideUp} initial="hidden" animate="visible" className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <div className="eyebrow mb-2">Admin</div>
@@ -87,7 +91,7 @@ export default function UsersPage() {
         <div className="eyebrow mb-3">Roles</div>
         <div className="flex items-center gap-2 flex-wrap">
           {roles?.data?.map((r: any) => (
-            <motion.div key={r.id} whileHover={{ y: -1 }} className="bezel px-4 py-2 flex items-center gap-2">
+            <motion.div key={r.id} whileHover={{ y: -1 }} className="bezel elevation-hover px-4 py-2 flex items-center gap-2">
               <Icon icon={ShieldStar} size={12} className="text-amber-600" />
               <span className="text-[12px] font-medium text-espresso">{r.name}</span>
               <span className="text-[10px] font-mono tabular text-espresso-subtle">· {r.permissions?.length || 0} perms</span>
@@ -104,7 +108,7 @@ export default function UsersPage() {
           <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 skeleton-shimmer rounded-lg" />)}</div>
         ) : (
           <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="bezel overflow-hidden">
-            <div className="grid grid-cols-[1fr_1fr_180px_140px_120px] gap-0 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-50">
+            <div className="grid grid-cols-[1fr_1fr_180px_140px_120px] gap-0 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-100">
               <div className="eyebrow">User</div>
               <div className="eyebrow">Email</div>
               <div className="eyebrow">Role</div>
@@ -114,7 +118,11 @@ export default function UsersPage() {
             <div className="divide-y divide-[color:var(--color-border-subtle)]">
               {users.data.map((u: any, i: number) => (
                 <motion.div key={u.id} variants={staggerItem}
-                  className="grid grid-cols-[1fr_1fr_180px_140px_120px] gap-0 px-4 py-3 items-center hover:bg-sand-50 transition-colors">
+                  className={cn(
+                    'grid grid-cols-[1fr_1fr_180px_140px_120px] gap-0 px-4 py-3 items-center transition-all duration-200',
+                    i % 2 === 0 ? 'bg-transparent' : 'bg-sand-100/15',
+                    'hover:bg-sand-200/30 hover:-translate-y-[1px]'
+                  )}>
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-espresso text-sand-50 grid place-items-center text-[11px] font-semibold">
                       {(u.full_name || u.email).slice(0, 2).toUpperCase()}
@@ -148,7 +156,7 @@ export default function UsersPage() {
       {(creating || editing) && (
         <InviteUserModal initial={editing} roles={roles?.data || []} onClose={() => { setEditing(null); setCreating(false) }} />
       )}
-    </div>
+    </motion.div>
   )
 }
 
@@ -239,11 +247,11 @@ function InviteUserModal({ initial, roles, onClose }: { initial: any | null; rol
                       const isExpanded = expandedCategories.includes(category)
                       const selected = countSelected(category)
                       return (
-                        <div key={category} className="bezel overflow-hidden">
+                        <div key={category} className="bezel elevation-hover overflow-hidden">
                           <motion.button onClick={() => toggleCategory(category)} whileTap={{ scale: 0.995 }}
-                            className="w-full px-4 py-3 flex items-center justify-between hover:bg-sand-50 transition-colors">
+                            className="w-full px-4 py-3 flex items-center justify-between hover:bg-sand-50 transition-all duration-200">
                             <div className="flex items-center gap-2">
-                              <motion.div animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                              <motion.div animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ type: 'spring', stiffness: 400, damping: 30 }}>
                                 <Icon icon={CaretDown} size={12} className="text-espresso-muted" />
                               </motion.div>
                               <span className="text-[13px] font-medium text-espresso">{category}</span>
@@ -261,7 +269,7 @@ function InviteUserModal({ initial, roles, onClose }: { initial: any | null; rol
                                 initial={{ height: 0, opacity: 0 }}
                                 animate={{ height: 'auto', opacity: 1 }}
                                 exit={{ height: 0, opacity: 0 }}
-                                transition={{ duration: 0.2 }}
+                                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                                 className="overflow-hidden border-t border-[color:var(--color-border-subtle)]">
                                 <div className="px-4 py-3 space-y-3 bg-sand-50">
                                   {perms.map(p => (

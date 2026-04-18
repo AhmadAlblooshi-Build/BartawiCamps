@@ -70,18 +70,18 @@ export function CollectionTrend() {
               <AreaChart data={trend} margin={{ top: 10, right: 12, bottom: 0, left: -10 }}>
                 <defs>
                   <linearGradient id="amberGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#B8883D" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#B8883D" stopOpacity={0}/>
+                    <stop offset="0%" stopColor="rgba(184,136,61,0.12)" stopOpacity={1}/>
+                    <stop offset="100%" stopColor="rgba(184,136,61,0)" stopOpacity={1}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid vertical={false} stroke="#E8DFD3" strokeDasharray="2 3" />
+                <CartesianGrid vertical={false} stroke="#E8DFD3" strokeOpacity={0.5} strokeDasharray="2 4" />
                 <XAxis dataKey="label" stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} />
                 <YAxis stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} domain={[50, 100]} tickFormatter={v => `${v}%`} />
-                <Tooltip content={<TrendTooltip mode="rate" />} cursor={{ stroke: '#D6CFC5', strokeWidth: 1, strokeDasharray: '4 4' }} />
-                <ReferenceLine y={95} stroke="#1E4D52" strokeDasharray="3 3" strokeOpacity={0.4} />
-                <Area type="monotone" dataKey="rate" stroke="#B8883D" strokeWidth={2} fill="url(#amberGradient)"
+                <Tooltip content={<TrendTooltip mode="rate" />} cursor={false} />
+                <ReferenceLine y={85} stroke="rgba(168,74,59,0.05)" strokeWidth={60} />
+                <Area type="monotone" dataKey="rate" stroke="#B8883D" strokeWidth={2.5} fill="url(#amberGradient)"
                   dot={false}
-                  activeDot={{ r: 4, fill: '#B8883D', strokeWidth: 0 }}
+                  activeDot={{ r: 5, fill: '#B8883D', strokeWidth: 0, className: 'glow-amber' }}
                   isAnimationActive={true}
                   animationDuration={1200}
                   animationEasing="ease-out"
@@ -89,13 +89,15 @@ export function CollectionTrend() {
               </AreaChart>
             ) : (
               <LineChart data={trend} margin={{ top: 10, right: 12, bottom: 0, left: -10 }}>
-                <CartesianGrid vertical={false} stroke="#E8DFD3" strokeDasharray="2 3" />
+                <CartesianGrid vertical={false} stroke="#E8DFD3" strokeOpacity={0.5} strokeDasharray="2 4" />
                 <XAxis dataKey="label" stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} />
                 <YAxis stroke="#6A6159" fontSize={11} fontFamily="JetBrains Mono, monospace" tickLine={false} axisLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip content={<TrendTooltip mode="amount" />} cursor={{ stroke: '#D6CFC5', strokeWidth: 1, strokeDasharray: '4 4' }} />
-                <Line type="monotone" dataKey="rent" stroke="#1A1816" strokeWidth={2} dot={false}
+                <Tooltip content={<TrendTooltip mode="amount" />} cursor={false} />
+                <Line type="monotone" dataKey="rent" stroke="#B8883D" strokeWidth={2.5} dot={false}
+                  activeDot={{ r: 5, fill: '#B8883D', strokeWidth: 0, className: 'glow-amber' }}
                   isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
-                <Line type="monotone" dataKey="paid" stroke="#1E4D52" strokeWidth={2} dot={false}
+                <Line type="monotone" dataKey="paid" stroke="#B8883D" strokeWidth={2.5} dot={false}
+                  activeDot={{ r: 5, fill: '#B8883D', strokeWidth: 0, className: 'glow-amber' }}
                   isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
               </LineChart>
             )}
@@ -112,30 +114,14 @@ function TrendTooltip({ active, payload, mode }: any) {
   if (!active || !payload?.length) return null
   const p = payload[0].payload
   return (
-    <div className="bg-sand-50 rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_1px_3px_rgba(26,24,22,0.04),0_4px_12px_rgba(26,24,22,0.03)] p-3 border border-sand-200 min-w-[180px]">
-      <div className="text-[11px] font-medium text-espresso-muted mb-1.5">{p.fullLabel}</div>
+    <div className="elevation-float bg-sand-50 rounded-lg px-3 py-2">
+      <div className="eyebrow mb-1">{p.fullLabel}</div>
       {mode === 'rate' ? (
-        <>
-          <div className="font-mono text-espresso tabular text-[15px] font-semibold">{formatPct(p.rate)}</div>
-          <div className="text-[11px] text-espresso-subtle mt-1">{formatAED(p.paid)} of {formatAED(p.rent)}</div>
-        </>
+        <div className="data-md">{formatPct(p.rate)}</div>
       ) : (
-        <div className="space-y-1">
-          <Row label="Billed"    value={formatAED(p.rent)}    dot="bg-espresso" />
-          <Row label="Collected" value={formatAED(p.paid)}    dot="bg-teal" />
-          <Row label="Balance"   value={formatAED(p.balance)} dot="bg-rust" />
-        </div>
+        <div className="data-md">{formatAED(p.paid)}</div>
       )}
     </div>
   )
 }
 
-function Row({ label, value, dot }: any) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className={`w-2 h-2 rounded-full ${dot}`} />
-      <span className="text-[11px] text-espresso-muted flex-1">{label}</span>
-      <span className="font-mono text-[11px] tabular text-espresso">{value}</span>
-    </div>
-  )
-}

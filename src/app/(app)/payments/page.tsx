@@ -7,7 +7,7 @@ import { Plus, Receipt, MagnifyingGlass } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { LogPaymentModal } from '@/components/payments/LogPaymentModal'
 import { ReceiptPreview } from '@/components/payments/ReceiptPreview'
-import { motion } from 'motion/react'
+import { motion, AnimatePresence } from 'motion/react'
 import { fadeIn, staggerContainer, staggerItem } from '@/lib/motion'
 
 export default function PaymentsPage() {
@@ -40,17 +40,16 @@ export default function PaymentsPage() {
 
   return (
     <motion.div
-      className="space-y-8"
+      className="space-y-8 atmosphere"
       variants={fadeIn}
       initial="hidden"
       animate="visible"
     >
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
-          <div className="eyebrow mb-2">Cash collection</div>
           <h1 className="display-lg">Payments</h1>
-          <p className="mt-2 text-[13px] text-espresso-muted max-w-[520px]">
-            Log cash, cheque, and bank transfer payments. Receipts auto-generate.
+          <p className="overline mt-2">
+            Log cash, cheque, and bank transfer payments · Receipts auto-generate
           </p>
         </div>
         <button onClick={() => setLogOpen(true)}
@@ -59,30 +58,30 @@ export default function PaymentsPage() {
         </button>
       </div>
 
-      {/* Filter bar */}
-      <div className="bezel p-4 flex items-center gap-3 flex-wrap">
+      {/* Filter bar - evolved styling */}
+      <div className="rounded-[14px] p-3 flex items-center gap-3 flex-wrap" style={{ background: 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.6)' }}>
         <div className="flex items-center gap-2">
-          <span className="eyebrow">Month</span>
+          <span className="overline">Month</span>
           <select value={month} onChange={e => setMonth(Number(e.target.value))}
-            className="h-9 px-3 rounded-lg bg-sand-100 text-[12px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 cursor-pointer transition-colors">
+            className="h-9 px-3 rounded-lg bg-sand-200 text-[12px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 cursor-pointer transition-colors">
             {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
               <option key={m} value={m}>{new Date(2000, m - 1).toLocaleString('default', { month: 'long' })}</option>
             ))}
           </select>
         </div>
         <div className="flex items-center gap-2">
-          <span className="eyebrow">Year</span>
+          <span className="overline">Year</span>
           <select value={year} onChange={e => setYear(Number(e.target.value))}
-            className="h-9 px-3 rounded-lg bg-sand-100 text-[12px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 cursor-pointer transition-colors">
+            className="h-9 px-3 rounded-lg bg-sand-200 text-[12px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 cursor-pointer transition-colors">
             {Array.from({ length: 5 }, (_, i) => currentYear - 2 + i).map(y => (
               <option key={y} value={y}>{y}</option>
             ))}
           </select>
         </div>
         <div className="flex items-center gap-2">
-          <span className="eyebrow">Method</span>
+          <span className="overline">Method</span>
           <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
-            className="h-9 px-3 rounded-lg bg-sand-100 text-[12px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 cursor-pointer transition-colors">
+            className="h-9 px-3 rounded-lg bg-sand-200 text-[12px] font-medium text-espresso border-0 outline-none hover:bg-sand-200 cursor-pointer transition-colors">
             <option value="all">All methods</option>
             <option value="cash">Cash</option>
             <option value="cheque">Cheque</option>
@@ -102,13 +101,18 @@ export default function PaymentsPage() {
             />
           </div>
         </div>
-        {hasActiveFilters && (
-          <button
-            onClick={() => { setPaymentMethod('all'); setSearchQuery('') }}
-            className="text-[11px] text-amber-500 hover:text-amber-600 font-medium underline">
-            Clear filters
-          </button>
-        )}
+        <AnimatePresence>
+          {hasActiveFilters && (
+            <motion.button
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { setPaymentMethod('all'); setSearchQuery('') }}
+              className="text-[11px] text-amber hover:text-amber-hover font-medium transition-colors">
+              Clear all
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
       {!data ? (
@@ -123,13 +127,14 @@ export default function PaymentsPage() {
         </div>
       ) : (
         <div className="bezel overflow-hidden">
-          <div className="grid grid-cols-[100px_1fr_1fr_120px_140px_120px] gap-0 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-50">
-            <div className="eyebrow">Date</div>
-            <div className="eyebrow">Tenant</div>
-            <div className="eyebrow">Room</div>
-            <div className="eyebrow">Method</div>
-            <div className="eyebrow text-right">Amount</div>
-            <div className="eyebrow text-right">Receipt</div>
+          {/* Table header - evolved styling */}
+          <div className="grid grid-cols-[100px_1fr_1fr_120px_140px_120px] gap-0 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-100">
+            <div className="eyebrow uppercase">Date</div>
+            <div className="eyebrow uppercase">Tenant</div>
+            <div className="eyebrow uppercase">Room</div>
+            <div className="eyebrow uppercase">Method</div>
+            <div className="eyebrow uppercase text-right">Amount</div>
+            <div className="eyebrow uppercase text-right">Receipt</div>
           </div>
           <motion.div
             className="divide-y divide-[color:var(--color-border-subtle)] max-h-[calc(100vh-440px)] overflow-y-auto"
@@ -137,11 +142,14 @@ export default function PaymentsPage() {
             initial="hidden"
             animate="visible"
           >
-            {filteredPayments.slice(0, 8).map((p: any) => (
+            {filteredPayments.slice(0, 8).map((p: any, idx: number) => (
               <motion.div
                 key={p.id}
                 variants={staggerItem}
-                className="grid grid-cols-[100px_1fr_1fr_120px_140px_120px] gap-0 px-4 py-3 hover:bg-sand-50 transition-colors items-center"
+                className="grid grid-cols-[100px_1fr_1fr_120px_140px_120px] gap-0 px-4 py-3 transition-colors items-center"
+                style={{ background: idx % 2 === 0 ? 'transparent' : 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.15)' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(var(--color-sand-200-rgb, 214, 207, 197), 0.3)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = idx % 2 === 0 ? 'transparent' : 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.15)'}
               >
                 <div className="text-[12px] text-espresso">{formatDate(p.payment_date)}</div>
                 <div className="text-[13px] text-espresso truncate pr-3">{p.company?.name || p.individual?.owner_name || p.individual?.full_name || '—'}</div>
@@ -160,10 +168,13 @@ export default function PaymentsPage() {
                 </div>
               </motion.div>
             ))}
-            {filteredPayments.slice(8).map((p: any) => (
+            {filteredPayments.slice(8).map((p: any, idx: number) => (
               <div
                 key={p.id}
-                className="grid grid-cols-[100px_1fr_1fr_120px_140px_120px] gap-0 px-4 py-3 hover:bg-sand-50 transition-colors items-center"
+                className="grid grid-cols-[100px_1fr_1fr_120px_140px_120px] gap-0 px-4 py-3 transition-colors items-center"
+                style={{ background: (idx + 8) % 2 === 0 ? 'transparent' : 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.15)' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(var(--color-sand-200-rgb, 214, 207, 197), 0.3)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = (idx + 8) % 2 === 0 ? 'transparent' : 'rgba(var(--color-sand-100-rgb, 237, 232, 225), 0.15)'}
               >
                 <div className="text-[12px] text-espresso">{formatDate(p.payment_date)}</div>
                 <div className="text-[13px] text-espresso truncate pr-3">{p.company?.name || p.individual?.owner_name || p.individual?.full_name || '—'}</div>

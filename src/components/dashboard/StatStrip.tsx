@@ -25,15 +25,15 @@ export function StatStrip({ month, year }: Props) {
 
   return (
     <motion.div
-      className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5"
+      className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"
       initial="hidden"
       animate="visible"
-      variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.04, delayChildren: 0.02 } } }}
+      variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.06, delayChildren: 0.02 } } }}
     >
-      <StatCard eyebrow="Occupancy"       numericValue={t.occupancy_rate} isPercent value={formatPct(t.occupancy_rate)} sub={`${t.occupied}/${t.leasable} leasable`} icon={House} tone="neutral" trend={null} />
-      <StatCard eyebrow="Collection rate" numericValue={t.collection_rate} isPercent value={formatPct(t.collection_rate)} sub={`${formatAEDShort(t.total_paid)} of ${formatAEDShort(t.total_rent)}`} icon={CurrencyDollar} tone={t.collection_rate >= 95 ? 'teal' : t.collection_rate >= 85 ? 'ochre' : 'rust'} trend={null} />
-      <StatCard eyebrow="Outstanding"     numericValue={t.total_balance} value={formatAEDShort(t.total_balance)} sub={t.total_balance > 0 ? 'needs collection' : 'nothing owed'} icon={Warning} tone={t.total_balance > 0 ? 'rust' : 'neutral'} trend={null} />
-      <StatCard eyebrow="Active tenants"  numericValue={t.people_count} value={String(t.people_count)} sub="across both camps" icon={Users} tone="neutral" trend={null} />
+      <StatCard eyebrow="TOTAL ROOMS"     numericValue={t.leasable} value={String(t.leasable)} sub={`${t.occupied} occupied`} icon={House} tone="neutral" trend={null} isPrimary />
+      <StatCard eyebrow="OCCUPANCY"       numericValue={t.occupancy_rate} isPercent value={formatPct(t.occupancy_rate)} sub={`${t.occupied}/${t.leasable} leasable`} icon={House} tone="neutral" trend={null} />
+      <StatCard eyebrow="COLLECTION"      numericValue={t.total_paid} value={formatAEDShort(t.total_paid)} sub={`${formatPct(t.collection_rate)} collected`} icon={CurrencyDollar} tone={t.collection_rate >= 95 ? 'teal' : t.collection_rate >= 85 ? 'ochre' : 'rust'} trend={null} />
+      <StatCard eyebrow="OUTSTANDING"     numericValue={t.total_balance} value={formatAEDShort(t.total_balance)} sub={t.total_balance > 0 ? 'needs collection' : 'nothing owed'} icon={Warning} tone={t.total_balance > 0 ? 'rust' : 'neutral'} trend={null} />
     </motion.div>
   )
 }
@@ -55,10 +55,11 @@ function aggregate(summaries: any[] | undefined) {
   }
 }
 
-function StatCard({ eyebrow, numericValue, isPercent, value, sub, icon, tone, trend }: {
+function StatCard({ eyebrow, numericValue, isPercent, value, sub, icon, tone, trend, isPrimary }: {
   eyebrow: string; numericValue?: number; isPercent?: boolean; value: string; sub: string; icon: any
   tone: 'neutral' | 'teal' | 'rust' | 'ochre'
   trend: { value: number; direction: 'up' | 'down' } | null
+  isPrimary?: boolean
 }) {
   const animatedValue = useCountUp(numericValue ?? 0, 800)
   const displayValue = numericValue !== undefined
@@ -78,25 +79,23 @@ function StatCard({ eyebrow, numericValue, isPercent, value, sub, icon, tone, tr
       whileHover="hover"
       whileTap="tap"
       initial="rest"
-      className="bezel p-5 relative overflow-hidden cursor-default"
+      className={cn(
+        "bezel elevation-hover p-6 relative overflow-hidden cursor-default",
+        isPrimary && "border-l-2 border-l-amber"
+      )}
       style={{ boxShadow: cardHover.rest.boxShadow }}
     >
-      <div className="flex items-start justify-between mb-4">
-        <div className="eyebrow">{eyebrow}</div>
-        <div className={cn('w-8 h-8 rounded-lg grid place-items-center', iconTones[tone])}>
-          <Icon icon={icon} size={15} />
-        </div>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <div className={cn('display-md tabular font-mono', toneColors[tone])}>{displayValue}</div>
+      <div className="eyebrow mb-3">{eyebrow}</div>
+      <div className="data-xl mb-2">{displayValue}</div>
+      <div className="flex items-center justify-between">
+        <div className="text-[12px] text-espresso-muted">{sub}</div>
         {trend && (
-          <div className={cn('text-[11px] font-medium flex items-center gap-0.5', trend.direction === 'up' ? 'text-teal' : 'text-rust')}>
-            <Icon icon={trend.direction === 'up' ? TrendUp : TrendDown} size={12} />
+          <div className={cn('text-[12px] font-medium flex items-center gap-0.5', trend.direction === 'up' ? 'text-teal' : 'text-rust')}>
+            <Icon icon={trend.direction === 'up' ? TrendUp : TrendDown} size={10} />
             {Math.abs(trend.value).toFixed(1)}%
           </div>
         )}
       </div>
-      <div className="text-[12px] text-espresso-muted">{sub}</div>
     </motion.div>
   )
 }

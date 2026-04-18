@@ -70,10 +70,10 @@ export default function ReportsPage() {
 
   return (
     <motion.div
-      className="space-y-8"
-      variants={fadeIn}
-      initial="hidden"
-      animate="visible"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30, delay: 0.05 }}
+      className="atmosphere space-y-8"
     >
       <div>
         <div className="eyebrow mb-2">Exports</div>
@@ -84,7 +84,7 @@ export default function ReportsPage() {
       </div>
 
       {/* Filter controls */}
-      <div className="bezel p-6 space-y-4">
+      <div className="bezel elevation-hover p-6 space-y-4">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <span className="eyebrow">Period</span>
@@ -109,8 +109,9 @@ export default function ReportsPage() {
         <div>
           <div className="eyebrow mb-3">Camps</div>
           <div className="flex items-center gap-2 flex-wrap">
-            <button
+            <motion.button
               onClick={() => setCampIds([])}
+              whileTap={{ scale: 0.97 }}
               className={cn(
                 'h-8 px-3 rounded-full text-[12px] font-medium transition-all',
                 isAllCampsSelected
@@ -119,11 +120,12 @@ export default function ReportsPage() {
               )}
             >
               All camps
-            </button>
+            </motion.button>
             {camps?.data?.map((camp: any) => (
-              <button
+              <motion.button
                 key={camp.id}
                 onClick={() => toggleCamp(camp.id)}
+                whileTap={{ scale: 0.97 }}
                 className={cn(
                   'h-8 px-3 rounded-full text-[12px] font-medium transition-all',
                   campIds.includes(camp.id)
@@ -132,7 +134,7 @@ export default function ReportsPage() {
                 )}
               >
                 {camp.name}
-              </button>
+              </motion.button>
             ))}
           </div>
         </div>
@@ -149,11 +151,11 @@ export default function ReportsPage() {
               disabled={generating !== null}
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: i * 0.06, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30, delay: i * 0.06 }}
               whileHover={generating === null ? { y: -2 } : {}}
               whileTap={generating === null ? { scale: 0.995 } : {}}
               className={cn(
-                'bezel p-6 text-left group transition-all',
+                'bezel elevation-hover p-6 text-left group transition-all',
                 selectedReport === r.id && 'ring-2 ring-amber border-amber',
                 generating === r.id && 'ring-2 ring-amber-500',
                 generating !== null && generating !== r.id && 'opacity-40'
@@ -184,16 +186,18 @@ export default function ReportsPage() {
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 30 }}
           className="flex justify-center"
         >
-          <button
+          <motion.button
             onClick={() => generate(selectedReport)}
             disabled={generating !== null}
+            whileTap={{ scale: 0.98 }}
             className={cn(
               'h-12 px-8 rounded-full text-[13px] font-medium transition-all flex items-center gap-2.5',
               generating === selectedReport
                 ? 'bg-amber-pale text-amber cursor-wait'
-                : 'bg-espresso text-sand-50 hover:bg-espresso-soft active:scale-[0.98]'
+                : 'bg-espresso text-sand-50 hover:bg-espresso-soft'
             )}
           >
             {generating === selectedReport ? (
@@ -207,7 +211,7 @@ export default function ReportsPage() {
                 Generate {REPORTS.find(r => r.id === selectedReport)?.title}
               </>
             )}
-          </button>
+          </motion.button>
         </motion.div>
       )}
     </motion.div>

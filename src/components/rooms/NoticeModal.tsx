@@ -35,24 +35,23 @@ export function NoticeModal({ room, onClose }: { room: any; onClose: () => void 
   return (
     <Dialog.Root open onOpenChange={open => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
+        <Dialog.Overlay className="scrim fixed inset-0 z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            variants={scaleUp}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            className="fixed left-1/2 top-[12vh] -translate-x-1/2 w-[520px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-raise-4 z-50 overflow-hidden"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30, duration: 0.3 }}
+            className="fixed left-1/2 top-[12vh] -translate-x-1/2 w-[400px] max-w-[calc(100vw-2rem)] bg-sand-50 rounded-2xl elevation-float z-50 overflow-hidden"
           >
             <Dialog.Title className="sr-only">Give notice</Dialog.Title>
-            <header className="flex items-center justify-between px-6 h-14 border-b border-[color:var(--color-border-subtle)]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-ochre-pale text-ochre grid place-items-center"><Icon icon={FileText} size={14} /></div>
-                <div className="display-xs">Record Notice to Vacate</div>
-              </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100"><Icon icon={X} size={14} /></button>
+            <header className="px-8 pt-6 pb-4">
+              <div className="display-md mb-1">Notice to Vacate</div>
+              <div className="overline text-espresso-muted">Stage 1 of checkout process</div>
+              <div className="divider-warm mt-4" />
+              <button onClick={onClose} className="absolute top-6 right-8 w-8 h-8 rounded-full bg-sand-200 grid place-items-center hover:bg-amber hover:text-white transition-colors"><Icon icon={X} size={14} /></button>
             </header>
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-8 py-5 space-y-4">
               {/* Tenant info summary card */}
               <div className="bezel p-4 bg-sand-50">
                 <div className="flex items-start gap-3">
@@ -80,22 +79,23 @@ export function NoticeModal({ room, onClose }: { room: any; onClose: () => void 
                 Stage 1 of 2. Records that the tenant has given notice to vacate. Room will show as <strong>Vacating</strong> until you complete the checkout on or after the vacate date.
               </div>
               <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Intended vacate date *</span>
+                <span className="overline text-espresso-muted">Intended vacate date *</span>
                 <input type="date" min={today} value={vacateDate} onChange={e => setVacateDate(e.target.value)}
-                  className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
+                  className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
                 <span className="text-[10px] text-espresso-subtle">Defaults to 10 days from today (per standard notice period).</span>
               </label>
               <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Notes</span>
+                <span className="overline text-espresso-muted">Notes</span>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
                   placeholder="Reason for notice, special handling, replacement tenant details..."
-                  className="px-3 py-2 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none resize-none" />
+                  className="px-3 py-2 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none resize-none" />
               </label>
             </div>
-            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">
-              <button onClick={onClose} className="px-4 h-9 rounded-full text-[12px] font-medium text-espresso-muted hover:text-espresso">Cancel</button>
+            <footer className="px-8 py-4 bg-sand-50 flex justify-end gap-3">
+              <div className="divider-warm mb-4 -mx-8" />
+              <button onClick={onClose} className="px-5 h-11 rounded-full border-2 border-espresso text-espresso text-[12px] font-medium hover:bg-espresso hover:text-sand-50 transition-all">Cancel</button>
               <button onClick={() => mutation.mutate()} disabled={mutation.isPending}
-                className="px-4 h-9 rounded-full bg-ochre text-white text-[12px] font-medium hover:bg-ochre-light disabled:opacity-50 transition-all active:scale-[0.98]">
+                className="px-5 h-11 rounded-full bg-amber text-espresso text-[12px] font-medium hover:bg-amber/90 disabled:opacity-50 transition-all active:scale-[0.98]">
                 {mutation.isPending ? 'Recording…' : 'Record notice'}
               </button>
             </footer>

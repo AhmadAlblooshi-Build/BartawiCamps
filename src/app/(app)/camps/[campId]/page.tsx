@@ -42,7 +42,7 @@ export default function CampDetailPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="atmosphere space-y-8">
       <div className="flex items-end justify-between animate-rise flex-wrap gap-4">
         <div>
           <div className="eyebrow mb-2">{camp?.code === 'C1' ? 'Camp One' : camp?.code === 'C2' ? 'Camp Two' : 'Camp'}</div>
@@ -60,7 +60,7 @@ export default function CampDetailPage() {
               value={v}
               className={cn(
                 'relative px-6 py-3 font-body text-[13px] font-medium transition-colors',
-                'data-[state=active]:text-espresso',
+                'data-[state=active]:text-amber',
                 'data-[state=inactive]:text-espresso-muted hover:text-espresso'
               )}
             >
@@ -68,7 +68,7 @@ export default function CampDetailPage() {
               {tab === v && (
                 <motion.div
                   layoutId="activeTab"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber"
+                  className="absolute bottom-0 left-0 right-0 h-[2px] bg-amber"
                   transition={{ type: 'spring', stiffness: 400, damping: 35 }}
                 />
               )}
@@ -81,10 +81,15 @@ export default function CampDetailPage() {
           <AnimatePresence mode="wait">
             <motion.div
               key={tab}
-              variants={fadeIn}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{
+                opacity: {
+                  duration: tab === tab ? 0.15 : 0.1,
+                  delay: tab === tab ? 0.1 : 0,
+                },
+              }}
             >
               <Tabs.Content value="overview"><CampOverviewTab campId={params.campId} month={month} year={year} /></Tabs.Content>
               <Tabs.Content value="map"><CampMapView campId={params.campId} /></Tabs.Content>

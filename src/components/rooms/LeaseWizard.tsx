@@ -139,22 +139,21 @@ export function LeaseWizard({ room, onClose }: Props) {
   return (
     <Dialog.Root open={true} onOpenChange={open => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
+        <Dialog.Overlay className="scrim fixed inset-0 z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 26 }}
-            className="fixed left-1/2 top-[6vh] -translate-x-1/2 w-[720px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-white rounded-2xl shadow-raise-4 flex flex-col z-50 overflow-hidden"
+            transition={{ type: 'spring', stiffness: 300, damping: 30, duration: 0.3 }}
+            className="fixed left-1/2 top-[6vh] -translate-x-1/2 w-[640px] max-w-[calc(100vw-2rem)] max-h-[88vh] bg-sand-50 rounded-2xl elevation-float flex flex-col z-50 overflow-hidden"
           >
             <Dialog.Title className="sr-only">Lease creation wizard</Dialog.Title>
-            <header className="flex items-center justify-between px-6 h-16 border-b border-[color:var(--color-border-subtle)]">
-              <div>
-                <div className="eyebrow mb-0.5">New lease · Room {room.room_number}</div>
-                <div className="display-xs">Step {step} of {STEPS.length} · {STEPS[step - 1].label}</div>
-              </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100" aria-label="Close">
+            <header className="px-8 pt-6 pb-4">
+              <div className="display-md mb-1">New Lease · Room {room.room_number}</div>
+              <div className="overline text-espresso-muted">Step {step} of {STEPS.length} · {STEPS[step - 1].label}</div>
+              <div className="divider-warm mt-4" />
+              <button onClick={onClose} className="absolute top-6 right-8 w-8 h-8 rounded-full bg-sand-200 grid place-items-center hover:bg-amber hover:text-white transition-colors" aria-label="Close">
                 <Icon icon={X} size={16} />
               </button>
             </header>
@@ -226,11 +225,12 @@ export function LeaseWizard({ room, onClose }: Props) {
               </AnimatePresence>
             </div>
 
-            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex items-center justify-between">
+            <footer className="px-8 py-4 bg-sand-50 flex items-center justify-between">
+              <div className="divider-warm mb-4 -mx-8" />
               <button
                 onClick={() => setStep(s => Math.max(1, s - 1))}
                 disabled={step === 1}
-                className="flex items-center gap-1.5 px-3 h-9 rounded-lg text-[12px] font-medium text-espresso-muted hover:text-espresso disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-1.5 px-4 h-11 rounded-full border-2 border-espresso text-espresso text-[12px] font-medium hover:bg-espresso hover:text-sand-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 <Icon icon={CaretLeft} size={12} /> Back
               </button>
@@ -238,7 +238,7 @@ export function LeaseWizard({ room, onClose }: Props) {
                 <button
                   onClick={() => canProceed && setStep(s => s + 1)}
                   disabled={!canProceed}
-                  className="flex items-center gap-1.5 px-4 h-9 rounded-full bg-espresso text-sand-50 text-[12px] font-medium hover:bg-espresso-soft disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98]"
+                  className="flex items-center gap-1.5 px-5 h-11 rounded-full bg-amber text-espresso text-[12px] font-medium hover:bg-amber/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98]"
                 >
                   Continue <Icon icon={CaretRight} size={12} />
                 </button>
@@ -246,7 +246,7 @@ export function LeaseWizard({ room, onClose }: Props) {
                 <motion.button
                   onClick={() => activate.mutate()}
                   disabled={activate.isPending}
-                  className="flex items-center gap-1.5 px-4 h-9 rounded-full bg-teal text-white text-[12px] font-medium hover:bg-teal-light disabled:opacity-50 transition-all active:scale-[0.98]"
+                  className="flex items-center gap-1.5 px-5 h-11 rounded-full bg-amber text-espresso text-[12px] font-medium hover:bg-amber/90 disabled:opacity-50 transition-all active:scale-[0.98]"
                   animate={{ scale: [1, 1.05, 1] }}
                   transition={{ duration: 0.6, times: [0, 0.5, 1], delay: 0.3 }}
                 >

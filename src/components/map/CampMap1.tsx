@@ -75,7 +75,22 @@ export function CampMap1({ rooms, floor, filter, onSelect }: Props) {
     <div className="w-full overflow-auto">
       <svg viewBox={`0 0 ${totalWidth} ${totalHeight}`} className="w-full h-auto"
         style={{ maxHeight: 'calc(100vh - 260px)' }}>
-        <rect width={totalWidth} height={totalHeight} fill="#FAF7F2" rx={10} />
+        {/* SVG gradient definitions for room status fills */}
+        <defs>
+          <linearGradient id="grad-occupied" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(30,77,82,0.12)" />
+            <stop offset="100%" stopColor="rgba(30,77,82,0.08)" />
+          </linearGradient>
+          <linearGradient id="grad-vacating" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(196,138,30,0.1)" />
+            <stop offset="100%" stopColor="rgba(196,138,30,0.06)" />
+          </linearGradient>
+          <linearGradient id="grad-maintenance" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(168,74,59,0.1)" />
+            <stop offset="100%" stopColor="rgba(168,74,59,0.06)" />
+          </linearGradient>
+        </defs>
+        <rect width={totalWidth} height={totalHeight} fill="transparent" rx={10} />
 
         {showGround && (
           <g transform={`translate(${MARGIN}, ${MARGIN})`}>
@@ -160,34 +175,42 @@ function Block({ spec, byNumber, onSelect, isDim, x }: {
         rx={6}
       />
 
-      {/* Block label */}
+      {/* Block label — Fraunces italic per spec */}
       <text
         x={BLOCK_WIDTH / 2}
         y={spec.rows * (ROOM_H + ROOM_GAP) + 14}
         textAnchor="middle"
-        fill="#4A433C"
-        fontSize={10}
-        fontFamily="var(--font-mono)"
-        fontWeight={600}
-        className="tabular"
+        fill="rgba(26,24,22,0.4)"
+        fontSize={16}
+        fontFamily="var(--font-display)"
+        fontStyle="italic"
+        fontWeight={500}
       >
         {spec.code}
       </text>
 
-      {/* Central corridor label (faint) */}
-      <text
-        x={BLOCK_WIDTH / 2}
-        y={spec.rows * (ROOM_H + ROOM_GAP) / 2}
-        textAnchor="middle"
-        fill="#6A6159"
-        fontSize={7}
-        fontFamily="var(--font-body)"
-        opacity={0.35}
-        className="pointer-events-none select-none"
-        style={{ letterSpacing: '0.2em' }}
-      >
-        KITCHEN · DINING
-      </text>
+      {/* Central corridor strip — Kitchen/Dining with icon per spec */}
+      <g opacity={0.4}>
+        <rect
+          x={centerX - CENTRAL_GAP / 2 - 1}
+          y={spec.rows * (ROOM_H + ROOM_GAP) / 2 - 8}
+          width={CENTRAL_GAP + 2}
+          height={16}
+          fill="rgba(232,223,211,0.5)"
+          rx={2}
+        />
+        <text
+          x={BLOCK_WIDTH / 2}
+          y={spec.rows * (ROOM_H + ROOM_GAP) / 2 + 1}
+          textAnchor="middle"
+          fill="#6A6159"
+          fontSize={6}
+          fontFamily="var(--font-body)"
+          className="pointer-events-none select-none eyebrow"
+        >
+          KITCHEN
+        </text>
+      </g>
 
       {/* Rooms */}
       {rooms.map(r => {
@@ -229,22 +252,31 @@ function Block({ spec, byNumber, onSelect, isDim, x }: {
         )
       })}
 
-      {/* Mosque marker in block E */}
+      {/* Mosque marker in block E — with crescent icon per spec */}
       {spec.code === 'E' && (
         <g>
-          <rect
-            x={col0x - 2} y={4 * (ROOM_H + ROOM_GAP)}
-            width={ROOM_W + CENTRAL_GAP + ROOM_W + 4}
-            height={ROOM_H * 2 + ROOM_GAP}
-            fill="#FBF5E8" stroke="#B8883D" strokeWidth={0.6} strokeDasharray="3 2" rx={3}
-            opacity={0.55}
+          <circle
+            cx={BLOCK_WIDTH / 2}
+            cy={4 * (ROOM_H + ROOM_GAP) + ROOM_H}
+            r={18}
+            fill="rgba(216,227,228,0.3)"
+            stroke="rgba(30,77,82,0.3)"
+            strokeWidth={0.8}
+          />
+          {/* Crescent moon icon (simple path) */}
+          <path
+            d={`M ${BLOCK_WIDTH / 2} ${4 * (ROOM_H + ROOM_GAP) + ROOM_H - 6} a 6 6 0 1 0 0 12 a 4 4 0 1 1 0 -12`}
+            fill="rgba(30,77,82,0.6)"
           />
           <text
             x={BLOCK_WIDTH / 2}
-            y={4 * (ROOM_H + ROOM_GAP) + ROOM_H + ROOM_GAP / 2}
-            textAnchor="middle" dominantBaseline="central"
-            fill="#785621" fontSize={8} fontWeight={600}
+            y={4 * (ROOM_H + ROOM_GAP) + ROOM_H + 26}
+            textAnchor="middle"
+            fill="rgba(30,77,82,0.5)"
+            fontSize={7}
+            fontWeight={600}
             fontFamily="var(--font-body)"
+            className="eyebrow"
             style={{ letterSpacing: '0.12em' }}
           >
             MOSQUE
@@ -264,19 +296,20 @@ function FrontStrip({ width }: { width: number }) {
   return (
     <g>
       <rect x={0} y={0} width={width} height={FRONT_STRIP_H} rx={4}
-        fill="#F4EFE7" stroke="rgba(26,24,22,0.06)" strokeWidth={0.6} />
+        fill="rgba(232,223,211,0.3)" stroke="rgba(138,117,88,0.3)" strokeWidth={0.8} />
       {shops.map((name, i) => (
         <g key={name}>
-          {i > 0 && <line x1={i * shopW} y1={4} x2={i * shopW} y2={FRONT_STRIP_H - 4} stroke="#E8DFD1" strokeWidth={0.5} />}
+          {i > 0 && <line x1={i * shopW} y1={4} x2={i * shopW} y2={FRONT_STRIP_H - 4} stroke="rgba(214,207,197,0.4)" strokeWidth={0.6} />}
           <text x={i * shopW + shopW / 2} y={FRONT_STRIP_H / 2} textAnchor="middle" dominantBaseline="central"
-            fill="#6A6159" fontSize={8} fontFamily="var(--font-body)">
+            fill="rgba(106,97,89,0.8)" fontSize={7} fontFamily="var(--font-body)">
             {name}
           </text>
         </g>
       ))}
-      <text x={8} y={-4} fill="#6A6159" fontSize={8} fontFamily="var(--font-body)"
-        style={{ letterSpacing: '0.14em', textTransform: 'uppercase' }}>
-        Front Entrance · Retail
+      <text x={8} y={-4} fill="rgba(106,97,89,0.6)" fontSize={7} fontFamily="var(--font-body)"
+        className="eyebrow"
+        style={{ letterSpacing: '0.14em' }}>
+        FRONT ENTRANCE · RETAIL
       </text>
     </g>
   )

@@ -29,7 +29,21 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${fraunces.variable} ${geist.variable} ${jetbrains.variable}`}>
+    <html lang="en" suppressHydrationWarning className={`${fraunces.variable} ${geist.variable} ${jetbrains.variable}`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `
+          (function() {
+            try {
+              var stored = JSON.parse(localStorage.getItem('bartawi-theme') || '{}');
+              var theme = stored.state?.theme || 'system';
+              var resolved = theme === 'system'
+                ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                : theme;
+              if (resolved === 'dark') document.documentElement.classList.add('dark');
+            } catch(e) {}
+          })();
+        `}} />
+      </head>
       <body>
         <Providers>{children}</Providers>
         <Toaster

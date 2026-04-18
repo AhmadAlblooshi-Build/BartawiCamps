@@ -1,34 +1,33 @@
 'use client'
 export function MapLegend() {
   return (
-    <div className="flex items-center gap-4 text-[11px] font-body text-espresso-muted flex-wrap">
-      <LegendSquare fill="#D8E3E4" stroke="#1E4D52" label="Occupied" />
-      <LegendSquare fill="#FAF7F2" stroke="#B8883D" dashed label="Vacant" />
-      <LegendSquare fill="#F4E5C1" stroke="#C48A1E" label="Vacating" />
-      <LegendSquare fill="#E8DFD3" stroke="#D6CFC5" label="Bartawi Use" />
-      <LegendSquare fill="#F0DDD9" stroke="#A84A3B" label="Overdue/Maint" />
-      <LegendSquare fill="#EAE3F3" stroke="#5A3E8A" label="Legal" />
+    <div className="pt-4 border-t border-sand-200/60" style={{
+      background: 'linear-gradient(90deg, transparent 0%, rgba(214,207,197,0.5) 20%, rgba(214,207,197,0.8) 50%, rgba(214,207,197,0.5) 80%, transparent 100%)',
+      height: '1px',
+      marginBottom: '16px'
+    }}>
+      <div className="flex items-center gap-6 text-[11px] font-body text-espresso-muted flex-wrap pt-3">
+        <LegendCircle color="rgba(30,77,82,0.4)" label="OCCUPIED" />
+        <LegendCircle color="rgba(184,136,61,0.4)" label="VACANT" dashed />
+        <LegendCircle color="rgba(196,138,30,0.4)" label="VACATING" />
+        <LegendCircle color="rgba(168,74,59,0.4)" label="MAINTENANCE" />
+        <LegendCircle color="rgba(214,207,197,0.5)" label="BARTAWI USE" />
+      </div>
     </div>
   )
 }
 
-function LegendSquare({ fill, stroke, dashed, label }: { fill: string; stroke: string; dashed?: boolean; label: string }) {
+function LegendCircle({ color, label, dashed }: { color: string; label: string; dashed?: boolean }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <svg width="14" height="14" className="shrink-0">
-        <rect
-          x="0.5"
-          y="0.5"
-          width="13"
-          height="13"
-          rx="2"
-          fill={fill}
-          stroke={stroke}
-          strokeWidth="1"
-          strokeDasharray={dashed ? '2,2' : undefined}
-        />
-      </svg>
-      <span>{label}</span>
+    <div className="flex items-center gap-2">
+      <div
+        className="w-2 h-2 rounded-full shrink-0"
+        style={{
+          backgroundColor: dashed ? 'transparent' : color,
+          border: `1.5px ${dashed ? 'dashed' : 'solid'} ${color}`
+        }}
+      />
+      <span className="overline">{label}</span>
     </div>
   )
 }

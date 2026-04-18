@@ -23,7 +23,11 @@ const FEATURE_FLAGS = [
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('tenant')
   return (
-    <div className="space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30, delay: 0.05 }}
+      className="atmosphere space-y-8">
       <motion.div variants={slideUp} initial="hidden" animate="visible">
         <div className="eyebrow mb-2">Admin</div>
         <h1 className="display-lg">Settings</h1>
@@ -49,7 +53,7 @@ export default function SettingsPage() {
         {tab === 'features' && <FeaturesTab key="features" />}
         {tab === 'keys' && <KeysTab key="keys" />}
       </AnimatePresence>
-    </div>
+    </motion.div>
   )
 }
 
@@ -78,8 +82,8 @@ function TenantTab() {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.2 }}
-      className="bezel p-6 max-w-[640px]">
+      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      className="bezel elevation-hover p-6 max-w-[640px]">
       <div className="eyebrow mb-4">Organization</div>
       <div className="space-y-4">
         <Field label="Display name"   value={name}       onChange={setName} />
@@ -114,8 +118,8 @@ function FeaturesTab() {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.2 }}
-      className="bezel p-6 max-w-[720px]">
+      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      className="bezel elevation-hover p-6 max-w-[720px]">
       <div className="eyebrow mb-4">Feature flags</div>
       <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="divide-y divide-[color:var(--color-border-subtle)]">
         {FEATURE_FLAGS.map((f, i) => {
@@ -167,8 +171,8 @@ function KeysTab() {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.2 }}
-      className="bezel p-6 max-w-[640px]">
+      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      className="bezel elevation-hover p-6 max-w-[640px]">
       <div className="flex items-start gap-4 mb-4">
         <div className="w-12 h-12 rounded-xl bg-sand-100 grid place-items-center text-espresso-muted">
           <Icon icon={LockKey} size={20} />

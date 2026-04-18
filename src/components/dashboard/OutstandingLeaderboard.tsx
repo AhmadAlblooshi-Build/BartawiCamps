@@ -48,8 +48,12 @@ export function OutstandingLeaderboard({ month, year }: Props) {
     >
       <div className="flex items-center justify-between mb-5">
         <div>
-          <div className="eyebrow mb-1.5">This month</div>
-          <h3 className="display-sm">Outstanding balances</h3>
+          <h3 className="display-sm">Outstanding Balances</h3>
+          {data && data.length > 0 && (
+            <div className="data-lg text-amber mt-1">
+              {formatAED(data.reduce((sum, item) => sum + item.balance, 0))}
+            </div>
+          )}
         </div>
         <Link href="/reports" className="group flex items-center gap-1.5 text-[11px] font-medium text-espresso-muted hover:text-espresso transition-colors">
           Full report
@@ -66,18 +70,22 @@ export function OutstandingLeaderboard({ month, year }: Props) {
       ) : data.length === 0 ? (
         <EmptyAllClear />
       ) : (
-        <motion.div
-          className="space-y-0.5"
-          variants={staggerContainer}
-          initial="hidden"
-          animate="visible"
-        >
+        <div className="space-y-0">
           {data.map((item, i) => (
-            <motion.div key={item.name} variants={i < 8 ? staggerItem : undefined}>
+            <motion.div
+              key={item.name}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{
+                delay: i < 8 ? i * 0.04 : 0,
+                duration: 0.3,
+                ease: [0.16, 1, 0.3, 1]
+              }}
+            >
               <LeaderRow item={item} rank={i + 1} />
             </motion.div>
           ))}
-        </motion.div>
+        </div>
       )}
     </motion.div>
   )
@@ -85,22 +93,28 @@ export function OutstandingLeaderboard({ month, year }: Props) {
 
 function LeaderRow({ item, rank }: { item: any; rank: number }) {
   const isTopRow = rank === 1
+  const isHighDebt = item.balance > 5000
   return (
     <Link
       href={`/contracts?q=${encodeURIComponent(item.name)}`}
       className={cn(
-        "flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-sand-100 transition-colors group",
-        isTopRow && "border-l-2 border-rust pl-1.5"
+        "flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-150",
+        rank % 2 === 0 ? "bg-sand-100/30" : "bg-transparent",
+        "hover:bg-sand-200/40",
+        isTopRow && "border-l border-rust"
       )}
     >
-      <div className="w-6 font-mono text-[11px] tabular text-espresso-subtle">{String(rank).padStart(2, '0')}</div>
       <div className="flex-1 min-w-0">
-        <div className="text-[13px] font-medium text-espresso truncate">{item.name}</div>
-        <div className="text-[11px] text-espresso-muted mt-0.5">
-          {item.rooms.length} {item.rooms.length === 1 ? 'room' : 'rooms'} · {item.rooms.slice(0, 4).join(', ')}{item.rooms.length > 4 ? '…' : ''}
+        <div className="body truncate">{item.name}</div>
+        <div className="body text-espresso-muted mt-0.5 truncate">
+          {item.rooms.slice(0, 3).join(', ')}{item.rooms.length > 3 ? '…' : ''}
         </div>
       </div>
-      <div className="font-mono tabular text-[13px] font-semibold text-espresso">
+      <div className={cn(
+        "data-md text-right",
+        isTopRow && "font-bold",
+        isHighDebt ? "text-rust" : "text-espresso"
+      )}>
         {formatAED(item.balance)}
       </div>
     </Link>

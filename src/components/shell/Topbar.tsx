@@ -1,6 +1,7 @@
 'use client'
 import { Breadcrumbs } from './Breadcrumbs'
 import { GlobalSearch } from './GlobalSearch'
+import { ThemeToggle } from './ThemeToggle'
 import { UserMenu } from './UserMenu'
 import { NotificationsButton } from '@/components/notifications/NotificationsButton'
 
@@ -12,6 +13,7 @@ export function Topbar() {
       </div>
       <div className="flex items-center gap-2">
         <GlobalSearch />
+        <ThemeToggle />
         <NotificationsButton />
         <UserMenu />
       </div>

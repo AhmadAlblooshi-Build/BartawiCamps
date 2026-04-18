@@ -27,7 +27,7 @@ export function LoginForm() {
   // Count-up animations for stats
   const roomsCount = useCountUp(453, 800)
   const campsCount = useCountUp(2, 800)
-  const recordsCount = useCountUp(1359, 800)
+  const tenantsCount = useCountUp(3600, 800)
 
   // Parallax mouse tracking
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
@@ -65,97 +65,100 @@ export function LoginForm() {
   }
 
   return (
-    <div className="min-h-[100dvh] grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] bg-sand-50">
-      {/* Left — Editorial side */}
+    <div className="min-h-[100dvh] grid grid-cols-1 lg:grid-cols-[1fr_1fr]">
+      {/* Left — The Statement */}
       <motion.section
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.8, ease }}
         onMouseMove={handleMouseMove}
-        className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden bg-gradient-to-br from-sand-100 via-sand-50 to-amber-50/30"
+        className="relative hidden lg:flex flex-col justify-center items-center p-12 overflow-hidden"
+        style={{
+          background: 'linear-gradient(135deg, var(--color-sand-100) 0%, var(--color-sand-50) 60%, rgba(184, 136, 61, 0.05) 100%)'
+        }}
       >
-        {/* Decorative geometric anchor with parallax */}
-        <div className="absolute inset-0 pointer-events-none">
+        {/* Background decoration with parallax */}
+        <div className="absolute inset-0 pointer-events-none opacity-[0.04]">
           <motion.svg
             viewBox="0 0 800 1000"
-            className="w-full h-full opacity-[0.04]"
+            className="w-full h-full"
             preserveAspectRatio="xMidYMid slice"
             animate={{ x: mousePos.x, y: mousePos.y }}
             transition={{ type: 'spring', stiffness: 150, damping: 20 }}
           >
             <defs>
               <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
-                <path d="M60 0L0 0 0 60" fill="none" stroke="#1A1816" strokeWidth="0.5" />
+                <path d="M60 0L0 0 0 60" fill="none" stroke="#B8883D" strokeWidth="0.5" />
               </pattern>
             </defs>
             <rect width="800" height="1000" fill="url(#grid)" />
-            <circle cx="400" cy="500" r="320" fill="none" stroke="#B8883D" strokeWidth="0.8" />
-            <circle cx="400" cy="500" r="240" fill="none" stroke="#B8883D" strokeWidth="0.6" />
-            <circle cx="400" cy="500" r="160" fill="none" stroke="#B8883D" strokeWidth="0.4" />
           </motion.svg>
         </div>
 
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-espresso text-sand-50 grid place-items-center">
-            <span className="font-display text-xl italic leading-none">B</span>
-          </div>
-          <div>
-            <div className="font-display text-lg tracking-tight">Bartawi</div>
-            <div className="eyebrow">Camp Operations</div>
-          </div>
-        </div>
+        {/* Decorative circles */}
+        <div className="absolute top-1/4 right-1/4 w-32 h-32 rounded-full border border-amber opacity-[0.08] pointer-events-none" />
+        <div className="absolute bottom-1/3 left-1/4 w-24 h-24 rounded-full border border-amber opacity-[0.08] pointer-events-none" />
+        <div className="absolute top-1/2 left-1/3 w-16 h-16 rounded-full border border-amber opacity-[0.08] pointer-events-none" />
 
+        {/* Content */}
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2, duration: 0.9, ease }}
-          className="relative z-10 max-w-[520px]"
+          className="relative z-10 flex flex-col items-center text-center max-w-[480px]"
         >
-          <div className="eyebrow mb-4">Phase 1 · Camps</div>
-          <h1 className="display-xl mb-6">
-            Operations, <motion.span
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.4, duration: 0.2 }}
-              className="italic"
-            >precisely.</motion.span>
-          </h1>
-          <p className="text-[15px] leading-relaxed text-espresso-soft max-w-[440px]">
-            The operating system for Bartawi&rsquo;s camp properties. Real-time occupancy,
-            structured tenant records, financial tracking — across every room, block, and camp.
-          </p>
-        </motion.div>
+          <div className="display-hero mb-3">Bartawi</div>
+          <div className="w-[60px] h-[2px] bg-amber mb-3" />
+          <div className="eyebrow text-amber mb-12" style={{ letterSpacing: '0.15em' }}>CAMP MANAGEMENT SYSTEM</div>
 
-        <div className="relative z-10 flex items-center gap-6 text-[11px] font-body text-espresso-subtle">
-          <div><span className="tabular font-mono text-espresso">{roomsCount.toLocaleString()}</span> rooms</div>
-          <div className="w-px h-3 bg-espresso-subtle/30" />
-          <div><span className="tabular font-mono text-espresso">{campsCount}</span> camps</div>
-          <div className="w-px h-3 bg-espresso-subtle/30" />
-          <div><span className="tabular font-mono text-espresso">{recordsCount.toLocaleString()}</span> records tracked</div>
-        </div>
+          <h1 className="display-lg mb-2 text-espresso">
+            Operations,
+          </h1>
+          <h1 className="display-lg mb-8 text-amber italic">
+            precisely.
+          </h1>
+
+          {/* Stats strip */}
+          <div className="flex items-center gap-8 mt-4">
+            <div className="flex flex-col items-center">
+              <div className="data-xl tabular">{roomsCount.toLocaleString()}</div>
+              <div className="eyebrow mt-1">Rooms</div>
+            </div>
+            <div className="w-px h-10 bg-amber" />
+            <div className="flex flex-col items-center">
+              <div className="data-xl tabular">{campsCount}</div>
+              <div className="eyebrow mt-1">Camps</div>
+            </div>
+            <div className="w-px h-10 bg-amber" />
+            <div className="flex flex-col items-center">
+              <div className="data-xl tabular">{tenantsCount.toLocaleString()}</div>
+              <div className="eyebrow mt-1">Tenants</div>
+            </div>
+          </div>
+        </motion.div>
       </motion.section>
 
-      {/* Right — Form side */}
-      <section className="flex items-center justify-center p-6 lg:p-12">
+      {/* Right — The Form */}
+      <section className="login-right-panel flex items-center justify-center p-6 lg:p-12 bg-white">
         <motion.div
           initial={{ opacity: 0, y: 16, filter: 'blur(8px)' }}
           animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
           transition={{ duration: 0.8, ease }}
-          className="w-full max-w-[420px]"
+          className="w-full max-w-[360px]"
         >
-          <div className="mb-10">
-            <div className="eyebrow mb-2">Sign in</div>
-            <h2 className="display-md">Welcome back</h2>
+          <div className="mb-6">
+            <div className="overline mb-2 text-espresso-muted">Welcome back</div>
+            <h2 className="display-md">Sign in</h2>
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
             <Field label="Email" error={errors.email?.message}>
               <input
                 {...register('email')}
                 type="email"
                 autoComplete="email"
                 autoFocus
-                className="w-full h-11 px-4 bg-white border border-[color:var(--color-border-medium)] rounded-lg font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber focus:ring-2 focus:ring-amber/20 focus:outline-none transition-all duration-200"
+                className="w-full h-12 px-4 bg-white border border-sand-200 rounded-[14px] font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber focus:ring-2 focus:ring-amber/10 focus:outline-none transition-all duration-200"
                 placeholder="ahmad@bartawi.com"
               />
             </Field>
@@ -165,7 +168,7 @@ export function LoginForm() {
                 {...register('password')}
                 type="password"
                 autoComplete="current-password"
-                className="w-full h-11 px-4 bg-white border border-[color:var(--color-border-medium)] rounded-lg font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber focus:ring-2 focus:ring-amber/20 focus:outline-none transition-all duration-200"
+                className="w-full h-12 px-4 bg-white border border-sand-200 rounded-[14px] font-body text-sm text-espresso placeholder:text-espresso-subtle focus:border-amber focus:ring-2 focus:ring-amber/10 focus:outline-none transition-all duration-200"
                 placeholder="••••••••••"
               />
             </Field>
@@ -191,7 +194,8 @@ export function LoginForm() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="group w-full h-11 flex items-center justify-center gap-2 px-4 rounded-full bg-espresso text-sand-50 font-body text-[13px] font-medium hover:bg-espresso-soft transition-all duration-300 ease-spring active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"
+              className="w-full h-12 flex items-center justify-center gap-2 rounded-full bg-espresso text-sand-50 font-body text-[13px] font-medium hover:bg-espresso-soft transition-all duration-200 active:scale-[0.98] disabled:opacity-70 disabled:cursor-wait"
+              style={{ opacity: isSubmitting ? 0.7 : 1 }}
             >
               {isSubmitting ? (
                 <>
@@ -204,12 +208,7 @@ export function LoginForm() {
                   <span>Signing in…</span>
                 </>
               ) : (
-                <>
-                  Sign in
-                  <span className="w-6 h-6 rounded-full bg-sand-50/10 grid place-items-center group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">
-                    <Icon icon={ArrowRight} size={12} />
-                  </span>
-                </>
+                'Sign in'
               )}
             </button>
           </form>
@@ -228,7 +227,7 @@ function Field({ label, error, children }: { label: string; error?: string; chil
 
   return (
     <div className="flex flex-col gap-2" onFocus={() => setIsFocused(true)} onBlur={() => setIsFocused(false)}>
-      <label className={`font-body text-[11px] font-medium tracking-wide uppercase transition-colors duration-200 ${isFocused ? 'text-amber' : 'text-espresso-muted'}`}>
+      <label className={`overline transition-colors duration-200 ${isFocused ? 'text-amber' : 'text-espresso-muted'}`}>
         {label}
       </label>
       {children}

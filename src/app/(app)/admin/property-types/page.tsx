@@ -32,7 +32,11 @@ export default function PropertyTypesPage() {
   })
 
   return (
-    <div className="space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30, delay: 0.05 }}
+      className="atmosphere space-y-8">
       <motion.div variants={slideUp} initial="hidden" animate="visible" className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <div className="eyebrow mb-2">Admin</div>
@@ -50,9 +54,9 @@ export default function PropertyTypesPage() {
       {!data ? (
         <div className="space-y-3">{Array.from({length: 4}).map((_, i) => <div key={i} className="h-16 skeleton-shimmer rounded-xl" />)}</div>
       ) : (
-        <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="bezel overflow-hidden">
+        <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="bezel elevation-hover overflow-hidden">
           {/* Table Header */}
-          <div className="grid grid-cols-[auto_1fr_140px_140px_100px_80px] gap-4 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-50">
+          <div className="grid grid-cols-[auto_1fr_140px_140px_100px_80px] gap-4 px-4 py-3 border-b border-[color:var(--color-border-subtle)] bg-sand-100">
             <div className="eyebrow w-12"></div>
             <div className="eyebrow">Name</div>
             <div className="eyebrow">Slug</div>
@@ -70,8 +74,9 @@ export default function PropertyTypesPage() {
                 return (
                   <motion.div key={pt.id} variants={staggerItem} layout
                     className={cn(
-                      'grid grid-cols-[auto_1fr_140px_140px_100px_80px] gap-4 px-4 py-3 items-center transition-colors',
-                      isEditing ? 'bg-amber-50/30' : 'hover:bg-sand-50'
+                      'grid grid-cols-[auto_1fr_140px_140px_100px_80px] gap-4 px-4 py-3 items-center transition-all duration-200',
+                      isEditing ? 'bg-amber-50/30' : i % 2 === 0 ? 'bg-transparent' : 'bg-sand-100/15',
+                      !isEditing && 'hover:bg-sand-200/30 hover:-translate-y-[1px]'
                     )}>
                     <div className="w-10 h-10 rounded-xl grid place-items-center shrink-0"
                       style={{ backgroundColor: pt.color + '22', color: pt.color }}>
@@ -117,7 +122,7 @@ export default function PropertyTypesPage() {
 
       {creating && <PropertyTypeFormModal onClose={() => setCreating(false)} />}
       {deleteConfirm && <DeleteConfirmDialog pt={deleteConfirm} onConfirm={() => deleteType.mutate(deleteConfirm.id)} onCancel={() => setDeleteConfirm(null)} />}
-    </div>
+    </motion.div>
   )
 }
 

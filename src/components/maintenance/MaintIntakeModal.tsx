@@ -57,63 +57,62 @@ export function MaintIntakeModal({ onClose }: { onClose: () => void }) {
   return (
     <Dialog.Root open onOpenChange={o => !o && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-espresso/30 backdrop-blur-sm z-50 animate-fade" />
+        <Dialog.Overlay className="scrim fixed inset-0 z-50 animate-fade" />
         <Dialog.Content asChild>
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 26 }}
-            className="fixed left-1/2 top-[8vh] -translate-x-1/2 w-[560px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-raise-4 z-50 overflow-hidden"
+            transition={{ type: 'spring', stiffness: 300, damping: 30, duration: 0.3 }}
+            className="fixed left-1/2 top-[8vh] -translate-x-1/2 w-[520px] max-w-[calc(100vw-2rem)] bg-sand-50 rounded-2xl elevation-float z-50 overflow-hidden"
           >
             <Dialog.Title className="sr-only">New maintenance request</Dialog.Title>
-            <header className="flex items-center justify-between px-6 h-14 border-b border-[color:var(--color-border-subtle)]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 grid place-items-center"><Icon icon={Wrench} size={14} /></div>
-                <div className="display-xs">New maintenance request</div>
-              </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-lg grid place-items-center hover:bg-sand-100"><Icon icon={X} size={14} /></button>
+            <header className="px-8 pt-6 pb-4">
+              <div className="display-md mb-1">Maintenance Request</div>
+              <div className="overline text-espresso-muted">Create work order for maintenance team</div>
+              <div className="divider-warm mt-4" />
+              <button onClick={onClose} className="absolute top-6 right-8 w-8 h-8 rounded-full bg-sand-200 grid place-items-center hover:bg-amber hover:text-white transition-colors"><Icon icon={X} size={14} /></button>
             </header>
 
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-8 py-5 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1.5 col-span-2">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Short title *</span>
+                  <span className="overline text-espresso-muted">Short title *</span>
                   <input type="text" value={title} onChange={e => setTitle(e.target.value)}
                     placeholder="e.g. Leaking pipe under sink"
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none" />
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none" />
                 </label>
                 <label className="flex flex-col gap-1.5 col-span-2">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Description *</span>
+                  <span className="overline text-espresso-muted">Description *</span>
                   <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
-                    className="px-3 py-2 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none resize-none" />
+                    className="px-3 py-2 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none resize-none" />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Camp *</span>
+                  <span className="overline text-espresso-muted">Camp *</span>
                   <select value={campId} onChange={e => setCampId(e.target.value)}
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none">
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none">
                     <option value="">Select camp...</option>
                     {camps?.data?.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Room</span>
+                  <span className="overline text-espresso-muted">Room</span>
                   <input type="text" value={roomNumber} onChange={e => setRoomNumber(e.target.value)}
                     placeholder="A-12"
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] font-mono tabular focus:border-amber-500 focus:outline-none" />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Category</span>
+                  <span className="overline text-espresso-muted">Category</span>
                   <select value={categoryId} onChange={e => handleCategoryChange(e.target.value)}
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none">
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none">
                     <option value="">Auto (will route to General team)</option>
                     {(categories as any)?.data?.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-espresso-muted">Priority</span>
+                  <span className="overline text-espresso-muted">Priority</span>
                   <select value={priority} onChange={e => setPriority(e.target.value)}
-                    className="h-10 px-3 bg-white border border-[color:var(--color-border-medium)] rounded-lg text-[13px] focus:border-amber-500 focus:outline-none">
+                    className="h-11 px-3 bg-white border border-sand-200 rounded-xl text-[13px] focus:border-amber-500 focus:outline-none">
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
                     <option value="high">High</option>
@@ -140,10 +139,11 @@ export function MaintIntakeModal({ onClose }: { onClose: () => void }) {
               )}
             </div>
 
-            <footer className="px-6 py-4 border-t border-[color:var(--color-border-subtle)] bg-sand-50 flex justify-end gap-2">
-              <button onClick={onClose} className="px-4 h-9 rounded-full text-[12px] font-medium text-espresso-muted hover:text-espresso">Cancel</button>
+            <footer className="px-8 py-4 bg-sand-50 flex justify-end gap-3">
+              <div className="divider-warm mb-4 -mx-8" />
+              <button onClick={onClose} className="px-5 h-11 rounded-full border-2 border-espresso text-espresso text-[12px] font-medium hover:bg-espresso hover:text-sand-50 transition-all">Cancel</button>
               <button onClick={() => mutation.mutate()} disabled={!title || !description || !campId || mutation.isPending}
-                className="px-4 h-9 rounded-full bg-espresso text-sand-50 text-[12px] font-medium hover:bg-espresso-soft disabled:opacity-50 transition-all active:scale-[0.98]">
+                className="px-5 h-11 rounded-full bg-amber text-espresso text-[12px] font-medium hover:bg-amber/90 disabled:opacity-50 transition-all active:scale-[0.98]">
                 {mutation.isPending ? 'Creating…' : 'Create request'}
               </button>
             </footer>
