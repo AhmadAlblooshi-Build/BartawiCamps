@@ -140,6 +140,7 @@ async function buildOccupancy(camp, groupBy) {
     include: {
       blocks: { select: { code: true, floor_label: true } },
       buildings: { select: { code: true, name: true } },
+      property_types: { select: { id: true, name: true } },
       room_occupancy: {
         where: { is_current: true },
         include: {
@@ -170,6 +171,19 @@ async function buildOccupancy(camp, groupBy) {
         : 0,
     },
   };
+
+  // Always include by_property_type breakdown
+  const propertyTypeGroups = rooms.reduce((acc, r) => {
+    const id = r.property_types?.id || 'unknown';
+    const name = r.property_types?.name || 'Unknown';
+    if (!acc[id]) {
+      acc[id] = { id, name, count: 0 };
+    }
+    acc[id].count += 1;
+    return acc;
+  }, {});
+  payload.by_property_type = Object.values(propertyTypeGroups);
+  payload.total = rooms.length;
 
   if (groupBy === 'size') {
     const sizeGroups = rooms.reduce((acc, r) => {
