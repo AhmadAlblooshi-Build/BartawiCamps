@@ -10,6 +10,7 @@ import { RoomDetailDrawer } from './RoomDetailDrawer'
 import { LeaseWizard } from './LeaseWizard'
 import { AnimatePresence, motion } from 'motion/react'
 import { staggerContainer, staggerItem, cardHover } from '@/lib/motion'
+import { getTenantName, getCompanyName, getRoomStatus, getBalance, getMonthlyRent } from '@/lib/room-helpers'
 
 interface Props { campId?: string }
 
@@ -179,11 +180,12 @@ export function RoomsGrid({ campId }: Props) {
 }
 
 function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; onCheckin: () => void }) {
-  const occupant = room.current_occupancy?.individual?.owner_name
-    || room.current_occupancy?.individual?.full_name
-    || null
-  const company = room.current_occupancy?.company?.name || null
-  const balance = Number(room.outstanding_balance || 0)
+  // Use centralized helpers
+  const status = getRoomStatus(room)
+  const occupant = getTenantName(room) || null
+  const company = getCompanyName(room) || null
+  const balance = getBalance(room)
+  const rent = getMonthlyRent(room)
 
   // Status indicator color
   const statusBorder: Record<string, string> = {
@@ -193,7 +195,7 @@ function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; 
     bartawi_use: '#D6CFC5',
     maintenance: '#A84A3B',
   }
-  const borderColor = statusBorder[room.status] || '#D6CFC5'
+  const borderColor = statusBorder[status] || '#D6CFC5'
 
   return (
     <motion.div
@@ -216,7 +218,7 @@ function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; 
 
       {/* Status badge */}
       <div className="mb-3">
-        <StatusBadge status={room.status} />
+        <StatusBadge status={status} />
       </div>
 
       {/* Tenant name */}
@@ -235,7 +237,7 @@ function RoomCard({ room, onOpen, onCheckin }: { room: any; onOpen: () => void; 
       <div className="mb-2">
         <div className="overline mb-1">Monthly rent</div>
         <div className="data-md text-espresso">
-          {Number(room.standard_rent) > 0 ? formatAED(room.standard_rent) : '—'}
+          {rent > 0 ? formatAED(rent) : '—'}
         </div>
       </div>
 

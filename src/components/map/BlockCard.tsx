@@ -2,19 +2,11 @@
 import { motion } from 'motion/react'
 import { BlockDefinition } from '@/data/camp1-layout'
 import { cn } from '@/lib/utils'
-
-interface RoomData {
-  id: string
-  room_number: string
-  status: string
-  current_occupancy: { people_count: number } | null
-  max_capacity: number
-  standard_rent: number
-}
+import { getRoomStatus } from '@/lib/room-helpers'
 
 interface BlockCardProps {
   block: BlockDefinition
-  rooms: RoomData[]
+  rooms: any[]
   onClick: () => void
   layoutId: string
 }
@@ -22,7 +14,7 @@ interface BlockCardProps {
 export function BlockCard({ block, rooms, onClick, layoutId }: BlockCardProps) {
   // Calculate stats
   const totalRooms = rooms.length
-  const occupiedCount = rooms.filter(r => r.status === 'occupied').length
+  const occupiedCount = rooms.filter(r => getRoomStatus(r) === 'occupied').length
   const occupancyRate = totalRooms > 0 ? (occupiedCount / totalRooms) * 100 : 0
 
   // Determine block status coloring based on occupancy
@@ -40,8 +32,9 @@ export function BlockCard({ block, rooms, onClick, layoutId }: BlockCardProps) {
   }
 
   // Get room status color for mini grid
-  const getRoomColor = (room: RoomData) => {
-    switch (room.status) {
+  const getRoomColor = (room: any) => {
+    const status = getRoomStatus(room)
+    switch (status) {
       case 'occupied': return 'bg-teal'
       case 'vacant': return 'border border-amber bg-transparent'
       case 'vacating': return 'bg-ochre'

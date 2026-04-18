@@ -6,33 +6,21 @@ import { BedVisualization } from './BedVisualization'
 import { useQuery } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
 import { getBlockByCode } from '@/data/camp1-layout'
-
-interface RoomData {
-  id: string
-  room_number: string
-  status: string
-  room_size: string
-  max_capacity: number
-  standard_rent: number
-  block?: { code: string }
-  current_occupancy: {
-    people_count: number
-    monthly_rent: number
-    individual: {
-      owner_name: string
-      mobile?: string
-      nationality?: string
-    } | null
-    company: {
-      name: string
-    } | null
-    check_in_date?: string
-    contract_type?: string
-  } | null
-}
+import {
+  getTenantName,
+  getCompanyName,
+  getPeopleCount,
+  getMonthlyRent,
+  getRoomStatus,
+  getBalance,
+  getMobile,
+  getNationality,
+  getCheckInDate,
+  getContractType,
+} from '@/lib/room-helpers'
 
 interface RoomDetailProps {
-  room: RoomData
+  room: any
   onBack: () => void
   layoutId: string
 }
@@ -69,27 +57,25 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
 
   const block = room.block ? getBlockByCode(room.block.code) : null
 
-  // Extract data
-  const tenant = room.current_occupancy?.individual || room.current_occupancy?.company
-  const tenantName = room.current_occupancy?.individual?.owner_name
-    || room.current_occupancy?.company?.name
-    || '—'
-  const companyName = room.current_occupancy?.company?.name || '—'
-  const mobile = room.current_occupancy?.individual?.mobile || '—'
-  const nationality = room.current_occupancy?.individual?.nationality || '—'
-  const checkIn = room.current_occupancy?.check_in_date || '—'
-  const contractType = room.current_occupancy?.contract_type || 'Monthly'
+  // Extract data using centralized helpers
+  const status = getRoomStatus(room)
+  const tenantName = getTenantName(room) || '—'
+  const companyName = getCompanyName(room) || '—'
+  const mobile = getMobile(room) || '—'
+  const nationality = getNationality(room) || '—'
+  const checkIn = getCheckInDate(room) || '—'
+  const contractType = getContractType(room) || 'Monthly'
 
-  const bedsOccupied = room.current_occupancy?.people_count || 0
-  const bedsTotal = room.max_capacity
+  const bedsOccupied = getPeopleCount(room)
+  const bedsTotal = room.max_capacity || 0
 
-  const rent = room.current_occupancy?.monthly_rent || room.standard_rent
+  const rent = getMonthlyRent(room)
   const outstanding = balance?.outstanding || 0
   const isPaid = outstanding === 0
 
   // Get status badge
   const getStatusBadge = () => {
-    switch (room.status) {
+    switch (status) {
       case 'occupied':
         return (
           <span className="px-3 py-1 rounded-full bg-teal/10 text-teal text-[11px] font-semibold">
@@ -127,7 +113,7 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
 
   // Get contextual action buttons
   const getActionButtons = () => {
-    if (room.status === 'occupied') {
+    if (status === 'occupied') {
       return (
         <>
           <button className="btn-primary">
@@ -139,14 +125,14 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
         </>
       )
     }
-    if (room.status === 'vacant') {
+    if (status === 'vacant') {
       return (
         <button className="btn-primary">
           New Lease
         </button>
       )
     }
-    if (room.status === 'vacating') {
+    if (status === 'vacating') {
       return (
         <>
           <button className="btn-danger">
@@ -158,7 +144,7 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
         </>
       )
     }
-    if (room.status === 'maintenance') {
+    if (status === 'maintenance') {
       return (
         <button className="btn-primary bg-teal hover:bg-teal/90">
           Mark Available
@@ -210,7 +196,7 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
         className="space-y-6"
       >
         {/* Tenant section */}
-        {room.status === 'occupied' && (
+        {status === 'occupied' && (
           <motion.div variants={sectionVariants}>
             <h3 className="eyebrow text-[11px] mb-3">TENANT</h3>
             <div className="bezel p-4 rounded-lg space-y-2">
@@ -239,7 +225,7 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
         </motion.div>
 
         {/* Financials section */}
-        {room.status === 'occupied' && (
+        {status === 'occupied' && (
           <motion.div variants={sectionVariants}>
             <h3 className="eyebrow text-[11px] mb-3">FINANCIALS — {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3>
             <div className="bezel p-4 rounded-lg space-y-3">
@@ -265,7 +251,7 @@ export function RoomDetail({ room, onBack, layoutId }: RoomDetailProps) {
         )}
 
         {/* History section */}
-        {room.status === 'occupied' && history?.data && history.data.length > 0 && (
+        {status === 'occupied' && history?.data && history.data.length > 0 && (
           <motion.div variants={sectionVariants}>
             <h3 className="eyebrow text-[11px] mb-3">LAST 6 MONTHS</h3>
             <div className="bezel p-4 rounded-lg">

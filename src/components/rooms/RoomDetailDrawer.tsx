@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { NoticeModal } from './NoticeModal'
 import { CompleteCheckoutModal } from './CompleteCheckoutModal'
 import { slideRight, slideUp, staggerContainer } from '@/lib/motion'
+import { getRoomStatus, getMonthlyRent } from '@/lib/room-helpers'
 
 interface Props {
   roomId: string
@@ -29,6 +30,8 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
   const person = occ?.individual
   const company = occ?.company
   const contract = occ?.contract
+  const status = getRoomStatus(room || {})
+  const rent = getMonthlyRent(room || {})
 
   return (
     <>
@@ -70,7 +73,7 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                   <>
                     <motion.section variants={slideUp}>
                       <div className="flex items-center gap-2 mb-4">
-                        <StatusPill status={room.status} />
+                        <StatusPill status={status} />
                         {room.property_type?.name && (
                           <span className="overline text-espresso-muted">
                             · {room.property_type.name}
@@ -79,7 +82,7 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                       </div>
                       <div className="divider-warm my-4" />
                       <div className="grid grid-cols-2 gap-3">
-                        <Field label="Standard rent" value={formatAED(room.standard_rent)} mono />
+                        <Field label="Standard rent" value={formatAED(rent)} mono />
                         <Field label="Max capacity"  value={`${room.max_capacity || 0} ppl`} mono />
                         <Field label="Room size"     value={room.room_size} />
                         <Field label="Block"         value={room.block?.code || '—'} mono />
@@ -199,13 +202,13 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
 
               {room && (
                 <footer className="px-6 py-4 border-t border-sand-200 bg-sand-50 flex items-center gap-2">
-                  {room.status === 'vacant' && onStartCheckin && (
+                  {status === 'vacant' && onStartCheckin && (
                     <button onClick={() => onStartCheckin(room)}
                       className="flex-1 h-11 flex items-center justify-center gap-2 rounded-full bg-amber text-espresso font-body text-[13px] font-medium hover:bg-amber/90 transition-all active:scale-[0.98]">
                       <Icon icon={ArrowDownLeft} size={13} /> New Lease
                     </button>
                   )}
-                  {room.status === 'occupied' && (
+                  {status === 'occupied' && (
                     <>
                       <button onClick={() => setNoticeOpen(true)}
                         className="flex-1 h-11 flex items-center justify-center gap-2 rounded-full border-2 border-espresso text-espresso font-body text-[13px] font-medium hover:bg-espresso hover:text-sand-50 transition-all">
@@ -217,7 +220,7 @@ export function RoomDetailDrawer({ roomId, onClose, onStartCheckin }: Props) {
                       </button>
                     </>
                   )}
-                  {room.status === 'vacating' && (
+                  {status === 'vacating' && (
                     <button onClick={() => setCheckoutOpen(true)}
                       className="flex-1 h-11 flex items-center justify-center gap-2 rounded-full bg-rust text-white font-body text-[13px] font-medium hover:bg-rust/90 transition-all active:scale-[0.98]">
                       <Icon icon={ArrowUpRight} size={13} /> Complete Checkout

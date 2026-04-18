@@ -1,39 +1,32 @@
 'use client'
 import { motion } from 'motion/react'
 import { cn } from '@/lib/utils'
+import {
+  getTenantName,
+  getPeopleCount,
+  getMonthlyRent,
+  getPaymentPercentage,
+  getRoomStatus,
+  formatRoomNumber,
+} from '@/lib/room-helpers'
 
 interface RoomCardProps {
-  room: {
-    id: string
-    room_number: string
-    status: string
-    room_size: string
-    max_capacity: number
-    standard_rent: number
-    current_occupancy: {
-      people_count: number
-      monthly_rent: number
-      individual: { owner_name: string } | null
-      company: { name: string } | null
-    } | null
-  }
+  room: any
   onClick: () => void
   layoutId: string
 }
 
 export function RoomCard({ room, onClick, layoutId }: RoomCardProps) {
-  // Extract tenant name
-  const tenantName = room.current_occupancy?.individual?.owner_name
-    || room.current_occupancy?.company?.name
-    || (room.status === 'vacant' ? 'VACANT' : 'UNKNOWN')
+  // Use centralized helpers to extract data
+  const tenantName = getTenantName(room) || (getRoomStatus(room) === 'vacant' ? 'VACANT' : 'UNKNOWN')
+  const rent = getMonthlyRent(room)
+  const paymentPercentage = getPaymentPercentage(room)
 
-  // Calculate payment percentage (mock for now - would come from balance API)
-  const rent = room.current_occupancy?.monthly_rent || room.standard_rent
-  const paymentPercentage = room.status === 'occupied' ? 96 : 0
+  const status = getRoomStatus(room)
 
   // Get status indicator
   const getStatusDot = () => {
-    switch (room.status) {
+    switch (status) {
       case 'occupied':
         return paymentPercentage >= 90 ? 'bg-teal' : 'bg-ochre'
       case 'vacant':
@@ -50,7 +43,7 @@ export function RoomCard({ room, onClick, layoutId }: RoomCardProps) {
   }
 
   const getStatusBackground = () => {
-    switch (room.status) {
+    switch (status) {
       case 'occupied':
         return paymentPercentage < 90 ? 'bg-amber-pale/20' : ''
       case 'vacant':
@@ -70,8 +63,9 @@ export function RoomCard({ room, onClick, layoutId }: RoomCardProps) {
     return 'bg-rust'
   }
 
-  const bedsOccupied = room.current_occupancy?.people_count || 0
-  const bedsTotal = room.max_capacity
+  const bedsOccupied = getPeopleCount(room)
+  const bedsTotal = room.max_capacity || 0
+  const displayRoomNumber = formatRoomNumber(room.room_number)
 
   return (
     <motion.div
@@ -88,7 +82,7 @@ export function RoomCard({ room, onClick, layoutId }: RoomCardProps) {
     >
       {/* Header: Room number + status dot */}
       <div className="flex items-center justify-between mb-1.5">
-        <span className="data-sm font-semibold">{room.room_number}</span>
+        <span className="data-sm font-semibold">{displayRoomNumber}</span>
         <div className={cn('w-2 h-2 rounded-full', getStatusDot())} />
       </div>
 
@@ -103,7 +97,7 @@ export function RoomCard({ room, onClick, layoutId }: RoomCardProps) {
       </div>
 
       {/* Payment bar (only for occupied rooms) */}
-      {room.status === 'occupied' && (
+      {status === 'occupied' && (
         <div className="flex items-center gap-1.5 mb-2">
           <div className="flex-1 h-[3px] bg-sand-200 rounded-full overflow-hidden">
             <div
