@@ -86,6 +86,10 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
               },
             },
           },
+          monthly_records: {
+            orderBy: [{ year: 'desc' }, { month: 'desc' }],
+            take: 1,
+          },
         },
         orderBy: { room_number: 'asc' },
         take,
@@ -97,6 +101,35 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
     // Flatten the response for frontend consumption
     const data = rooms.map((r) => {
       const occ = r.room_occupancy?.[0] || null;
+      const latestRecord = r.monthly_records?.[0] || null;
+
+      // Build current_occupancy from either room_occupancy or latest monthly_record
+      let currentOccupancy = null;
+      if (occ) {
+        currentOccupancy = {
+          id: occ.id,
+          check_in_date: occ.check_in_date,
+          people_count: occ.people_count,
+          monthly_rent: occ.monthly_rent ? Number(occ.monthly_rent) : null,
+          status: occ.status,
+          individual: occ.individuals || null,
+          company: occ.companies || null,
+          contract: occ.contracts || null,
+        };
+      } else if (latestRecord) {
+        // Fallback to monthly_records if room_occupancy is empty
+        currentOccupancy = {
+          people_count: latestRecord.people_count,
+          monthly_rent: latestRecord.rent ? Number(latestRecord.rent) : null,
+          individual: latestRecord.owner_name ? {
+            owner_name: latestRecord.owner_name,
+          } : null,
+          company: latestRecord.company_name ? {
+            name: latestRecord.company_name,
+          } : null,
+        };
+      }
+
       return {
         id: r.id,
         camp_id: r.camp_id,
@@ -112,16 +145,7 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
         fp_y: r.fp_y ? Number(r.fp_y) : null,
         fp_width: r.fp_width ? Number(r.fp_width) : null,
         fp_height: r.fp_height ? Number(r.fp_height) : null,
-        current_occupancy: occ ? {
-          id: occ.id,
-          check_in_date: occ.check_in_date,
-          people_count: occ.people_count,
-          monthly_rent: occ.monthly_rent ? Number(occ.monthly_rent) : null,
-          status: occ.status,
-          individual: occ.individuals || null,
-          company: occ.companies || null,
-          contract: occ.contracts || null,
-        } : null,
+        current_occupancy: currentOccupancy,
       };
     });
 
