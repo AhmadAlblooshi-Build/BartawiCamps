@@ -67,7 +67,10 @@
       "Bash(python3 -m json.tool:*)",
       "Bash(cat:*)",
       "Bash(PORT=3000 npm run dev:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(node:*)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYzFjNjEwMC0yODM2LWM2MGEtYjU0YS1iMGJkYTU2ZDU0ZDQiLCJ0ZW5hbnRJZCI6ImExN2U5ZDQwLWEwMTEtYTE0ZS0wYjBlLTY3YjBhMGRiYzcxZiIsImVtYWlsIjoiaGFtZWRAYmFydGF3aS5hZSIsImlhdCI6MTc3NjUxOTEzNSwiZXhwIjoxNzc2NjA1NTM1fQ.KahO_pluUor_Z-qpfDnRgqz20ZhkgLtrTEPbIKHjCFw\")",
+      "Bash(__NEW_LINE_b315af82c2dbd280__ echo \"=== 1. LIST CAMPS ===\")"
     ]
   }
 }
