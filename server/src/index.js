@@ -109,10 +109,10 @@ app.use(pinoHttp({
 // RATE LIMITING
 // ============================================================
 
-// Generic rate limiter — 100 req/min per IP
+// Generic rate limiter — 200 req/min per IP (increased for dashboard with multiple simultaneous queries)
 const genericLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
