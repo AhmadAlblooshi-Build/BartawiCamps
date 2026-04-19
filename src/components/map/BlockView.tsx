@@ -1,196 +1,514 @@
 'use client'
-import { motion } from 'motion/react'
-import { ArrowLeft } from '@phosphor-icons/react'
-import { Icon } from '@/components/ui/Icon'
-import { RoomCard } from './RoomCard'
-import { CorridorStrip } from './CorridorStrip'
-import { getBlockByCode } from '@/data/camp1-layout'
-import { spring } from '@/lib/motion'
 
-interface RoomData {
-  id: string
-  room_number: string
-  status: string
-  room_size: string
-  max_capacity: number
-  standard_rent: number
-  current_occupancy: {
-    people_count: number
-    monthly_rent: number
-    individual: { owner_name: string } | null
-    company: { name: string } | null
-  } | null
-}
+import { motion } from 'motion/react'
+import { getBlockByCode } from '@/data/camp1-layout'
+import {
+  getRoomStatus,
+  getTenantName,
+  getCompanyName,
+  getPeopleCount,
+  getMonthlyRent,
+  getBalance,
+} from '@/lib/room-helpers'
+import { CaretLeft } from '@phosphor-icons/react'
 
 interface BlockViewProps {
   blockCode: string
-  rooms: RoomData[]
+  rooms: any[]
   onBack: () => void
-  onRoomClick: (roomId: string) => void
-  selectedRoom: string | null
+  onRoomClick: (roomCode: string) => void
 }
 
-// Spring configuration for block dive animation
-const blockDiveSpring = {
-  type: 'spring' as const,
-  stiffness: 350,
-  damping: 32,
-  mass: 1,
-}
-
-const roomVariants = {
-  hidden: { opacity: 0, y: 8 },
-  visible: { opacity: 1, y: 0 },
-}
-
-const roomStaggerTransition = {
-  staggerChildren: 0.03,
-  delayChildren: 0.25,
-}
-
-export function BlockView({ blockCode, rooms, onBack, onRoomClick, selectedRoom }: BlockViewProps) {
+export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewProps) {
   const block = getBlockByCode(blockCode)
+  if (!block) return null
 
-  if (!block) {
-    return <div>Block not found</div>
-  }
+  // Filter rooms to just this block
+  const blockRooms = rooms.filter(r => r.block?.code === blockCode)
 
-  // Calculate stats
-  const totalRooms = rooms.length
-  const occupiedCount = rooms.filter(r => r.status === 'occupied').length
-  const vacantCount = rooms.filter(r => r.status === 'vacant').length
-  const totalRent = rooms.reduce((sum, r) => sum + (r.current_occupancy?.monthly_rent || r.standard_rent), 0)
+  // Calculate block stats
+  const occupied = blockRooms.filter(r => getRoomStatus(r) === 'occupied').length
+  const total = blockRooms.length
+  const totalRent = blockRooms.reduce((sum, r) => sum + getMonthlyRent(r), 0)
+  const totalPaid = blockRooms.reduce((sum, r) => {
+    const paid = r.current_occupancy?.paid ?? r.currentOccupancy?.paid ?? 0
+    return sum + paid
+  }, 0)
+  const totalOutstanding = blockRooms.reduce((sum, r) => sum + getBalance(r), 0)
 
-  // Mock collection data (would come from API)
-  const totalCollected = totalRent * 0.967
-  const collectionRate = totalRent > 0 ? (totalCollected / totalRent) * 100 : 0
-
-  // Split rooms into left and right columns (matching the layout.ts structure)
-  const leftColumn = rooms.slice(0, 11)
-  const rightColumn = rooms.slice(11, 22)
+  // Split rooms by column position (left column rooms 1-11, right column rooms 12-22)
+  const leftColumnRooms = block.rooms.filter(r => r.x === 0)
+  const rightColumnRooms = block.rooms.filter(r => r.x > 0)
+  const extraRooms = block.rooms.filter(r => r.y > 220)
 
   return (
     <motion.div
       layoutId={`block-${blockCode}`}
-      transition={blockDiveSpring}
-      className="bezel atmosphere-strong p-8 rounded-xl w-full"
+      className="relative w-full"
+      transition={{ type: 'spring', stiffness: 280, damping: 30 }}
     >
       {/* Header */}
       <motion.div
-        initial={{ opacity: 0, x: -8 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ delay: 0.4, duration: 0.2 }}
-        className="mb-6"
+        className="flex justify-between items-start px-6 pt-6 pb-4"
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15, duration: 0.3 }}
       >
-        <div className="flex items-center justify-between mb-4">
+        <div>
           <button
             onClick={onBack}
-            className="flex items-center gap-2 text-espresso-muted hover:text-espresso transition-colors group"
+            className="flex items-center gap-1 text-[11px] text-amber hover:text-amber/80 mb-2 transition-colors"
           >
-            <Icon icon={ArrowLeft} size={16} className="group-hover:-translate-x-1 transition-transform" />
-            <span className="text-sm font-medium">Back to map</span>
+            <CaretLeft size={12} weight="light" />
+            Back to map
           </button>
-          <div className="flex items-center gap-4 text-sm">
-            <span className="data-sm">{totalRooms} rooms</span>
-            <span className="text-espresso-muted">·</span>
-            <span className="data-sm text-teal">{occupiedCount} occ</span>
-            <span className="text-espresso-muted">·</span>
-            <span className="data-sm text-amber">{vacantCount} vac</span>
-          </div>
+          <p className="font-serif text-[26px] italic text-espresso leading-tight">
+            Inside Block {blockCode}
+          </p>
+          <p className="text-[11px] tracking-[0.12em] uppercase text-stone mt-1 font-medium">
+            {total} rooms · {occupied} occupied · {total - occupied} vacant/special
+          </p>
         </div>
 
-        <div className="flex items-center gap-3 mb-4">
-          <h2 className="font-display text-2xl italic" style={{ color: 'var(--color-espresso)' }}>
-            {block.label}
-          </h2>
-          <span className="eyebrow text-[11px]">
-            {block.floor === 'ground' ? 'GROUND FLOOR' : 'FIRST FLOOR'}
-          </span>
-        </div>
-
-        <div className="divider-warm" />
-      </motion.div>
-
-      {/* Room grid */}
-      <motion.div
-        initial="hidden"
-        animate="visible"
-        transition={roomStaggerTransition}
-        className="flex items-start justify-center gap-6 mb-8"
-      >
-        {/* Left column (rooms 1-11) */}
-        <div className="flex flex-col gap-3">
-          {leftColumn.map((room, index) => (
-            <motion.div
-              key={room.id}
-              variants={roomVariants}
-              custom={index}
-            >
-              {selectedRoom !== room.id && (
-                <RoomCard
-                  room={room}
-                  onClick={() => onRoomClick(room.id)}
-                  layoutId={`room-${room.id}`}
-                />
-              )}
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Corridor */}
-        <CorridorStrip />
-
-        {/* Right column (rooms 22-12) */}
-        <div className="flex flex-col gap-3">
-          {rightColumn.map((room, index) => (
-            <motion.div
-              key={room.id}
-              variants={roomVariants}
-              custom={index}
-            >
-              {selectedRoom !== room.id && (
-                <RoomCard
-                  room={room}
-                  onClick={() => onRoomClick(room.id)}
-                  layoutId={`room-${room.id}`}
-                />
-              )}
-            </motion.div>
-          ))}
+        <div className="text-right">
+          <p className="font-mono text-[24px] font-semibold text-espresso leading-none">
+            AED {totalPaid.toLocaleString()}
+          </p>
+          <p className="text-[10px] tracking-[0.12em] uppercase text-stone mt-1 font-medium">
+            Collected · March 2026
+          </p>
+          {totalOutstanding > 0 && (
+            <p className="text-[11px] font-mono text-rust mt-1">
+              AED {totalOutstanding.toLocaleString()} outstanding
+            </p>
+          )}
         </div>
       </motion.div>
 
-      {/* Summary */}
+      {/* Block interior SVG */}
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5, duration: 0.2 }}
-        className="divider-warm mb-4"
-      />
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5, duration: 0.2 }}
-        className="space-y-2"
+        className="px-6 pb-6"
+        initial={{ opacity: 0, scale: 0.98 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.1, duration: 0.4, type: 'spring', stiffness: 280, damping: 30 }}
       >
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-espresso-muted">Total rent</span>
-          <span className="data-md font-semibold">AED {totalRent.toLocaleString()}</span>
-        </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-espresso-muted">Collected</span>
-          <span className="data-md">AED {Math.round(totalCollected).toLocaleString()}</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] text-espresso-muted">Collection rate</span>
-          <div className="flex-1 h-2 bg-sand-200 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-teal transition-all duration-300"
-              style={{ width: `${collectionRate}%` }}
-            />
-          </div>
-          <span className="data-sm font-semibold">{collectionRate.toFixed(1)}%</span>
-        </div>
+        <svg
+          viewBox="0 0 800 520"
+          xmlns="http://www.w3.org/2000/svg"
+          className="w-full h-auto"
+        >
+          {/* Block outline */}
+          <rect
+            x="20"
+            y="10"
+            width="760"
+            height="500"
+            fill="rgba(30, 77, 82, 0.03)"
+            stroke="#1E4D52"
+            strokeWidth="1.5"
+            rx="8"
+          />
+
+          {/* CENTRAL CORRIDOR with toilets/baths */}
+          <rect
+            x="310"
+            y="10"
+            width="180"
+            height="500"
+            fill="#E8E0D6"
+          />
+
+          <text
+            x="400"
+            y="32"
+            textAnchor="middle"
+            fontFamily="JetBrains Mono, monospace"
+            fontSize="9"
+            letterSpacing="3"
+            fontWeight="500"
+            fill="#6A6159"
+          >
+            CORRIDOR
+          </text>
+
+          {/* Toilet/bath pairs down the corridor */}
+          {[60, 150, 240, 330, 420].map((yPos, i) => (
+            <g key={`facilities-${i}`}>
+              <rect
+                x="330"
+                y={yPos}
+                width="70"
+                height="26"
+                fill="#D8E3E4"
+                stroke="#1E4D52"
+                strokeWidth="0.5"
+                rx="2"
+              />
+              <text
+                x="365"
+                y={yPos + 16}
+                textAnchor="middle"
+                fontFamily="JetBrains Mono, monospace"
+                fontSize="8"
+                fill="#1E4D52"
+                letterSpacing="1"
+              >
+                TOILET
+              </text>
+
+              <rect
+                x="405"
+                y={yPos}
+                width="70"
+                height="26"
+                fill="#D8E3E4"
+                stroke="#1E4D52"
+                strokeWidth="0.5"
+                rx="2"
+              />
+              <text
+                x="440"
+                y={yPos + 16}
+                textAnchor="middle"
+                fontFamily="JetBrains Mono, monospace"
+                fontSize="8"
+                fill="#1E4D52"
+                letterSpacing="1"
+              >
+                BATH
+              </text>
+            </g>
+          ))}
+
+          {/* LEFT COLUMN ROOMS (1-11, reading top to bottom) */}
+          {leftColumnRooms.map((room, idx) => {
+            const apiRoom = blockRooms.find(r => r.room_number === room.code)
+            const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
+            const tenantName = apiRoom ? getTenantName(apiRoom) : ''
+            const companyName = apiRoom ? getCompanyName(apiRoom) : ''
+            const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
+            const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
+            const balance = apiRoom ? getBalance(apiRoom) : 0
+            const hasBalance = balance > 0
+
+            const displayName = tenantName || companyName || room.label || '—'
+
+            // Position each room as a horizontal strip
+            const yPos = 50 + idx * 38
+
+            const isBartawi = room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners' || room.type === 'restaurant'
+
+            let fillColor = 'rgba(30, 77, 82, 0.05)'
+            let strokeColor = 'rgba(30, 77, 82, 0.3)'
+            let strokeWidth = '1'
+            let roomNumberColor = '#1A1816'
+            let textColor = '#6A6159'
+
+            if (status === 'occupied') {
+              fillColor = 'rgba(30, 77, 82, 0.08)'
+              strokeColor = 'rgba(30, 77, 82, 0.4)'
+            }
+            if (isBartawi) {
+              fillColor = 'rgba(184, 136, 61, 0.1)'
+              strokeColor = 'rgba(184, 136, 61, 0.5)'
+              roomNumberColor = '#8B6420'
+              textColor = '#8B6420'
+            }
+            if (status === 'vacant' && !isBartawi) {
+              fillColor = 'none'
+              strokeColor = '#B8883D'
+              strokeWidth = '1'
+            }
+            if (hasBalance) {
+              strokeColor = '#A84A3B'
+              strokeWidth = '1.5'
+            }
+
+            return (
+              <motion.g
+                key={room.code}
+                layoutId={`room-${room.code}`}
+                onClick={() => onRoomClick(room.code)}
+                className="cursor-pointer"
+                whileHover={{ scale: 1.015 }}
+                whileTap={{ scale: 0.99 }}
+                transition={{
+                  delay: 0.2 + idx * 0.03,
+                  type: 'spring',
+                  stiffness: 400,
+                  damping: 30
+                }}
+                style={{ transformOrigin: `155px ${yPos + 16}px` }}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -8 }}
+              >
+                <rect
+                  x="30"
+                  y={yPos}
+                  width="270"
+                  height="32"
+                  fill={fillColor}
+                  stroke={strokeColor}
+                  strokeWidth={strokeWidth}
+                  strokeDasharray={status === 'vacant' && !isBartawi ? '4 3' : undefined}
+                  rx="3"
+                />
+
+                {/* Room number */}
+                <text
+                  x="42"
+                  y={yPos + 14}
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="11"
+                  fontWeight="600"
+                  fill={roomNumberColor}
+                  letterSpacing="0.05em"
+                >
+                  {room.code}
+                </text>
+
+                {/* Tenant name / status */}
+                <text
+                  x="42"
+                  y={yPos + 26}
+                  fontFamily="Geist, Inter, sans-serif"
+                  fontSize="9"
+                  fill={textColor}
+                  fontStyle={status === 'vacant' && !isBartawi ? 'italic' : 'normal'}
+                >
+                  {status === 'vacant' && !isBartawi
+                    ? 'vacant'
+                    : isBartawi
+                    ? `${displayName} · Bartawi use`
+                    : `${displayName.substring(0, 28)} · ${peopleCount}/8`}
+                </text>
+
+                {/* Rent / status on right */}
+                <text
+                  x="288"
+                  y={yPos + 20}
+                  textAnchor="end"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="9"
+                  fill={hasBalance ? '#A84A3B' : status === 'occupied' ? '#1E4D52' : '#9C948B'}
+                >
+                  {isBartawi && rent === 0
+                    ? '—'
+                    : hasBalance
+                    ? `AED ${balance.toLocaleString()} due`
+                    : rent > 0
+                    ? `AED ${rent.toLocaleString()} ✓`
+                    : '—'}
+                </text>
+              </motion.g>
+            )
+          })}
+
+          {/* RIGHT COLUMN ROOMS (22-12, reading top to bottom) */}
+          {rightColumnRooms.map((room, idx) => {
+            const apiRoom = blockRooms.find(r => r.room_number === room.code)
+            const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
+            const tenantName = apiRoom ? getTenantName(apiRoom) : ''
+            const companyName = apiRoom ? getCompanyName(apiRoom) : ''
+            const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
+            const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
+            const balance = apiRoom ? getBalance(apiRoom) : 0
+            const hasBalance = balance > 0
+
+            const displayName = tenantName || companyName || room.label || '—'
+
+            const yPos = 50 + idx * 38
+
+            const isBartawi = room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners' || room.type === 'restaurant'
+
+            let fillColor = 'rgba(30, 77, 82, 0.05)'
+            let strokeColor = 'rgba(30, 77, 82, 0.3)'
+            let strokeWidth = '1'
+            let roomNumberColor = '#1A1816'
+            let textColor = '#6A6159'
+
+            if (status === 'occupied') {
+              fillColor = 'rgba(30, 77, 82, 0.08)'
+              strokeColor = 'rgba(30, 77, 82, 0.4)'
+            }
+            if (isBartawi) {
+              fillColor = 'rgba(184, 136, 61, 0.1)'
+              strokeColor = 'rgba(184, 136, 61, 0.5)'
+              roomNumberColor = '#8B6420'
+              textColor = '#8B6420'
+            }
+            if (status === 'vacant' && !isBartawi) {
+              fillColor = 'none'
+              strokeColor = '#B8883D'
+              strokeWidth = '1'
+            }
+            if (hasBalance) {
+              strokeColor = '#A84A3B'
+              strokeWidth = '1.5'
+            }
+
+            return (
+              <motion.g
+                key={room.code}
+                layoutId={`room-${room.code}`}
+                onClick={() => onRoomClick(room.code)}
+                className="cursor-pointer"
+                whileHover={{ scale: 1.015 }}
+                whileTap={{ scale: 0.99 }}
+                transition={{
+                  delay: 0.2 + idx * 0.03,
+                  type: 'spring',
+                  stiffness: 400,
+                  damping: 30
+                }}
+                style={{ transformOrigin: `635px ${yPos + 16}px` }}
+                initial={{ opacity: 0, x: 8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 8 }}
+              >
+                <rect
+                  x="500"
+                  y={yPos}
+                  width="270"
+                  height="32"
+                  fill={fillColor}
+                  stroke={strokeColor}
+                  strokeWidth={strokeWidth}
+                  strokeDasharray={status === 'vacant' && !isBartawi ? '4 3' : undefined}
+                  rx="3"
+                />
+
+                <text
+                  x="512"
+                  y={yPos + 14}
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="11"
+                  fontWeight="600"
+                  fill={roomNumberColor}
+                  letterSpacing="0.05em"
+                >
+                  {room.code}
+                </text>
+
+                <text
+                  x="512"
+                  y={yPos + 26}
+                  fontFamily="Geist, Inter, sans-serif"
+                  fontSize="9"
+                  fill={textColor}
+                  fontStyle={status === 'vacant' && !isBartawi ? 'italic' : 'normal'}
+                >
+                  {status === 'vacant' && !isBartawi
+                    ? 'vacant'
+                    : isBartawi
+                    ? `${displayName} · Bartawi use`
+                    : `${displayName.substring(0, 28)} · ${peopleCount}/8`}
+                </text>
+
+                <text
+                  x="758"
+                  y={yPos + 20}
+                  textAnchor="end"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="9"
+                  fill={hasBalance ? '#A84A3B' : status === 'occupied' ? '#1E4D52' : '#9C948B'}
+                >
+                  {isBartawi && rent === 0
+                    ? '—'
+                    : hasBalance
+                    ? `AED ${balance.toLocaleString()} due`
+                    : rent > 0
+                    ? `AED ${rent.toLocaleString()} ✓`
+                    : '—'}
+                </text>
+              </motion.g>
+            )
+          })}
+
+          {/* EXTRA ROOMS at the south end (B-23, B-24, etc.) */}
+          {extraRooms.length > 0 && (
+            <g>
+              {extraRooms.map((room, idx) => {
+                const apiRoom = blockRooms.find(r => r.room_number === room.code)
+                const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
+                const tenantName = apiRoom ? getTenantName(apiRoom) : ''
+                const companyName = apiRoom ? getCompanyName(apiRoom) : ''
+                const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
+                const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
+                const displayName = tenantName || companyName || room.label || '—'
+
+                const xPos = idx === 0 ? 30 : 500
+                const yPos = 478
+
+                const fillColor = status === 'occupied' ? 'rgba(30, 77, 82, 0.08)' : 'rgba(30, 77, 82, 0.05)'
+                const strokeColor = 'rgba(30, 77, 82, 0.4)'
+
+                return (
+                  <motion.g
+                    key={room.code}
+                    layoutId={`room-${room.code}`}
+                    onClick={() => onRoomClick(room.code)}
+                    className="cursor-pointer"
+                    whileHover={{ scale: 1.015 }}
+                    whileTap={{ scale: 0.99 }}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                  >
+                    <rect
+                      x={xPos}
+                      y={yPos}
+                      width="270"
+                      height="24"
+                      fill={fillColor}
+                      stroke={strokeColor}
+                      strokeWidth="1"
+                      rx="3"
+                    />
+                    <text
+                      x={xPos + 12}
+                      y={yPos + 16}
+                      fontFamily="JetBrains Mono, monospace"
+                      fontSize="11"
+                      fontWeight="600"
+                      fill="#1A1816"
+                    >
+                      {room.code} · {displayName.substring(0, 22)} · {peopleCount}/8
+                    </text>
+                  </motion.g>
+                )
+              })}
+            </g>
+          )}
+
+          {/* Entrance indicators */}
+          <text
+            x="155"
+            y="498"
+            textAnchor="middle"
+            fontFamily="JetBrains Mono, monospace"
+            fontSize="8"
+            letterSpacing="1"
+            fill="#9C948B"
+          >
+            {extraRooms.length > 0 ? '' : '▲ ENTRANCE'}
+          </text>
+          <text
+            x="635"
+            y="498"
+            textAnchor="middle"
+            fontFamily="JetBrains Mono, monospace"
+            fontSize="8"
+            letterSpacing="1"
+            fill="#9C948B"
+          >
+            {extraRooms.length > 0 ? '' : 'ENTRANCE ▲'}
+          </text>
+        </svg>
+
+        <p className="text-center text-[11px] text-stone mt-3">
+          Click any room to view details
+        </p>
       </motion.div>
     </motion.div>
   )
