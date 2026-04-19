@@ -28,6 +28,33 @@ async function findTenantRoom(roomId, tenantId) {
 // List rooms with optional filters. Used by map view, rooms page,
 // and dashboard widgets.
 // ──────────────────────────────────────────────────────────────
+
+// Month number → display name mapping
+const MONTH_NAMES = [
+  '', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+function serializeRecord(r, synthesized = false) {
+  return {
+    month: r.month,                          // keep as number
+    month_name: MONTH_NAMES[r.month],        // for display
+    year: r.year,
+    rent: Number(r.rent),                    // Decimal → Number
+    paid: Number(r.paid),
+    balance: Number(r.balance ?? 0),
+    remarks: r.remarks,
+    owner_name: r.owner_name,
+    company_name: r.company_name,
+    contract_type: r.contract_type,
+    contract_start_date: r.contract_start_date ? r.contract_start_date.toISOString() : null,
+    contract_end_date: r.contract_end_date ? r.contract_end_date.toISOString() : null,
+    people_count: r.people_count,
+    is_locked: r.is_locked ?? false,
+    is_synthesized: synthesized,
+  };
+}
+
 router.get('/', requirePermission('rooms.read'), async (req, res) => {
   const tenantId = req.tenantId;
   const {
@@ -59,6 +86,11 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
     const take = Math.min(Number(limit) || 100, 500);
     const skip = Number(offset) || 0;
 
+    // Determine "current period" with fallback
+    const now = new Date();
+    const currentMonthNum = now.getMonth() + 1;  // JS months are 0-indexed, DB stores 1-12
+    const currentYear = now.getFullYear();
+
     const [rooms, total] = await Promise.all([
       prisma.rooms.findMany({
         where,
@@ -88,7 +120,7 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
           },
           monthly_records: {
             orderBy: [{ year: 'desc' }, { month: 'desc' }],
-            take: 1,
+            take: 12,  // up to 12 months history, we'll slice to 3 for display
           },
         },
         orderBy: { room_number: 'asc' },
@@ -101,9 +133,91 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
     // Flatten the response for frontend consumption
     const data = rooms.map((r) => {
       const occ = r.room_occupancy?.[0] || null;
-      const latestRecord = r.monthly_records?.[0] || null;
 
-      // Build current_occupancy from either room_occupancy or latest monthly_record
+      // Sort monthly_records by year/month descending
+      const sortedRecords = (r.monthly_records || []).sort((a, b) => {
+        if (a.year !== b.year) return b.year - a.year;
+        return b.month - a.month;
+      });
+
+      // Try explicit current month record
+      let currentMonth = sortedRecords.find(rec =>
+        rec.month === currentMonthNum && rec.year === currentYear
+      );
+
+      let synthesized = false;
+
+      // If no current month record exists, check if room is "actively occupied"
+      if (!currentMonth) {
+        const mostRecent = sortedRecords[0];  // most recent (usually last month)
+
+        // Room is considered occupied if:
+        //   (a) there's a most-recent monthly record with tenant info, OR
+        //   (b) room_occupancy relation exists (defensive fallback)
+        const hasRecentTenant = !!(
+          mostRecent && (mostRecent.owner_name || mostRecent.company_name)
+        );
+        const hasOccupancyRow = !!occ;
+
+        const isOccupied = hasRecentTenant || hasOccupancyRow;
+
+        if (isOccupied) {
+          // Detect Bartawi rooms — skip synthesis for them
+          const contractType = (mostRecent?.contract_type || '').toString().toLowerCase();
+          const tenant = (mostRecent?.owner_name || mostRecent?.company_name || '').toString().toLowerCase();
+          const bartawiKeywords = [
+            'bartawi', 'bgc', 'camp boss', 'camp office', 'security room',
+            'cleaners', 'mosque', 'bgc room', 'electricity room',
+          ];
+          const isBartawi =
+            contractType.includes('bartawi') ||
+            bartawiKeywords.some(kw => tenant.includes(kw)) ||
+            (mostRecent && Number(mostRecent.rent) === 0);
+
+          if (!isBartawi) {
+            // Infer rent: most recent non-zero rent, or standard_rent fallback
+            let inferredRent = 0;
+            for (const rec of sortedRecords) {
+              const rnum = Number(rec.rent) || 0;
+              if (rnum > 0) {
+                inferredRent = rnum;
+                break;
+              }
+            }
+            if (inferredRent === 0) {
+              inferredRent = Number(r.standard_rent) || 0;
+            }
+
+            if (inferredRent > 0) {
+              currentMonth = {
+                month: currentMonthNum,
+                year: currentYear,
+                rent: inferredRent,
+                paid: 0,
+                balance: inferredRent,
+                remarks: `Rent for ${MONTH_NAMES[currentMonthNum]} ${currentYear} not yet recorded`,
+                owner_name: mostRecent?.owner_name || null,
+                company_name: mostRecent?.company_name || null,
+                contract_type: mostRecent?.contract_type || null,
+                contract_start_date: mostRecent?.contract_start_date || null,
+                contract_end_date: mostRecent?.contract_end_date || null,
+                people_count: mostRecent?.people_count || 0,
+                is_locked: false,
+              };
+              synthesized = true;
+            }
+          }
+        }
+      }
+
+      const currentMonthSerialized = currentMonth
+        ? serializeRecord(currentMonth, synthesized)
+        : null;
+
+      // History shows ONLY real DB records (last 3), not the synthesized one
+      const history = sortedRecords.slice(0, 3).map(rec => serializeRecord(rec, false));
+
+      // Build current_occupancy from room_occupancy
       let currentOccupancy = null;
       if (occ) {
         currentOccupancy = {
@@ -115,18 +229,6 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
           individual: occ.individuals || null,
           company: occ.companies || null,
           contract: occ.contracts || null,
-        };
-      } else if (latestRecord) {
-        // Fallback to monthly_records if room_occupancy is empty
-        currentOccupancy = {
-          people_count: latestRecord.people_count,
-          monthly_rent: latestRecord.rent ? Number(latestRecord.rent) : null,
-          individual: latestRecord.owner_name ? {
-            owner_name: latestRecord.owner_name,
-          } : null,
-          company: latestRecord.company_name ? {
-            name: latestRecord.company_name,
-          } : null,
         };
       }
 
@@ -146,6 +248,8 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
         fp_width: r.fp_width ? Number(r.fp_width) : null,
         fp_height: r.fp_height ? Number(r.fp_height) : null,
         current_occupancy: currentOccupancy,
+        current_month: currentMonthSerialized,
+        monthly_records: history,
       };
     });
 
