@@ -1,9 +1,11 @@
 'use client'
 
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { QueueKey } from './QueueTabs'
 import type { OperationsRoom } from '@/lib/operations-data'
 import { getPaymentStatus, STATUS_COLORS, STATUS_LABELS } from '@/lib/room-helpers'
+import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
 
 interface Props {
   queue: QueueKey
@@ -27,6 +29,7 @@ function rowKey(r: OperationsRoom): string {
 
 export function QueueTable({ queue, rooms, selected, onSelectionChange }: Props) {
   const router = useRouter()
+  const [payFor, setPayFor] = useState<any>(null)
 
   if (rooms.length === 0) {
     return (
@@ -113,6 +116,17 @@ export function QueueTable({ queue, rooms, selected, onSelectionChange }: Props)
                   <th style={thStyle(80)}>Source</th>
                   <th style={thStyle(80)}>Payment</th>
                   <th style={thStyle(0, 'left')}>Remarks</th>
+                  <th style={{
+                    ...thStyle(100),
+                    position: 'sticky',
+                    right: 0,
+                    background: '#E8DFD3',
+                    zIndex: 2,
+                    borderLeft: '0.5px solid #D6CFC5',
+                    boxShadow: '-4px 0 8px -4px rgba(26, 24, 22, 0.08)',
+                  }}>
+                    Action
+                  </th>
                 </>
               )}
               {queue === 'expired' && (
@@ -177,7 +191,7 @@ export function QueueTable({ queue, rooms, selected, onSelectionChange }: Props)
                     />
                   </td>
                   {queue === 'outstanding' && (
-                    <OutstandingRow r={r} onGo={() => goToRoom(r)} />
+                    <OutstandingRow r={r} onGo={() => goToRoom(r)} onPay={() => setPayFor(r.raw)} idx={idx} isSelected={isSelected} />
                   )}
                   {queue === 'expired' && (
                     <ExpiredRow r={r} onGo={() => goToRoom(r)} />
@@ -198,6 +212,13 @@ export function QueueTable({ queue, rooms, selected, onSelectionChange }: Props)
         {rooms.length} {rooms.length === 1 ? 'row' : 'rows'}
         {selected.size > 0 && ` · ${selected.size} selected`}
       </div>
+
+      <LogPaymentDialog
+        room={payFor}
+        open={!!payFor}
+        onClose={() => setPayFor(null)}
+        defaultPaymentType="rent"
+      />
     </div>
   )
 }
@@ -243,7 +264,11 @@ function RoomLink({ room, onGo }: { room: string; onGo: () => void }) {
   )
 }
 
-function OutstandingRow({ r, onGo }: { r: any; onGo: () => void }) {
+function OutstandingRow({ r, onGo, onPay, idx, isSelected }: { r: any; onGo: () => void; onPay: () => void; idx: number; isSelected: boolean }) {
+  const rowBg = isSelected
+    ? 'rgba(168, 74, 59, 0.04)'
+    : idx % 2 === 0 ? '#FFFFFF' : '#FAF7F2'
+
   return (
     <>
       <td style={{ ...tdStyle, textAlign: 'center' }}>
@@ -307,6 +332,43 @@ function OutstandingRow({ r, onGo }: { r: any; onGo: () => void }) {
           {r.hasLegalIssue && <span style={{ fontSize: '9px', padding: '2px 7px', background: 'rgba(26, 24, 22, 0.1)', color: '#1A1816', borderRadius: '999px', marginRight: '6px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', fontStyle: 'normal' }}>Legal</span>}
           {r.remarks || ''}
         </span>
+      </td>
+      <td style={{
+        ...tdStyle,
+        textAlign: 'center',
+        position: 'sticky',
+        right: 0,
+        background: rowBg,
+        zIndex: 1,
+        borderLeft: '0.5px solid #E8DFD3',
+        boxShadow: '-4px 0 8px -4px rgba(26, 24, 22, 0.04)',
+      }}>
+        {r.raw?.active_lease ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onPay()
+            }}
+            style={{
+              padding: '4px 10px',
+              fontSize: '10px',
+              fontWeight: 600,
+              background: '#1A1816',
+              color: '#FAF7F2',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              letterSpacing: '0.04em',
+              transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8' }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
+          >
+            Log payment
+          </button>
+        ) : (
+          <span style={{ fontSize: '10px', color: '#6A6159' }}>—</span>
+        )}
       </td>
     </>
   )

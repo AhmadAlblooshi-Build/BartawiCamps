@@ -16,6 +16,7 @@ const MAIN = [
   { href: '/',            label: 'Dashboard',   icon: House,       perm: null },
   { href: '/camps',       label: 'Camps',       icon: Buildings,   perm: 'rooms.read' },
   { href: '/operations',  label: 'Operations',  icon: ListChecks,  perm: 'rooms.read' },
+  { href: '/tenants',     label: 'Tenants',     icon: UsersThree,  perm: 'tenants.read' },
   { href: '/contracts',   label: 'Contracts',   icon: Files,       perm: 'contracts.read' },
   { href: '/maintenance', label: 'Maintenance', icon: Wrench,      perm: 'maintenance.read' },
   { href: '/complaints',  label: 'Complaints',  icon: ChatDots,    perm: 'complaints.read' },

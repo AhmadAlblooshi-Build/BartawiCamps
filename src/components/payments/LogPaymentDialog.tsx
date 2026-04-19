@@ -110,14 +110,14 @@ export function LogPaymentDialog({ open, onClose, room, paymentType = 'rent' }: 
   // Determine lease and balance info
   const lease = paymentType === 'rent'
     ? {
-        id: room.current_month?.lease_id || room.active_lease?.id || '',
-        tenant: room.current_month?.tenant || room.active_lease?.tenant
+        id: room?.current_month?.lease_id || room?.active_lease?.id || '',
+        tenant: room?.current_month?.tenant || room?.active_lease?.tenant
       }
-    : { id: room.active_lease?.id || '', tenant: room.active_lease?.tenant }
+    : { id: room?.active_lease?.id || '', tenant: room?.active_lease?.tenant }
 
   const maxAmount = paymentType === 'rent'
-    ? room.current_month?.balance || 0
-    : (room.active_lease?.deposit_amount || 0) - (room.active_lease?.deposit_paid || 0)
+    ? room?.current_month?.balance || 0
+    : (room?.active_lease?.deposit_amount || 0) - (room?.active_lease?.deposit_paid || 0)
 
   const amountNum = parseFloat(amount) || 0
   const isOverpayment = amountNum > maxAmount
@@ -130,9 +130,9 @@ export function LogPaymentDialog({ open, onClose, room, paymentType = 'rent' }: 
     onSuccess: () => {
       // Invalidate all caches affected by payment write (centralized helper)
       invalidatePaymentCaches(queryClient, {
-        roomId: room.id,
-        leaseId: lease.id,
-        tenantId: lease.tenant?.id,
+        roomId: room?.id,
+        leaseId: lease?.id,
+        tenantId: lease?.tenant?.id,
       })
 
       toast.success('Payment logged successfully')
@@ -144,16 +144,16 @@ export function LogPaymentDialog({ open, onClose, room, paymentType = 'rent' }: 
   })
 
   const handleSubmit = () => {
-    if (!lease.id) {
+    if (!lease?.id) {
       toast.error('No active lease found')
       return
     }
 
     const data: PaymentData = {
       lease_id: lease.id,
-      monthly_record_id: paymentType === 'rent' ? room.current_month?.id : undefined,
-      target_month: paymentType === 'rent' && !room.current_month?.id ? room.current_month?.month : undefined,
-      target_year: paymentType === 'rent' && !room.current_month?.id ? room.current_month?.year : undefined,
+      monthly_record_id: paymentType === 'rent' ? room?.current_month?.id : undefined,
+      target_month: paymentType === 'rent' && !room?.current_month?.id ? room?.current_month?.month : undefined,
+      target_year: paymentType === 'rent' && !room?.current_month?.id ? room?.current_month?.year : undefined,
       amount: amountNum,
       payment_date: paymentDate,
       method,
