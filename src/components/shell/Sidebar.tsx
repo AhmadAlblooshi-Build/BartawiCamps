@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import {
   House, Buildings, Bed, Files, Wrench, ChatDots, CreditCard,
-  ChartBar, UsersThree, Gear, CaretLeft, MapTrifold,
+  ChartBar, UsersThree, Gear, CaretLeft, MapTrifold, ListChecks,
 } from '@phosphor-icons/react'
 import { Icon } from '@/components/ui/Icon'
 import { cn } from '@/lib/utils'
@@ -13,13 +13,14 @@ import { spring } from '@/lib/motion'
 import { useHasPermission } from '@/lib/auth'
 
 const MAIN = [
-  { href: '/',            label: 'Dashboard',   icon: House,      perm: null },
-  { href: '/camps',       label: 'Camps',       icon: Buildings,  perm: 'rooms.read' },
-  { href: '/contracts',   label: 'Contracts',   icon: Files,      perm: 'contracts.read' },
-  { href: '/maintenance', label: 'Maintenance', icon: Wrench,     perm: 'maintenance.read' },
-  { href: '/complaints',  label: 'Complaints',  icon: ChatDots,   perm: 'complaints.read' },
-  { href: '/payments',    label: 'Payments',    icon: CreditCard, perm: 'payments.read' },
-  { href: '/reports',     label: 'Reports',     icon: ChartBar,   perm: 'reports.read' },
+  { href: '/',            label: 'Dashboard',   icon: House,       perm: null },
+  { href: '/camps',       label: 'Camps',       icon: Buildings,   perm: 'rooms.read' },
+  { href: '/operations',  label: 'Operations',  icon: ListChecks,  perm: 'rooms.read' },
+  { href: '/contracts',   label: 'Contracts',   icon: Files,       perm: 'contracts.read' },
+  { href: '/maintenance', label: 'Maintenance', icon: Wrench,      perm: 'maintenance.read' },
+  { href: '/complaints',  label: 'Complaints',  icon: ChatDots,    perm: 'complaints.read' },
+  { href: '/payments',    label: 'Payments',    icon: CreditCard,  perm: 'payments.read' },
+  { href: '/reports',     label: 'Reports',     icon: ChartBar,    perm: 'reports.read' },
 ]
 
 const ADMIN = [
