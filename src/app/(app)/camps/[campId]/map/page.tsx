@@ -37,8 +37,28 @@ export default function CampMapPage() {
     .filter((r: any) => getBalance(r) > 0)
     .map((r: any) => r.room_number)
 
-  // Find selected room object
-  const selectedRoomObject = rooms.find((r: any) => r.room_number === selectedRoom)
+  // Helper to normalize room codes (handles format differences)
+  function normalizeRoomCode(code: string): string {
+    if (!code) return ''
+    // Remove leading zeros and ensure dash format: "A01" → "A-1", "A-01" → "A-1"
+    const match = code.match(/^([A-Z]+)-?0*(\d+)$/i)
+    if (match) return `${match[1]}-${match[2]}`
+    return code
+  }
+
+  // Find selected room object with resilient matching
+  function findRoomByCode(code: string) {
+    if (!code) return null
+    // Try exact match first
+    let match = rooms.find((r: any) => r.room_number === code)
+    if (match) return match
+    // Try normalized match (handle format differences)
+    const normalizedCode = normalizeRoomCode(code)
+    match = rooms.find((r: any) => normalizeRoomCode(r.room_number) === normalizedCode)
+    return match || null
+  }
+
+  const selectedRoomObject = findRoomByCode(selectedRoom || '')
 
   // Handle block click → dive into block
   const handleBlockClick = (blockCode: string) => {
@@ -86,8 +106,18 @@ export default function CampMapPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[600px]">
-        <p className="text-stone text-[12px] tracking-wider uppercase">Loading camp data…</p>
+      <div className="flex flex-col items-center justify-center min-h-[600px] bg-paper rounded-xl border border-dust">
+        <div className="w-8 h-8 border-2 border-amber border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-stone text-[11px] tracking-[0.14em] uppercase">Loading camp data…</p>
+      </div>
+    )
+  }
+
+  if (!rooms.length) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[600px] bg-paper rounded-xl border border-dust">
+        <p className="font-serif italic text-[18px] text-espresso mb-2">No rooms found</p>
+        <p className="text-[11px] text-stone">Unable to load rooms for this camp</p>
       </div>
     )
   }
@@ -114,12 +144,36 @@ export default function CampMapPage() {
             onRoomClick={handleRoomClick}
           />
         )}
-        {level === 'room' && selectedRoomObject && (
-          <RoomInterior
-            key="room"
-            room={selectedRoomObject}
-            onBack={handleBackToBlock}
-          />
+        {level === 'room' && (
+          selectedRoomObject ? (
+            <RoomInterior
+              key="room"
+              room={selectedRoomObject}
+              onBack={handleBackToBlock}
+            />
+          ) : (
+            <motion.div
+              key="room-not-found"
+              className="flex flex-col items-center justify-center min-h-[600px] p-12 text-center"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            >
+              <p className="font-serif italic text-[18px] text-espresso mb-2">
+                Room {selectedRoom} data not available
+              </p>
+              <p className="text-[12px] text-stone mb-6">
+                Unable to load room data for this room.
+              </p>
+              <button
+                onClick={handleBackToBlock}
+                className="px-4 py-2 bg-amber text-sand rounded-full text-[12px] font-medium hover:bg-amber/90 transition-colors"
+              >
+                ← Back to block
+              </button>
+            </motion.div>
+          )
         )}
       </AnimatePresence>
     </div>
