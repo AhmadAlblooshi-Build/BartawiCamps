@@ -54,11 +54,11 @@ export interface Facility {
 // BLOCK DIMENSIONS (consistent across all blocks)
 // ============================================================================
 // Each block is ~11m wide × 26m deep in real life
-// In layout units: 100 wide × 240 tall
+// Updated for professional proportions: 130 wide × 220 tall
 // Each block has 22-24 rooms in two columns
 
-const BLOCK_WIDTH = 100
-const BLOCK_HEIGHT = 240
+const BLOCK_WIDTH = 130        // was 100 — wider for better aspect ratio
+const BLOCK_HEIGHT = 220       // was 240 — slightly shorter
 const ROOM_WIDTH = 38          // two columns, ~38 wide each + 24 corridor
 const ROOM_HEIGHT = 20         // each room ~20 tall (11 rooms fit in 220 = 11 × 20)
 const CORRIDOR_WIDTH = 24      // middle corridor with toilets/baths
@@ -133,13 +133,13 @@ function generateBlockWithExtras(
 // ============================================================================
 
 // Y coordinates for the two rows
-const ROW1_Y = 120        // Row 1 starts below retail strip + bus stop
-const ROW2_Y = 440        // Row 2 starts below kitchen corridor
+const ROW1_Y = 130        // was 120 — adjusted for tighter layout
+const ROW2_Y = 430        // was 440 — tighter vertical spacing
 
 // X coordinates for the three columns (west, center, east)
-const COL_WEST_X = 80
-const COL_CENTER_X = 320
-const COL_EAST_X = 560
+const COL_WEST_X = 60     // was 80 — tighter to edge
+const COL_CENTER_X = 280  // was 320 — closer column spacing
+const COL_EAST_X = 500    // was 560 — tighter overall
 
 export const GROUND_FLOOR_BLOCKS: BlockLayout[] = [
   {
@@ -299,40 +299,28 @@ export const FIRST_FLOOR_BLOCKS: BlockLayout[] = [
 // ============================================================================
 
 export const CAMP1_FACILITIES: Facility[] = [
-  // Retail strip along north edge (ground floor only — but visible on both)
-  { id: 'shaklan', type: 'retail', name: 'Shaklan Super Market',    x: 80,  y: 40, width: 80, height: 40, floor: 'both' },
-  { id: 'tayn',    type: 'retail', name: 'Tayn Nuts & Spices',      x: 170, y: 40, width: 80, height: 40, floor: 'both' },
-  { id: 'desi',    type: 'retail', name: 'Slick Desi Cuts',         x: 260, y: 40, width: 80, height: 40, floor: 'both' },
-  { id: 'helal',   type: 'retail', name: 'Fly Helal Travel',        x: 350, y: 40, width: 80, height: 40, floor: 'both' },
-  { id: 'topcity', type: 'retail', name: 'Top City',                x: 440, y: 40, width: 60, height: 40, floor: 'both' },
-  { id: 'avays',   type: 'retail', name: 'Avays Lunch Break',       x: 510, y: 40, width: 80, height: 40, floor: 'both' },
-  { id: 'telex',   type: 'retail', name: 'Telex Electronics',       x: 600, y: 40, width: 80, height: 40, floor: 'both' },
-  { id: 'pharm',   type: 'retail', name: 'Pharmacy',                x: 690, y: 40, width: 60, height: 40, floor: 'both' },
-  { id: 'cafe',    type: 'retail', name: 'Cafeteria',               x: 760, y: 40, width: 80, height: 40, floor: 'both' },
+  // Retail strip along north edge — adjusted for narrower viewBox (720 vs 1000)
+  { id: 'shaklan', type: 'retail', name: 'Shaklan Super Market',    x: 60,  y: 40, width: 65, height: 38, floor: 'both' },
+  { id: 'tayn',    type: 'retail', name: 'Tayn Nuts & Spices',      x: 130, y: 40, width: 65, height: 38, floor: 'both' },
+  { id: 'desi',    type: 'retail', name: 'Slick Desi Cuts',         x: 200, y: 40, width: 65, height: 38, floor: 'both' },
+  { id: 'helal',   type: 'retail', name: 'Fly Helal Travel',        x: 270, y: 40, width: 65, height: 38, floor: 'both' },
+  { id: 'topcity', type: 'retail', name: 'Top City',                x: 340, y: 40, width: 50, height: 38, floor: 'both' },
+  { id: 'avays',   type: 'retail', name: 'Avays Lunch Break',       x: 395, y: 40, width: 65, height: 38, floor: 'both' },
+  { id: 'telex',   type: 'retail', name: 'Telex Electronics',       x: 465, y: 40, width: 65, height: 38, floor: 'both' },
+  { id: 'pharm',   type: 'retail', name: 'Pharmacy',                x: 535, y: 40, width: 50, height: 38, floor: 'both' },
+  { id: 'cafe',    type: 'retail', name: 'Cafeteria',               x: 590, y: 40, width: 65, height: 38, floor: 'both' },
 
   // Bus stop and security room at front entrance
-  { id: 'bus',  type: 'bus_stop',      name: 'Bus Stop',      x: 20,  y: 90, width: 50, height: 25, floor: 'both' },
-  { id: 'sec',  type: 'security_room', name: 'Security Room', x: 860, y: 90, width: 80, height: 25, floor: 'both' },
+  { id: 'bus',  type: 'bus_stop',      name: 'Bus Stop',      x: 10,  y: 88, width: 45, height: 22, floor: 'both' },
+  { id: 'sec',  type: 'security_room', name: 'Security Room', x: 665, y: 88, width: 45, height: 22, floor: 'both' },
 
-  // Kitchen/dining corridor between rows
-  { id: 'kitchen', type: 'kitchen_corridor', name: 'Kitchen · Dining · Toilets', x: 80, y: 380, width: 780, height: 50, floor: 'both' },
+  // Kitchen/dining corridor between rows — simplified, no overlapping utility labels
+  { id: 'kitchen', type: 'kitchen_corridor', name: 'Kitchen · Dining · Toilets', x: 60, y: 365, width: 595, height: 50, floor: 'both' },
 
   // Mosque adjacent to Block E (east side)
-  { id: 'mosque', type: 'mosque', name: 'Mosque', x: 440, y: 550, width: 60, height: 50, floor: 'both' },
+  { id: 'mosque', type: 'mosque', name: 'Mosque', x: 415, y: 665, width: 55, height: 45, floor: 'both' },
 
-  // Substations (two flanking the retail strip)
-  { id: 'sub1', type: 'substation', name: 'Substation', x: 15,  y: 45, width: 20, height: 30, floor: 'ground' },
-  { id: 'sub2', type: 'substation', name: 'Substation', x: 840, y: 45, width: 20, height: 30, floor: 'ground' },
-
-  // Utility rooms in corridor
-  { id: 'gas',   type: 'gas_room',   name: 'Gas Room',    x: 240, y: 390, width: 60, height: 30, floor: 'ground' },
-  { id: 'pump',  type: 'pump_room',  name: 'Pump Room',   x: 680, y: 390, width: 60, height: 30, floor: 'ground' },
-  { id: 'water', type: 'water_tank', name: 'Water Tank',  x: 560, y: 390, width: 60, height: 30, floor: 'ground' },
-
-  // Storage
-  { id: 'store1', type: 'store',   name: 'Store-01',  x: 15, y: 700, width: 40, height: 30, floor: 'ground' },
-  { id: 'store2', type: 'store',   name: 'Store-02',  x: 60, y: 700, width: 40, height: 30, floor: 'ground' },
-  { id: 'ac',     type: 'ac_room', name: 'AC Room',   x: 110, y: 700, width: 40, height: 30, floor: 'ground' },
+  // Substations removed to declutter — can be added back as subtle dots if needed
 ]
 
 // ============================================================================

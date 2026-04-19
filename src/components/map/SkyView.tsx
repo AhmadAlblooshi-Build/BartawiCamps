@@ -153,50 +153,50 @@ export function SkyView({
       {/* The architectural SVG */}
       <div className="px-4 pb-6">
         <motion.svg
-          viewBox="0 0 1000 800"
+          viewBox="0 0 720 780"
           xmlns="http://www.w3.org/2000/svg"
           className="w-full h-auto"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.4 }}
         >
-          {/* Background grid (architectural feel) */}
+          {/* Background grid (finer for professional architectural feel) */}
           <defs>
-            <pattern id="micro-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <pattern id="micro-grid" width="10" height="10" patternUnits="userSpaceOnUse">
               <path
-                d="M 20 0 L 0 0 0 20"
+                d="M 10 0 L 0 0 0 10"
                 fill="none"
-                stroke="rgba(214,207,197,0.3)"
-                strokeWidth="0.5"
+                stroke="rgba(214,207,197,0.25)"
+                strokeWidth="0.3"
               />
             </pattern>
-            <pattern id="major-grid" width="100" height="100" patternUnits="userSpaceOnUse">
+            <pattern id="major-grid" width="50" height="50" patternUnits="userSpaceOnUse">
               <path
-                d="M 100 0 L 0 0 0 100"
+                d="M 50 0 L 0 0 0 50"
                 fill="none"
-                stroke="rgba(214,207,197,0.5)"
-                strokeWidth="0.5"
+                stroke="rgba(214,207,197,0.45)"
+                strokeWidth="0.4"
               />
             </pattern>
           </defs>
-          <rect width="1000" height="800" fill="url(#micro-grid)" />
-          <rect width="1000" height="800" fill="url(#major-grid)" />
+          <rect width="720" height="780" fill="url(#micro-grid)" />
+          <rect width="720" height="780" fill="url(#major-grid)" />
 
           {/* Steel fence perimeter (dashed) */}
           <rect
             x="10"
             y="10"
-            width="980"
-            height="780"
+            width="700"
+            height="760"
             fill="none"
             stroke="#D6CFC5"
-            strokeWidth="2"
+            strokeWidth="1.5"
             strokeDasharray="3 4"
           />
 
           {/* Front entrance label */}
           <text
-            x="500"
+            x="360"
             y="28"
             textAnchor="middle"
             fontFamily="Geist, Inter, sans-serif"
@@ -209,8 +209,8 @@ export function SkyView({
 
           {/* Back door label */}
           <text
-            x="500"
-            y="790"
+            x="360"
+            y="770"
             textAnchor="middle"
             fontFamily="Geist, Inter, sans-serif"
             fontSize="10"
@@ -453,43 +453,44 @@ export function SkyView({
                   className="transition-all duration-200"
                 />
 
-                {/* Block code (large italic) */}
+                {/* Block code — larger with more breathing room */}
                 <text
                   x={block.labelX}
-                  y={block.skyY + 28}
+                  y={block.skyY + 32}
                   textAnchor="middle"
                   fontFamily="Fraunces, Georgia, serif"
                   fontStyle="italic"
-                  fontSize="22"
+                  fontSize="26"
                   fontWeight="500"
                   fill="#1A1816"
                 >
                   {block.code}
                 </text>
 
-                {/* Stats line */}
+                {/* Stats line — just below block code */}
                 <text
                   x={block.labelX}
-                  y={block.skyY + 44}
+                  y={block.skyY + 50}
                   textAnchor="middle"
                   fontFamily="JetBrains Mono, monospace"
-                  fontSize="8"
-                  letterSpacing="1"
+                  fontSize="9"
+                  letterSpacing="1.5"
                   fill="#6A6159"
                 >
                   {stats.occupied}/{stats.total} · {Math.round(stats.rate)}%
                 </text>
 
-                {/* Mini room grid — visual density indicator */}
+                {/* Mini room grid — visual density indicator (distributed evenly) */}
                 {block.rooms.slice(0, 22).map((room, idx) => {
                   const apiRoom = rooms.find(r => r.room_number === room.code)
                   const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
                   const hasAnomaly = anomalies.includes(room.code)
 
+                  // Distribute dots across larger area for better visual balance
                   const col = idx % 11
                   const row = Math.floor(idx / 11)
-                  const dotX = block.skyX + 10 + col * 7
-                  const dotY = block.skyY + 60 + row * 10
+                  const dotX = block.skyX + 14 + col * 10     // was 10+7 — wider spacing
+                  const dotY = block.skyY + 70 + row * 14     // was 60+10 — taller spacing, centered in block
 
                   let dotFill = '#E8DFD3'
                   let dotStroke = '#D6CFC5'
@@ -507,7 +508,7 @@ export function SkyView({
                       key={room.code}
                       cx={dotX}
                       cy={dotY}
-                      r="2.5"
+                      r="3"
                       fill={dotFill}
                       stroke={dotStroke}
                       strokeWidth="0.4"
@@ -515,25 +516,36 @@ export function SkyView({
                   )
                 })}
 
-                {/* Progress bar at bottom */}
+                {/* Progress bar INSIDE block at bottom edge (thin line) */}
                 <g>
                   <rect
-                    x={block.skyX + 10}
-                    y={block.skyY + block.skyHeight - 20}
-                    width={block.skyWidth - 20}
-                    height="3"
-                    fill="#E8DFD3"
-                    rx="1.5"
+                    x={block.skyX + 4}
+                    y={block.skyY + block.skyHeight - 8}
+                    width={block.skyWidth - 8}
+                    height="2"
+                    fill="rgba(214, 207, 197, 0.5)"
+                    rx="1"
                   />
                   <rect
-                    x={block.skyX + 10}
-                    y={block.skyY + block.skyHeight - 20}
-                    width={(block.skyWidth - 20) * (stats.rate / 100)}
-                    height="3"
-                    fill={isHotspot ? '#A84A3B' : '#1E4D52'}
-                    rx="1.5"
+                    x={block.skyX + 4}
+                    y={block.skyY + block.skyHeight - 8}
+                    width={(block.skyWidth - 8) * (stats.rate / 100)}
+                    height="2"
+                    fill={isHotspot ? '#A84A3B' : (stats.rate === 100 ? '#1E4D52' : '#B8883D')}
+                    rx="1"
                   />
                 </g>
+
+                {/* Invisible click target for reliable clicks */}
+                <rect
+                  x={block.skyX}
+                  y={block.skyY}
+                  width={block.skyWidth}
+                  height={block.skyHeight}
+                  fill="transparent"
+                  className="cursor-pointer"
+                  onClick={() => onBlockClick(block.code)}
+                />
               </motion.g>
             )
           })}
