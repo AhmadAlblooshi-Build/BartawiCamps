@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { motion } from 'motion/react'
 import { useQuery } from '@tanstack/react-query'
 import { endpoints } from '@/lib/api'
@@ -69,6 +70,11 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const isBartawi = ['Bartawi', 'bartawi_use'].includes(status) ||
                     ['A-17', 'A-18', 'A-19', 'C-11', 'C-20', 'D-1'].includes(roomCode)
 
+  // Hover states for action buttons
+  const [hoverLogPayment, setHoverLogPayment] = useState(false)
+  const [hoverGiveNotice, setHoverGiveNotice] = useState(false)
+  const [hoverNewLease, setHoverNewLease] = useState(false)
+
   // Generate bed layout — distribute beds along left and right walls
   // Assumes max 8 beds, 4 on each wall
   const leftBeds = Array.from({ length: 4 }).map((_, i) => ({
@@ -106,19 +112,52 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div style={{ display: 'flex', gap: '8px' }}>
           {isPaid && (
-            <span className="px-3 py-1.5 rounded-full bg-teal/12 text-teal text-[10px] font-semibold tracking-wider uppercase">
+            <span
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(30, 77, 82, 0.12)',
+                color: '#1E4D52',
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
               ● Paid
             </span>
           )}
           {balance > 0 && (
-            <span className="px-3 py-1.5 rounded-full bg-rust/12 text-rust text-[10px] font-semibold tracking-wider uppercase">
+            <span
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(168, 74, 59, 0.12)',
+                color: '#A84A3B',
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
               ● Outstanding
             </span>
           )}
           {isBartawi && (
-            <span className="px-3 py-1.5 rounded-full bg-amber/12 text-amber text-[10px] font-semibold tracking-wider uppercase">
+            <span
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(184, 136, 61, 0.12)',
+                color: '#B8883D',
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
               ● Bartawi
             </span>
           )}
@@ -530,22 +569,53 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           {/* Action buttons */}
           {status === 'occupied' && (
             <motion.div
-              className="flex gap-2 mt-1"
+              style={{ display: 'flex', gap: '8px', marginTop: '4px' }}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
             >
               <button
                 disabled
-                className="flex-1 py-2.5 bg-amber text-sand rounded-full text-[12px] font-medium hover:bg-amber/90 transition-colors disabled:opacity-70 cursor-not-allowed"
+                onMouseEnter={() => setHoverLogPayment(true)}
+                onMouseLeave={() => setHoverLogPayment(false)}
                 title="Available in Phase 4"
+                style={{
+                  flex: 1,
+                  padding: '11px 14px',
+                  background: hoverLogPayment ? '#A0732E' : '#B8883D',
+                  color: '#FAF7F2',
+                  border: 'none',
+                  borderRadius: '999px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  letterSpacing: '0.02em',
+                  cursor: 'not-allowed',
+                  opacity: 0.85,
+                  transition: 'all 0.2s ease',
+                  boxShadow: hoverLogPayment ? '0 2px 8px rgba(184, 136, 61, 0.35)' : 'none',
+                }}
               >
                 Log payment
               </button>
               <button
                 disabled
-                className="flex-1 py-2.5 bg-transparent text-espresso border border-dust rounded-full text-[12px] font-medium hover:bg-dust/30 transition-colors disabled:opacity-70 cursor-not-allowed"
+                onMouseEnter={() => setHoverGiveNotice(true)}
+                onMouseLeave={() => setHoverGiveNotice(false)}
                 title="Available in Phase 4"
+                style={{
+                  flex: 1,
+                  padding: '11px 14px',
+                  background: hoverGiveNotice ? 'rgba(26, 24, 22, 0.04)' : 'transparent',
+                  color: '#1A1816',
+                  border: hoverGiveNotice ? '0.5px solid #6A6159' : '0.5px solid #D6CFC5',
+                  borderRadius: '999px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  letterSpacing: '0.02em',
+                  cursor: 'not-allowed',
+                  opacity: 0.85,
+                  transition: 'all 0.2s ease',
+                }}
               >
                 Give notice
               </button>
@@ -591,8 +661,25 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
               </p>
               <button
                 disabled
-                className="mt-3 w-full py-2.5 bg-teal text-sand rounded-full text-[12px] font-medium disabled:opacity-70 cursor-not-allowed"
+                onMouseEnter={() => setHoverNewLease(true)}
+                onMouseLeave={() => setHoverNewLease(false)}
                 title="Available in Phase 4"
+                style={{
+                  marginTop: '12px',
+                  width: '100%',
+                  padding: '11px 14px',
+                  background: hoverNewLease ? '#153C40' : '#1E4D52',
+                  color: '#FAF7F2',
+                  border: 'none',
+                  borderRadius: '999px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  letterSpacing: '0.02em',
+                  cursor: 'not-allowed',
+                  opacity: 0.85,
+                  transition: 'all 0.2s ease',
+                  boxShadow: hoverNewLease ? '0 2px 8px rgba(30, 77, 82, 0.35)' : 'none',
+                }}
               >
                 New lease
               </button>
