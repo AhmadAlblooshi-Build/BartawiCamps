@@ -105,27 +105,51 @@ export function getPeopleCount(room: any): number {
  * Get monthly rent from room object
  */
 export function getMonthlyRent(room: any): number {
-  // Try latestMonthlyRecord first
+  // Try monthly_records first (current period's rent)
+  if (room?.monthly_records?.length > 0) {
+    const latest = room.monthly_records[0]
+    const rent = typeof latest?.rent === 'string'
+      ? parseFloat(latest.rent)
+      : latest?.rent
+    if (rent) return rent
+  }
+
+  // Try latestMonthlyRecord fallback
   if (room?.latestMonthlyRecord?.rent !== undefined) {
-    return Number(room.latestMonthlyRecord.rent) || 0
+    const rent = typeof room.latestMonthlyRecord.rent === 'string'
+      ? parseFloat(room.latestMonthlyRecord.rent)
+      : room.latestMonthlyRecord.rent
+    return rent || 0
   }
 
   // Try current_occupancy paths
   if (room?.current_occupancy?.monthly_rent !== undefined) {
-    return Number(room.current_occupancy.monthly_rent) || 0
+    const rent = typeof room.current_occupancy.monthly_rent === 'string'
+      ? parseFloat(room.current_occupancy.monthly_rent)
+      : room.current_occupancy.monthly_rent
+    return rent || 0
   }
 
   // Try currentOccupancy (camelCase)
   if (room?.currentOccupancy?.monthly_rent !== undefined) {
-    return Number(room.currentOccupancy.monthly_rent) || 0
+    const rent = typeof room.currentOccupancy.monthly_rent === 'string'
+      ? parseFloat(room.currentOccupancy.monthly_rent)
+      : room.currentOccupancy.monthly_rent
+    return rent || 0
   }
   if (room?.currentOccupancy?.monthlyRent !== undefined) {
-    return Number(room.currentOccupancy.monthlyRent) || 0
+    const rent = typeof room.currentOccupancy.monthlyRent === 'string'
+      ? parseFloat(room.currentOccupancy.monthlyRent)
+      : room.currentOccupancy.monthlyRent
+    return rent || 0
   }
 
   // Fallback to standard rent
   if (room?.standard_rent !== undefined) {
-    return Number(room.standard_rent) || 0
+    const rent = typeof room.standard_rent === 'string'
+      ? parseFloat(room.standard_rent)
+      : room.standard_rent
+    return rent || 0
   }
 
   return 0
@@ -159,32 +183,47 @@ export function isOccupied(room: any): boolean {
  * Get current balance for room
  */
 export function getBalance(room: any): number {
-  // Try latestMonthlyRecord first
-  if (room?.latestMonthlyRecord?.balance !== undefined) {
-    return Number(room.latestMonthlyRecord.balance) || 0
+  // Balance lives in monthly_records[0].balance (the latest month's record)
+  // This matches the pattern used for getPaid
+  if (room?.monthly_records?.length > 0) {
+    const latest = room.monthly_records[0]
+    // Backend may send balance as a number or a string — coerce to number
+    const balance = typeof latest?.balance === 'string'
+      ? parseFloat(latest.balance)
+      : latest?.balance
+    return balance || 0
   }
 
-  // Try monthly_records array
-  if (room?.monthly_records?.length > 0) {
-    const latest = room.monthly_records[room.monthly_records.length - 1]
-    if (latest?.balance !== undefined) {
-      return Number(latest.balance) || 0
-    }
+  // Try latestMonthlyRecord fallback
+  if (room?.latestMonthlyRecord?.balance !== undefined) {
+    const balance = typeof room.latestMonthlyRecord.balance === 'string'
+      ? parseFloat(room.latestMonthlyRecord.balance)
+      : room.latestMonthlyRecord.balance
+    return balance || 0
   }
 
   // Try current_occupancy
   if (room?.current_occupancy?.balance !== undefined) {
-    return Number(room.current_occupancy.balance) || 0
+    const balance = typeof room.current_occupancy.balance === 'string'
+      ? parseFloat(room.current_occupancy.balance)
+      : room.current_occupancy.balance
+    return balance || 0
   }
 
   // Try currentOccupancy (camelCase)
   if (room?.currentOccupancy?.balance !== undefined) {
-    return Number(room.currentOccupancy.balance) || 0
+    const balance = typeof room.currentOccupancy.balance === 'string'
+      ? parseFloat(room.currentOccupancy.balance)
+      : room.currentOccupancy.balance
+    return balance || 0
   }
 
   // Try flat balance
   if (room?.balance !== undefined) {
-    return Number(room.balance) || 0
+    const balance = typeof room.balance === 'string'
+      ? parseFloat(room.balance)
+      : room.balance
+    return balance || 0
   }
 
   return 0
@@ -194,17 +233,21 @@ export function getBalance(room: any): number {
  * Get paid amount for room's current month
  */
 export function getPaid(room: any): number {
-  // Try latestMonthlyRecord first
-  if (room?.latestMonthlyRecord?.paid !== undefined) {
-    return Number(room.latestMonthlyRecord.paid) || 0
-  }
-
-  // Try monthly_records array (backend returns this)
+  // Try monthly_records array first (backend returns this)
   if (room?.monthly_records?.length > 0) {
     const latest = room.monthly_records[0] // First element is most recent due to DESC order
-    if (latest?.paid !== undefined) {
-      return Number(latest.paid) || 0
-    }
+    const paid = typeof latest?.paid === 'string'
+      ? parseFloat(latest.paid)
+      : latest?.paid
+    return paid || 0
+  }
+
+  // Try latestMonthlyRecord fallback
+  if (room?.latestMonthlyRecord?.paid !== undefined) {
+    const paid = typeof room.latestMonthlyRecord.paid === 'string'
+      ? parseFloat(room.latestMonthlyRecord.paid)
+      : room.latestMonthlyRecord.paid
+    return paid || 0
   }
 
   // Calculate from rent - balance if available
