@@ -179,54 +179,75 @@ export function isOccupied(room: any): boolean {
   return status === 'occupied' || status === 'bartawi_use'
 }
 
+export interface BalanceInfo {
+  balance: number
+  isInferred: boolean           // true if amount was inferred from previous month's rent
+  inferredFromMonth?: string    // which month we pulled the amount from
+}
+
+/**
+ * Returns the outstanding balance for a room, with an isInferred flag.
+ *
+ * Logic:
+ * 1. If current month has a direct balance > 0, use that (confirmed outstanding)
+ * 2. If room is occupied but current month rent=0 (data gap), infer the
+ *    outstanding amount from the most recent non-zero historical rent and
+ *    flag as isInferred=true
+ * 3. Bartawi rooms are excluded from inference (rent=0 is legitimate for them)
+ * 4. Otherwise return 0
+ */
+export function getBalanceInfo(room: any): BalanceInfo {
+  const records = room?.monthly_records || []
+  const latest = records[0]
+
+  // 1. Direct balance from current month
+  const directBalance = typeof latest?.balance === 'string'
+    ? parseFloat(latest.balance)
+    : (latest?.balance || 0)
+
+  if (directBalance && directBalance > 0) {
+    return { balance: directBalance, isInferred: false }
+  }
+
+  // 2. Check if this is an occupied room with rent=0 (unpaid, amount not yet entered)
+  const currentRent = typeof latest?.rent === 'string'
+    ? parseFloat(latest.rent)
+    : (latest?.rent || 0)
+
+  const status = getRoomStatus(room)
+  const isOccupied = status === 'occupied'
+
+  // Bartawi rooms legitimately have rent=0 — exclude from inference
+  const isBartawi = room?.room_type === 'Bartawi Room' ||
+                    latest?.room_type === 'Bartawi Room'
+
+  if (isOccupied && currentRent === 0 && !isBartawi && records.length > 1) {
+    // Walk backwards through history for the last non-zero rent
+    for (let i = 1; i < records.length; i++) {
+      const hist = records[i]
+      const histRent = typeof hist?.rent === 'string'
+        ? parseFloat(hist.rent)
+        : (hist?.rent || 0)
+      if (histRent > 0) {
+        return {
+          balance: histRent,
+          isInferred: true,
+          inferredFromMonth: hist?.month,
+        }
+      }
+    }
+  }
+
+  // 3. No outstanding
+  return { balance: 0, isInferred: false }
+}
+
 /**
  * Get current balance for room
+ * Now delegates to getBalanceInfo for backwards compatibility
  */
 export function getBalance(room: any): number {
-  // Balance lives in monthly_records[0].balance (the latest month's record)
-  // This matches the pattern used for getPaid
-  if (room?.monthly_records?.length > 0) {
-    const latest = room.monthly_records[0]
-    // Backend may send balance as a number or a string — coerce to number
-    const balance = typeof latest?.balance === 'string'
-      ? parseFloat(latest.balance)
-      : latest?.balance
-    return balance || 0
-  }
-
-  // Try latestMonthlyRecord fallback
-  if (room?.latestMonthlyRecord?.balance !== undefined) {
-    const balance = typeof room.latestMonthlyRecord.balance === 'string'
-      ? parseFloat(room.latestMonthlyRecord.balance)
-      : room.latestMonthlyRecord.balance
-    return balance || 0
-  }
-
-  // Try current_occupancy
-  if (room?.current_occupancy?.balance !== undefined) {
-    const balance = typeof room.current_occupancy.balance === 'string'
-      ? parseFloat(room.current_occupancy.balance)
-      : room.current_occupancy.balance
-    return balance || 0
-  }
-
-  // Try currentOccupancy (camelCase)
-  if (room?.currentOccupancy?.balance !== undefined) {
-    const balance = typeof room.currentOccupancy.balance === 'string'
-      ? parseFloat(room.currentOccupancy.balance)
-      : room.currentOccupancy.balance
-    return balance || 0
-  }
-
-  // Try flat balance
-  if (room?.balance !== undefined) {
-    const balance = typeof room.balance === 'string'
-      ? parseFloat(room.balance)
-      : room.balance
-    return balance || 0
-  }
-
-  return 0
+  return getBalanceInfo(room).balance
 }
 
 /**
