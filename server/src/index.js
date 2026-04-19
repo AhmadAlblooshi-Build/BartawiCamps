@@ -32,6 +32,8 @@ import rolesRouter from './routes/roles.js';
 import permissionsRouter from './routes/permissions.js';
 import tenantRouter from './routes/tenant.js';
 import featureFlagsRouter from './routes/featureFlags.js';
+import leasePaymentsRouter from './routes/lease-payments.js';
+import roomTenantsRouter from './routes/room-tenants.js';
 
 // Jobs
 import { startAlertCron } from './jobs/alertCron.js';
@@ -173,6 +175,10 @@ app.use('/api/v1/roles', rolesRouter);
 app.use('/api/v1/permissions', permissionsRouter);
 app.use('/api/v1/tenant', tenantRouter);
 app.use('/api/v1/feature-flags', featureFlagsRouter);
+
+// Phase 4A Write Layer routes
+app.use('/api/v1/lease-payments', leasePaymentsRouter);
+app.use('/api/v1/room-tenants', roomTenantsRouter);
 
 // ============================================================
 // ERROR HANDLERS

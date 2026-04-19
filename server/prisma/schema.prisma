@@ -417,19 +417,29 @@ model monthly_records {
   created_by        String?             @db.Uuid
   created_at        DateTime?           @default(now()) @db.Timestamptz(6)
   updated_at        DateTime?           @default(now()) @db.Timestamptz(6)
+
+  // Write layer foreign keys (Phase 4A)
+  room_tenant_id    String?             @db.Uuid
+  lease_id          String?             @db.Uuid
+
   camps             camps               @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   companies         companies?          @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users             users?              @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   individuals       individuals?        @relation(fields: [individual_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   room_occupancy    room_occupancy?     @relation(fields: [occupancy_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   rooms             rooms               @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  room_tenant       room_tenants?       @relation(fields: [room_tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lease             leases?             @relation(fields: [lease_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   payment_schedules payment_schedules[]
-  payments          payments[]
+  old_payments      payments[]
+  lease_payments    lease_payments[]
 
   @@unique([room_id, month, year])
   @@index([camp_id], map: "idx_monthly_camp")
   @@index([year, month], map: "idx_monthly_period")
   @@index([room_id], map: "idx_monthly_room")
+  @@index([room_tenant_id], map: "idx_monthly_room_tenant")
+  @@index([lease_id], map: "idx_monthly_lease")
 }
 
 model notifications {
@@ -593,6 +603,7 @@ model rooms {
   bed_spaces           bed_spaces[]
   complaints           complaints[]
   contracts            contracts[]
+  leases               leases[]
   maintenance_requests maintenance_requests[]
   monthly_records      monthly_records[]
   payment_schedules    payment_schedules[]
@@ -707,11 +718,14 @@ model tenants {
   expense_categories   expense_categories[]
   feature_flags        feature_flags[]
   individuals          individuals[]
+  leases               leases[]
+  lease_payments       lease_payments[]
   maintenance_requests maintenance_requests[]
   notifications        notifications[]
   payment_schedules    payment_schedules[]
   property_types       property_types[]
   roles                roles[]
+  room_tenants         room_tenants[]
   security_deposits    security_deposits[]
   teams                teams[]
   users                users[]
@@ -767,6 +781,7 @@ model users {
   notifications                                                     notifications[]
   payment_schedules                                                 payment_schedules[]
   payments                                                          payments[]
+  lease_payments                                                    lease_payments[]
   room_occupancy                                                    room_occupancy[]
   room_occupancy_room_occupancy_inspection_byTousers                room_occupancy[]       @relation("room_occupancy_inspection_byTousers")
   room_occupancy_room_occupancy_notice_given_byTousers              room_occupancy[]       @relation("room_occupancy_notice_given_byTousers")
@@ -778,6 +793,128 @@ model users {
   tenants                                                           tenants                @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([tenant_id, email])
+}
+
+// ============================================================================
+// WRITE LAYER: Room Tenants (individuals/companies renting rooms)
+// ============================================================================
+
+model room_tenants {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id      String   @db.Uuid  // SaaS multi-tenancy
+
+  // Identity
+  full_name      String?  @db.VarChar(255)
+  company_name   String?  @db.VarChar(255)
+  is_company     Boolean  @default(false)
+
+  // Contact (optional now, enriched in Phase 4B registration)
+  mobile         String?  @db.VarChar(50)
+  nationality    String?  @db.VarChar(100)
+  id_type        String?  @db.VarChar(50)
+  id_number      String?  @db.VarChar(100)
+
+  // Meta
+  notes          String?
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  platform_tenant tenants  @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  leases          leases[]
+  monthly_records monthly_records[]
+
+  @@index([tenant_id])
+  @@index([full_name])
+  @@index([company_name])
+  @@index([is_company])
+}
+
+model leases {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  saas_tenant_id        String   @db.Uuid  // SaaS multi-tenancy
+  room_tenant_id        String   @db.Uuid  // The camp tenant (individual/company)
+  room_id               String   @db.Uuid
+
+  // Lease terms
+  start_date       DateTime @db.Date
+  end_date         DateTime? @db.Date      // null for month-to-month
+  monthly_rent     Decimal  @db.Decimal(10, 2)
+  contract_type    String   @db.VarChar(30)                  // 'monthly' | 'yearly'
+
+  // Deposit (set during Phase 4B lease creation; nullable for migrated data)
+  deposit_amount   Decimal  @default(0) @db.Decimal(10, 2)
+  deposit_paid     Decimal  @default(0) @db.Decimal(10, 2)
+
+  // Status lifecycle
+  status           String   @default("active") @db.VarChar(30)  // 'active' | 'expired' | 'closed' | 'terminated'
+  closed_at        DateTime? @db.Timestamptz(6)
+  closure_reason   String?
+
+  // Meta
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  platform_tenant  tenants       @relation(fields: [saas_tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant           room_tenants  @relation(fields: [room_tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  room             rooms         @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments         lease_payments[]
+  monthly_records  monthly_records[]
+
+  @@index([saas_tenant_id])
+  @@index([room_tenant_id])
+  @@index([room_id])
+  @@index([status])
+  @@index([end_date])
+}
+
+model lease_payments {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id           String    @db.Uuid  // SaaS multi-tenancy
+  lease_id            String    @db.Uuid
+  monthly_record_id   String?   @db.Uuid   // which month this applied to (null for deposit)
+
+  // Payment data
+  amount              Decimal   @db.Decimal(10, 2)
+  payment_date        DateTime  @db.Date
+  method              String    @db.VarChar(50)    // 'cash' | 'cheque' | 'bank_transfer' | 'card' | 'other'
+  payment_type        String    @default("rent") @db.VarChar(30)  // 'rent' | 'deposit' | 'credit' | 'adjustment'
+
+  // Cheque-specific
+  cheque_number       String?   @db.VarChar(100)
+  cheque_bank         String?   @db.VarChar(100)
+  cheque_date         DateTime? @db.Date
+
+  // Transfer-specific
+  transfer_reference  String?   @db.VarChar(255)
+  transfer_bank       String?   @db.VarChar(100)
+
+  // Notes / free-text
+  notes               String?
+
+  // Audit
+  logged_by_user_id   String?   @db.Uuid
+  logged_by_name      String?   @db.VarChar(255)   // denormalized for reports
+  logged_at           DateTime  @default(now()) @db.Timestamptz(6)
+
+  // Reversal (soft delete)
+  reversed            Boolean   @default(false)
+  reversed_at         DateTime? @db.Timestamptz(6)
+  reversed_by_name    String?   @db.VarChar(255)
+  reversed_reason     String?
+
+  // Relations
+  platform_tenant     tenants          @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  lease               leases           @relation(fields: [lease_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  monthly_record      monthly_records? @relation(fields: [monthly_record_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users               users?           @relation(fields: [logged_by_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tenant_id])
+  @@index([lease_id])
+  @@index([monthly_record_id])
+  @@index([payment_date])
+  @@index([reversed])
 }
 
 model balance_writeoffs {

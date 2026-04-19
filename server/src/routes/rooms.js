@@ -37,6 +37,7 @@ const MONTH_NAMES = [
 
 function serializeRecord(r, synthesized = false) {
   return {
+    id: r.id || null,                        // Phase 4A: monthly_record ID for payment linking
     month: r.month,                          // keep as number
     month_name: MONTH_NAMES[r.month],        // for display
     year: r.year,
@@ -52,6 +53,8 @@ function serializeRecord(r, synthesized = false) {
     people_count: r.people_count,
     is_locked: r.is_locked ?? false,
     is_synthesized: synthesized,
+    tenant: r.room_tenant || null,           // Phase 4A: room_tenants relation
+    lease_id: r.lease_id || null,            // Phase 4A: lease FK
   };
 }
 
@@ -119,8 +122,17 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
             },
           },
           monthly_records: {
+            include: {
+              room_tenant: true,  // Phase 4A: relation to room_tenants
+            },
             orderBy: [{ year: 'desc' }, { month: 'desc' }],
             take: 12,  // up to 12 months history, we'll slice to 3 for display
+          },
+          leases: {
+            where: { status: 'active' },
+            include: { tenant: true },  // Phase 4A: relation to room_tenants
+            orderBy: { start_date: 'desc' },
+            take: 1,
           },
         },
         orderBy: { room_number: 'asc' },
@@ -232,6 +244,20 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
         };
       }
 
+      // Phase 4A: Build active_lease from leases relation
+      const activeLease = r.leases?.[0] || null;
+      const activeLeaseData = activeLease ? {
+        id: activeLease.id,
+        tenant: activeLease.tenant,  // the room_tenants row
+        start_date: activeLease.start_date,
+        end_date: activeLease.end_date,
+        monthly_rent: Number(activeLease.monthly_rent),
+        deposit_amount: Number(activeLease.deposit_amount),
+        deposit_paid: Number(activeLease.deposit_paid),
+        contract_type: activeLease.contract_type,
+        status: activeLease.status,
+      } : null;
+
       return {
         id: r.id,
         camp_id: r.camp_id,
@@ -250,6 +276,7 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
         current_occupancy: currentOccupancy,
         current_month: currentMonthSerialized,
         monthly_records: history,
+        active_lease: activeLeaseData,  // Phase 4A: active lease with tenant
       };
     });
 
