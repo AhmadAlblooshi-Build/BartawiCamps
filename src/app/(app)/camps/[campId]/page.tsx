@@ -7,20 +7,14 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { cn, getCurrentMonthYear } from '@/lib/utils'
 import { CampOverviewTab } from '@/components/camps/CampOverviewTab'
 import { CampMapView } from '@/components/map/CampMapView'
-import { CampBlocksTab } from '@/components/camps/CampBlocksTab'
-import { RoomsGrid } from '@/components/rooms/RoomsGrid'
-import { CampAnalyticsTab } from '@/components/camps/CampAnalyticsTab'
 import { MonthSelector } from '@/components/shared/MonthSelector'
 import { motion, AnimatePresence } from 'motion/react'
 import { fadeIn } from '@/lib/motion'
 
-type Tab = 'overview' | 'map' | 'blocks' | 'rooms' | 'analytics'
+type Tab = 'overview' | 'map'
 const TAB_LABELS: [Tab, string][] = [
   ['overview', 'Overview'],
   ['map', 'Map'],
-  ['blocks', 'Blocks'],
-  ['rooms', 'Rooms'],
-  ['analytics', 'Analytics'],
 ]
 
 export default function CampDetailPage() {
@@ -107,9 +101,6 @@ export default function CampDetailPage() {
             >
               <Tabs.Content value="overview"><CampOverviewTab campId={params.campId} month={month} year={year} /></Tabs.Content>
               <Tabs.Content value="map"><CampMapView campId={params.campId} /></Tabs.Content>
-              <Tabs.Content value="blocks"><CampBlocksTab campId={params.campId} month={month} year={year} /></Tabs.Content>
-              <Tabs.Content value="rooms"><RoomsGrid campId={params.campId} /></Tabs.Content>
-              <Tabs.Content value="analytics"><CampAnalyticsTab campId={params.campId} /></Tabs.Content>
             </motion.div>
           </AnimatePresence>
         </div>

@@ -115,7 +115,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
       </div>
 
       {/* Main grid: room drawing on left, data panel on right */}
-      <div className="grid grid-cols-[1.5fr_1fr] gap-5 px-6 pb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-5 px-6 pb-6">
         {/* ROOM INTERIOR SVG */}
         <motion.div
           layoutId={`room-${roomCode}`}

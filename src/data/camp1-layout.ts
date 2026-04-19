@@ -1,131 +1,370 @@
-// CAMP 1 ARCHITECTURAL LAYOUT DATA
-// Source: CAMP-01 JAN-22-2026.pdf architectural drawing
-// This is the source of truth for Camp 1 block positions and room numbers
+// Camp 1 architectural layout — coordinates derived from
+// CAMP-01 UPDATED DRAWING JAN-22-2026.pdf
+//
+// Coordinate system: SVG viewBox 0 0 1000 800
+//   - Origin (0,0) is top-left
+//   - North is at top (y=0), South at bottom (y=800)
+//   - West is at left (x=0), East at right (x=1000)
+//
+// All dimensions are proportional to the actual drawing.
+// Block room arrangement: two columns per block
+//   - Left column (west side): rooms 1-11 reading top-to-bottom
+//   - Right column (east side): rooms N-N+10 reading top-to-bottom
+//   - Extra rooms (B-23, B-24, etc.) at the south end
 
-export interface BlockDefinition {
-  code: string
-  floor: 'ground' | 'first'
-  label: string
-  rooms: string[]          // room numbers in display order
-  extraRooms?: string[]    // rooms 23, 24 etc.
-  position: {              // relative position in the camp SVG (percentage-based)
-    row: number            // 0 = top row, 1 = bottom row
-    col: number            // 0 = left, 1 = middle, 2 = right
+export type FloorLevel = 'ground' | 'first'
+
+export interface RoomPosition {
+  code: string          // e.g. "A-1" (matches database room_number format)
+  x: number             // x offset within block (0 = left edge)
+  y: number             // y offset within block (0 = top edge)
+  width: number         // room width in layout units
+  height: number        // room height in layout units
+  type?: 'standard' | 'bartawi' | 'office' | 'security' | 'cleaners' | 'restaurant'
+  label?: string        // optional override label (e.g. "OFFICE" for D-1)
+}
+
+export interface BlockLayout {
+  code: string          // e.g. "A"
+  floor: FloorLevel
+  // Position in sky view (SVG coords)
+  skyX: number
+  skyY: number
+  skyWidth: number
+  skyHeight: number
+  // Rooms within this block (coords are relative to block, not sky)
+  rooms: RoomPosition[]
+  // Block's own center point (for label placement in sky view)
+  labelX: number
+  labelY: number
+}
+
+export interface Facility {
+  id: string
+  type: 'retail' | 'bus_stop' | 'security_room' | 'mosque' | 'kitchen_corridor' | 'substation' | 'gas_room' | 'pump_room' | 'water_tank' | 'store' | 'ac_room' | 'office' | 'road' | 'fence'
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  floor?: FloorLevel | 'both'  // some facilities are ground floor only
+}
+
+// ============================================================================
+// BLOCK DIMENSIONS (consistent across all blocks)
+// ============================================================================
+// Each block is ~11m wide × 26m deep in real life
+// In layout units: 100 wide × 240 tall
+// Each block has 22-24 rooms in two columns
+
+const BLOCK_WIDTH = 100
+const BLOCK_HEIGHT = 240
+const ROOM_WIDTH = 38          // two columns, ~38 wide each + 24 corridor
+const ROOM_HEIGHT = 20         // each room ~20 tall (11 rooms fit in 220 = 11 × 20)
+const CORRIDOR_WIDTH = 24      // middle corridor with toilets/baths
+
+// Helper to generate rooms for a standard block (22 rooms, two columns of 11)
+function generateStandardBlock(
+  blockCode: string,
+  specialRooms: Partial<Record<string, { type: RoomPosition['type']; label?: string }>> = {}
+): RoomPosition[] {
+  const rooms: RoomPosition[] = []
+
+  // Left column (rooms 1-11 reading top to bottom)
+  for (let i = 0; i < 11; i++) {
+    const roomNum = i + 1
+    const code = `${blockCode}-${roomNum}`
+    const special = specialRooms[code]
+    rooms.push({
+      code,
+      x: 0,
+      y: 10 + i * (ROOM_HEIGHT + 0.8),
+      width: ROOM_WIDTH,
+      height: ROOM_HEIGHT,
+      type: special?.type || 'standard',
+      label: special?.label,
+    })
   }
-  facilities?: string[]    // adjacent facilities (mosque, office, etc.)
+
+  // Right column (rooms N-N+10 reading top to bottom, where N = 22 for 22-room block)
+  for (let i = 0; i < 11; i++) {
+    const roomNum = 22 - i  // 22, 21, 20, ..., 12
+    const code = `${blockCode}-${roomNum}`
+    const special = specialRooms[code]
+    rooms.push({
+      code,
+      x: ROOM_WIDTH + CORRIDOR_WIDTH,
+      y: 10 + i * (ROOM_HEIGHT + 0.8),
+      width: ROOM_WIDTH,
+      height: ROOM_HEIGHT,
+      type: special?.type || 'standard',
+      label: special?.label,
+    })
+  }
+
+  return rooms
 }
 
-export const CAMP1_GROUND_BLOCKS: BlockDefinition[] = [
+// For blocks with extra rooms at the south end (B-23, B-24, D-23, E-23, E-24)
+function generateBlockWithExtras(
+  blockCode: string,
+  extras: string[],
+  specialRooms: Partial<Record<string, { type: RoomPosition['type']; label?: string }>> = {}
+): RoomPosition[] {
+  const rooms = generateStandardBlock(blockCode, specialRooms)
+  // Add extras at the south end
+  extras.forEach((code, i) => {
+    const special = specialRooms[code]
+    rooms.push({
+      code,
+      x: i < extras.length / 2 ? 0 : ROOM_WIDTH + CORRIDOR_WIDTH,
+      y: 235 + Math.floor(i / 2) * (ROOM_HEIGHT + 0.8),
+      width: ROOM_WIDTH,
+      height: ROOM_HEIGHT,
+      type: special?.type || 'standard',
+      label: special?.label,
+    })
+  })
+  return rooms
+}
+
+// ============================================================================
+// GROUND FLOOR BLOCKS — Row 1 (A, B, C) and Row 2 (D, E, F)
+// ============================================================================
+
+// Y coordinates for the two rows
+const ROW1_Y = 120        // Row 1 starts below retail strip + bus stop
+const ROW2_Y = 440        // Row 2 starts below kitchen corridor
+
+// X coordinates for the three columns (west, center, east)
+const COL_WEST_X = 80
+const COL_CENTER_X = 320
+const COL_EAST_X = 560
+
+export const GROUND_FLOOR_BLOCKS: BlockLayout[] = [
   {
-    code: 'A', floor: 'ground', label: 'Block A',
-    rooms: ['A-1','A-2','A-3','A-4','A-5','A-6','A-7','A-8','A-9','A-10','A-11',
-            'A-22','A-21','A-20','A-19','A-18','A-17','A-16','A-15','A-14','A-13','A-12'],
-    position: { row: 0, col: 0 },
+    code: 'A',
+    floor: 'ground',
+    skyX: COL_WEST_X,
+    skyY: ROW1_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT,
+    labelX: COL_WEST_X + BLOCK_WIDTH / 2,
+    labelY: ROW1_Y + BLOCK_HEIGHT / 2,
+    rooms: generateStandardBlock('A', {
+      'A-17': { type: 'bartawi', label: 'Camp Boss' },
+      'A-18': { type: 'bartawi', label: 'BGC Room' },
+      'A-19': { type: 'bartawi', label: 'BGC Room' },
+    }),
   },
   {
-    code: 'B', floor: 'ground', label: 'Block B',
-    rooms: ['B-1','B-2','B-3','B-4','B-5','B-6','B-7','B-8','B-9','B-10','B-11',
-            'B-22','B-21','B-20','B-19','B-18','B-17','B-16','B-15','B-14','B-13','B-12'],
-    extraRooms: ['B-23', 'B-24'],
-    position: { row: 0, col: 1 },
+    code: 'B',
+    floor: 'ground',
+    skyX: COL_CENTER_X,
+    skyY: ROW1_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT + 40,  // taller due to B-23, B-24 extras
+    labelX: COL_CENTER_X + BLOCK_WIDTH / 2,
+    labelY: ROW1_Y + BLOCK_HEIGHT / 2,
+    rooms: generateBlockWithExtras('B', ['B-23', 'B-24']),
   },
   {
-    code: 'C', floor: 'ground', label: 'Block C',
-    rooms: ['C-1','C-2','C-3','C-4','C-5','C-6','C-7','C-8','C-9','C-10','C-11',
-            'C-22','C-21','C-20','C-19','C-18','C-17','C-16','C-15','C-14','C-13','C-12'],
-    position: { row: 0, col: 2 },
+    code: 'C',
+    floor: 'ground',
+    skyX: COL_EAST_X,
+    skyY: ROW1_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT,
+    labelX: COL_EAST_X + BLOCK_WIDTH / 2,
+    labelY: ROW1_Y + BLOCK_HEIGHT / 2,
+    rooms: generateStandardBlock('C', {
+      'C-11': { type: 'cleaners', label: 'Cleaners' },
+      'C-20': { type: 'security', label: 'Security Room' },
+    }),
   },
   {
-    code: 'D', floor: 'ground', label: 'Block D',
-    rooms: ['D-1','D-2','D-3','D-4','D-5','D-6','D-7','D-8','D-9','D-10','D-11',
-            'D-22','D-21','D-20','D-19','D-18','D-17','D-16','D-15','D-14','D-13','D-12'],
-    extraRooms: ['D-23'],
-    position: { row: 1, col: 0 },
-    facilities: ['Office (D-1 area)'],
+    code: 'D',
+    floor: 'ground',
+    skyX: COL_WEST_X,
+    skyY: ROW2_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT + 20,  // taller due to D-23
+    labelX: COL_WEST_X + BLOCK_WIDTH / 2,
+    labelY: ROW2_Y + BLOCK_HEIGHT / 2,
+    rooms: generateBlockWithExtras('D', ['D-23'], {
+      'D-1': { type: 'office', label: 'Camp Office' },
+      'D-6': { type: 'restaurant', label: 'Kabul City Rest.' },
+    }),
   },
   {
-    code: 'E', floor: 'ground', label: 'Block E',
-    rooms: ['E-1','E-2','E-3','E-4','E-5','E-6','E-7','E-8','E-9','E-10','E-11',
-            'E-22','E-21','E-20','E-19','E-18','E-17','E-16','E-15','E-14','E-13','E-12'],
-    extraRooms: ['E-23', 'E-24'],
-    position: { row: 1, col: 1 },
-    facilities: ['Mosque (adjacent, between E-3/E-4)'],
+    code: 'E',
+    floor: 'ground',
+    skyX: COL_CENTER_X,
+    skyY: ROW2_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT + 40,  // taller due to E-23, E-24
+    labelX: COL_CENTER_X + BLOCK_WIDTH / 2,
+    labelY: ROW2_Y + BLOCK_HEIGHT / 2,
+    rooms: generateBlockWithExtras('E', ['E-23', 'E-24']),
   },
   {
-    code: 'F', floor: 'ground', label: 'Block F',
-    rooms: ['F-1','F-2','F-3','F-4','F-5','F-6','F-7','F-8','F-9','F-10','F-11',
-            'F-22','F-21','F-20','F-19','F-18','F-17','F-16','F-15','F-14','F-13','F-12'],
-    position: { row: 1, col: 2 },
+    code: 'F',
+    floor: 'ground',
+    skyX: COL_EAST_X,
+    skyY: ROW2_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT,
+    labelX: COL_EAST_X + BLOCK_WIDTH / 2,
+    labelY: ROW2_Y + BLOCK_HEIGHT / 2,
+    rooms: generateStandardBlock('F'),
   },
 ]
 
-export const CAMP1_FIRST_BLOCKS: BlockDefinition[] = [
+// ============================================================================
+// FIRST FLOOR BLOCKS — AA, BB, CC, DD, EE, FF
+// Same positions as ground floor but with different block codes
+// ============================================================================
+
+export const FIRST_FLOOR_BLOCKS: BlockLayout[] = [
   {
-    code: 'AA', floor: 'first', label: 'Block AA',
-    rooms: ['AA-1','AA-2','AA-3','AA-4','AA-5','AA-6','AA-7','AA-8','AA-9','AA-10','AA-11',
-            'AA-22','AA-21','AA-20','AA-19','AA-18','AA-17','AA-16','AA-15','AA-14','AA-13','AA-12'],
-    position: { row: 0, col: 0 },
+    code: 'AA',
+    floor: 'first',
+    skyX: COL_WEST_X,
+    skyY: ROW1_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT,
+    labelX: COL_WEST_X + BLOCK_WIDTH / 2,
+    labelY: ROW1_Y + BLOCK_HEIGHT / 2,
+    rooms: generateStandardBlock('AA'),
   },
   {
-    code: 'BB', floor: 'first', label: 'Block BB',
-    rooms: ['BB-1','BB-2','BB-3','BB-4','BB-5','BB-6','BB-7','BB-8','BB-9','BB-10','BB-11',
-            'BB-22','BB-21','BB-20','BB-19','BB-18','BB-17','BB-16','BB-15','BB-14','BB-13','BB-12'],
-    extraRooms: ['BB-23', 'BB-24'],
-    position: { row: 0, col: 1 },
+    code: 'BB',
+    floor: 'first',
+    skyX: COL_CENTER_X,
+    skyY: ROW1_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT + 40,
+    labelX: COL_CENTER_X + BLOCK_WIDTH / 2,
+    labelY: ROW1_Y + BLOCK_HEIGHT / 2,
+    rooms: generateBlockWithExtras('BB', ['BB-23', 'BB-24']),
   },
   {
-    code: 'CC', floor: 'first', label: 'Block CC',
-    rooms: ['CC-1','CC-2','CC-3','CC-4','CC-5','CC-6','CC-7','CC-8','CC-9','CC-10','CC-11',
-            'CC-22','CC-21','CC-20','CC-19','CC-18','CC-17','CC-16','CC-15','CC-14','CC-13','CC-12'],
-    position: { row: 0, col: 2 },
+    code: 'CC',
+    floor: 'first',
+    skyX: COL_EAST_X,
+    skyY: ROW1_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT,
+    labelX: COL_EAST_X + BLOCK_WIDTH / 2,
+    labelY: ROW1_Y + BLOCK_HEIGHT / 2,
+    rooms: generateStandardBlock('CC'),
   },
   {
-    code: 'DD', floor: 'first', label: 'Block DD',
-    rooms: ['DD-1','DD-2','DD-3','DD-4','DD-5','DD-6','DD-7','DD-8','DD-9','DD-10','DD-11',
-            'DD-22','DD-21','DD-20','DD-19','DD-18','DD-17','DD-16','DD-15','DD-14','DD-13','DD-12'],
-    extraRooms: ['DD-23'],
-    position: { row: 1, col: 0 },
+    code: 'DD',
+    floor: 'first',
+    skyX: COL_WEST_X,
+    skyY: ROW2_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT + 20,
+    labelX: COL_WEST_X + BLOCK_WIDTH / 2,
+    labelY: ROW2_Y + BLOCK_HEIGHT / 2,
+    rooms: generateBlockWithExtras('DD', ['DD-23']),
   },
   {
-    code: 'EE', floor: 'first', label: 'Block EE',
-    rooms: ['EE-1','EE-2','EE-3','EE-4','EE-5','EE-6','EE-7','EE-8','EE-9','EE-10','EE-11',
-            'EE-22','EE-21','EE-20','EE-19','EE-18','EE-17','EE-16','EE-15','EE-14','EE-13','EE-12'],
-    extraRooms: ['EE-23', 'EE-24'],
-    position: { row: 1, col: 1 },
+    code: 'EE',
+    floor: 'first',
+    skyX: COL_CENTER_X,
+    skyY: ROW2_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT + 40,
+    labelX: COL_CENTER_X + BLOCK_WIDTH / 2,
+    labelY: ROW2_Y + BLOCK_HEIGHT / 2,
+    rooms: generateBlockWithExtras('EE', ['EE-23', 'EE-24']),
   },
   {
-    code: 'FF', floor: 'first', label: 'Block FF',
-    rooms: ['FF-1','FF-2','FF-3','FF-4','FF-5','FF-6','FF-7','FF-8','FF-9','FF-10','FF-11',
-            'FF-22','FF-21','FF-20','FF-19','FF-18','FF-17','FF-16','FF-15','FF-14','FF-13','FF-12'],
-    position: { row: 1, col: 2 },
+    code: 'FF',
+    floor: 'first',
+    skyX: COL_EAST_X,
+    skyY: ROW2_Y,
+    skyWidth: BLOCK_WIDTH,
+    skyHeight: BLOCK_HEIGHT,
+    labelX: COL_EAST_X + BLOCK_WIDTH / 2,
+    labelY: ROW2_Y + BLOCK_HEIGHT / 2,
+    rooms: generateStandardBlock('FF'),
   },
 ]
 
-export const CAMP1_FACILITIES = {
-  retailStrip: [
-    'Shaklan Super Market', 'Tayn Nuts & Spices', 'Slick Desi Cuts',
-    'Gents Salon', 'Fly Helal Travel', 'Top City',
-    'Avays Lunch Break', 'Telex Electronics', 'Pharmacy', 'Cafeteria'
-  ],
-  landmarks: [
-    { type: 'mosque', label: 'Mosque', position: 'between Block E rows, near E-3/E-4' },
-    { type: 'bus_stop', label: 'Bus Stop', position: 'north, front entrance' },
-    { type: 'security', label: 'Security Room', position: 'north-east, front entrance' },
-    { type: 'kitchen', label: 'Kitchen / Dining', position: 'central corridor between row 0 and row 1' },
-    { type: 'office', label: 'Office', position: 'Block D area' },
-  ],
-  infrastructure: [
-    'Water Tank (3)', 'Substation (2)', 'AC Room', 'Gas Room',
-    'Pump Room', 'Store-01', 'Store-02', 'Elect. DB (4)'
-  ],
+// ============================================================================
+// FACILITIES (retail strip, mosque, bus stop, etc.)
+// ============================================================================
+
+export const CAMP1_FACILITIES: Facility[] = [
+  // Retail strip along north edge (ground floor only — but visible on both)
+  { id: 'shaklan', type: 'retail', name: 'Shaklan Super Market',    x: 80,  y: 40, width: 80, height: 40, floor: 'both' },
+  { id: 'tayn',    type: 'retail', name: 'Tayn Nuts & Spices',      x: 170, y: 40, width: 80, height: 40, floor: 'both' },
+  { id: 'desi',    type: 'retail', name: 'Slick Desi Cuts',         x: 260, y: 40, width: 80, height: 40, floor: 'both' },
+  { id: 'helal',   type: 'retail', name: 'Fly Helal Travel',        x: 350, y: 40, width: 80, height: 40, floor: 'both' },
+  { id: 'topcity', type: 'retail', name: 'Top City',                x: 440, y: 40, width: 60, height: 40, floor: 'both' },
+  { id: 'avays',   type: 'retail', name: 'Avays Lunch Break',       x: 510, y: 40, width: 80, height: 40, floor: 'both' },
+  { id: 'telex',   type: 'retail', name: 'Telex Electronics',       x: 600, y: 40, width: 80, height: 40, floor: 'both' },
+  { id: 'pharm',   type: 'retail', name: 'Pharmacy',                x: 690, y: 40, width: 60, height: 40, floor: 'both' },
+  { id: 'cafe',    type: 'retail', name: 'Cafeteria',               x: 760, y: 40, width: 80, height: 40, floor: 'both' },
+
+  // Bus stop and security room at front entrance
+  { id: 'bus',  type: 'bus_stop',      name: 'Bus Stop',      x: 20,  y: 90, width: 50, height: 25, floor: 'both' },
+  { id: 'sec',  type: 'security_room', name: 'Security Room', x: 860, y: 90, width: 80, height: 25, floor: 'both' },
+
+  // Kitchen/dining corridor between rows
+  { id: 'kitchen', type: 'kitchen_corridor', name: 'Kitchen · Dining · Toilets', x: 80, y: 380, width: 780, height: 50, floor: 'both' },
+
+  // Mosque adjacent to Block E (east side)
+  { id: 'mosque', type: 'mosque', name: 'Mosque', x: 440, y: 550, width: 60, height: 50, floor: 'both' },
+
+  // Substations (two flanking the retail strip)
+  { id: 'sub1', type: 'substation', name: 'Substation', x: 15,  y: 45, width: 20, height: 30, floor: 'ground' },
+  { id: 'sub2', type: 'substation', name: 'Substation', x: 840, y: 45, width: 20, height: 30, floor: 'ground' },
+
+  // Utility rooms in corridor
+  { id: 'gas',   type: 'gas_room',   name: 'Gas Room',    x: 240, y: 390, width: 60, height: 30, floor: 'ground' },
+  { id: 'pump',  type: 'pump_room',  name: 'Pump Room',   x: 680, y: 390, width: 60, height: 30, floor: 'ground' },
+  { id: 'water', type: 'water_tank', name: 'Water Tank',  x: 560, y: 390, width: 60, height: 30, floor: 'ground' },
+
+  // Storage
+  { id: 'store1', type: 'store',   name: 'Store-01',  x: 15, y: 700, width: 40, height: 30, floor: 'ground' },
+  { id: 'store2', type: 'store',   name: 'Store-02',  x: 60, y: 700, width: 40, height: 30, floor: 'ground' },
+  { id: 'ac',     type: 'ac_room', name: 'AC Room',   x: 110, y: 700, width: 40, height: 30, floor: 'ground' },
+]
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+export function getBlocksByFloor(floor: FloorLevel): BlockLayout[] {
+  return floor === 'ground' ? GROUND_FLOOR_BLOCKS : FIRST_FLOOR_BLOCKS
 }
 
-// Helper to get all blocks for a specific floor
-export function getBlocksByFloor(floor: 'ground' | 'first'): BlockDefinition[] {
-  return floor === 'ground' ? CAMP1_GROUND_BLOCKS : CAMP1_FIRST_BLOCKS
+export function getBlockByCode(code: string): BlockLayout | undefined {
+  return [...GROUND_FLOOR_BLOCKS, ...FIRST_FLOOR_BLOCKS].find(b => b.code === code)
 }
 
-// Helper to get a block by code
-export function getBlockByCode(code: string): BlockDefinition | undefined {
-  return [...CAMP1_GROUND_BLOCKS, ...CAMP1_FIRST_BLOCKS].find(b => b.code === code)
+export function getRoomPosition(blockCode: string, roomCode: string): RoomPosition | undefined {
+  const block = getBlockByCode(blockCode)
+  return block?.rooms.find(r => r.code === roomCode)
+}
+
+export function getAllBlockCodes(): string[] {
+  return [
+    'A', 'B', 'C', 'D', 'E', 'F',
+    'AA', 'BB', 'CC', 'DD', 'EE', 'FF',
+  ]
+}
+
+// Check if a room has a special Bartawi use (for styling)
+export function isBartawiRoom(roomCode: string): boolean {
+  const bartawiRooms = [
+    'A-17', 'A-18', 'A-19',  // Camp Boss, BGC rooms
+    'C-11', 'C-20',           // Cleaners, Security
+    'D-1',                    // Camp Office
+  ]
+  return bartawiRooms.includes(roomCode)
 }

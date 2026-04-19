@@ -47,6 +47,22 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
       className="relative w-full"
       transition={{ type: 'spring', stiffness: 280, damping: 30 }}
     >
+      {/* Mobile message */}
+      <div className="sm:hidden px-6 py-12 text-center">
+        <p className="font-serif text-[20px] italic text-espresso mb-2">Block {blockCode}</p>
+        <p className="text-[13px] text-stone mb-4">
+          Block interior view requires a larger screen.
+        </p>
+        <button
+          onClick={onBack}
+          className="px-4 py-2 bg-amber text-sand rounded-full text-[12px] font-medium"
+        >
+          Back to map
+        </button>
+      </div>
+
+      {/* Desktop view - hidden on mobile */}
+      <div className="hidden sm:block">
       {/* Header */}
       <motion.div
         className="flex justify-between items-start px-6 pt-6 pb-4"
@@ -510,6 +526,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
           Click any room to view details
         </p>
       </motion.div>
+      </div>
     </motion.div>
   )
 }

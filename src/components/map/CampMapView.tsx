@@ -4,7 +4,7 @@ import { endpoints } from '@/lib/api'
 import { useState, useEffect } from 'react'
 import { SkyView } from './SkyView'
 import { BlockView } from './BlockView'
-import { RoomDetail } from './RoomDetail'
+import { RoomInterior } from './RoomInterior'
 import { CampMap2 } from './CampMap2'
 import { AnimatePresence } from 'motion/react'
 import * as Tooltip from '@radix-ui/react-tooltip'
@@ -69,11 +69,10 @@ export function CampMapView({ campId }: Props) {
         <AnimatePresence mode="wait">
           {level === 'sky' && (
             <SkyView
-              floor={floor}
+              currentFloor={floor}
               onFloorChange={setFloor}
               rooms={rooms.data}
               onBlockClick={diveIntoBlock}
-              selectedBlock={selectedBlock}
             />
           )}
           {level === 'block' && selectedBlock && (
@@ -82,14 +81,12 @@ export function CampMapView({ campId }: Props) {
               rooms={rooms.data.filter(r => r.block?.code === selectedBlock)}
               onBack={backToSky}
               onRoomClick={expandRoom}
-              selectedRoom={selectedRoom}
             />
           )}
           {level === 'room' && selectedRoom && rooms.data.find(r => r.id === selectedRoom) && (
-            <RoomDetail
+            <RoomInterior
               room={rooms.data.find(r => r.id === selectedRoom)!}
               onBack={backToBlock}
-              layoutId={`room-${selectedRoom}`}
             />
           )}
         </AnimatePresence>
