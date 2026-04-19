@@ -57,10 +57,10 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
   const totalPaid = blockRooms.reduce((sum, r) => sum + getPaid(r), 0)
   const totalOutstanding = blockRooms.reduce((sum, r) => sum + getBalance(r), 0)
 
-  // Split rooms by column position (left column rooms 1-11, right column rooms 12-22)
+  // Split rooms by column position (left column includes all rooms with x=0, right column x>0)
+  // Extras (B-23, B-24, etc.) are included in their natural columns based on x position
   const leftColumnRooms = block.rooms.filter(r => r.x === 0)
   const rightColumnRooms = block.rooms.filter(r => r.x > 0)
-  const extraRooms = block.rooms.filter(r => r.y > 220)
 
   return (
     <motion.div
@@ -503,63 +503,6 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             )
           })}
 
-          {/* EXTRA ROOMS at the south end (B-23, B-24, etc.) */}
-          {extraRooms.length > 0 && (
-            <g>
-              {extraRooms.map((room, idx) => {
-                const apiRoom = apiRoomsByNormalizedCode.get(normalizeRoomCode(room.code))
-                const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
-                const tenantName = apiRoom ? getTenantName(apiRoom) : ''
-                const companyName = apiRoom ? getCompanyName(apiRoom) : ''
-                const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
-                const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
-                const displayName = tenantName || companyName || room.label || '—'
-
-                // Extras get their own row at the very bottom, below the main columns
-                // Main column rooms end at y ≈ 460 (50 + 10*38 + 32), so extras start at 490
-                const yPos = 495
-                const xPos = idx === 0 ? 30 : (idx === 1 ? 500 : 30)
-
-                const fillColor = status === 'occupied' ? 'rgba(30, 77, 82, 0.08)' : 'rgba(30, 77, 82, 0.05)'
-                const strokeColor = 'rgba(30, 77, 82, 0.4)'
-
-                return (
-                  <motion.g
-                    key={room.code}
-                    layoutId={`room-${room.code}`}
-                    onClick={() => onRoomClick(room.code)}
-                    className="cursor-pointer"
-                    whileHover={{ scale: 1.015 }}
-                    whileTap={{ scale: 0.99 }}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  >
-                    <rect
-                      x={xPos}
-                      y={yPos}
-                      width="270"
-                      height="24"
-                      fill={fillColor}
-                      stroke={strokeColor}
-                      strokeWidth="1"
-                      rx="3"
-                    />
-                    <text
-                      x={xPos + 12}
-                      y={yPos + 16}
-                      fontFamily="JetBrains Mono, monospace"
-                      fontSize="11"
-                      fontWeight="600"
-                      fill="#1A1816"
-                    >
-                      {room.code} · {displayName.substring(0, 22)} · {peopleCount}/8
-                    </text>
-                  </motion.g>
-                )
-              })}
-            </g>
-          )}
-
           {/* Entrance indicators */}
           <text
             x="155"
@@ -570,7 +513,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             letterSpacing="1"
             fill="#9C948B"
           >
-            {extraRooms.length > 0 ? '' : '▲ ENTRANCE'}
+            ▲ ENTRANCE
           </text>
           <text
             x="635"
@@ -581,7 +524,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             letterSpacing="1"
             fill="#9C948B"
           >
-            {extraRooms.length > 0 ? '' : 'ENTRANCE ▲'}
+            ENTRANCE ▲
           </text>
         </svg>
 
