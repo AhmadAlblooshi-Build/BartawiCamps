@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { motion } from 'motion/react'
 import {
   getBlocksByFloor,
@@ -26,6 +27,7 @@ export function SkyView({
   anomalies = [],
 }: SkyViewProps) {
   const blocks = getBlocksByFloor(currentFloor)
+  const [hoveredBlock, setHoveredBlock] = useState<string | null>(null)
 
   // Compute per-block stats from real data
   const getBlockStats = (block: BlockLayout) => {
@@ -405,6 +407,7 @@ export function SkyView({
           {blocks.map(block => {
             const stats = getBlockStats(block)
             const isHotspot = stats.hasAnomaly
+            const isHovered = hoveredBlock === block.code
 
             // Color based on occupancy
             let fillColor = 'rgba(30, 77, 82, 0.08)'
@@ -419,12 +422,18 @@ export function SkyView({
             if (isHotspot) {
               strokeColor = '#A84A3B'
             }
+            // Hover state overrides
+            if (isHovered) {
+              fillColor = 'rgba(184, 136, 61, 0.12)'
+              strokeColor = '#B8883D'
+            }
 
             return (
               <motion.g
                 key={block.code}
                 layoutId={`block-${block.code}`}
-                onClick={() => onBlockClick(block.code)}
+                onMouseEnter={() => setHoveredBlock(block.code)}
+                onMouseLeave={() => setHoveredBlock(null)}
                 className="cursor-pointer"
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
@@ -439,8 +448,9 @@ export function SkyView({
                   height={block.skyHeight}
                   fill={fillColor}
                   stroke={strokeColor}
-                  strokeWidth={isHotspot ? '2' : '1.5'}
+                  strokeWidth={isHovered ? '2.5' : (isHotspot ? '2' : '1.5')}
                   rx="4"
+                  className="transition-all duration-200"
                 />
 
                 {/* Block code (large italic) */}
