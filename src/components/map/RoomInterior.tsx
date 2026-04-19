@@ -11,6 +11,8 @@ import {
   getMonthlyRent,
   getRoomStatus,
   getBalance,
+  getBalanceInfo,
+  getPaid,
   getMobile,
   getNationality,
   getCheckInDate,
@@ -58,13 +60,19 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const peopleCount = getPeopleCount(room)
   const maxCapacity = room.max_capacity || 8
   const rent = getMonthlyRent(room)
-  const balance = balanceData?.outstanding ?? getBalance(room)
+  const balanceInfo = getBalanceInfo(room)
+  const balance = balanceInfo.balance
+  const isInferred = balanceInfo.isInferred
+  const inferredFromMonth = balanceInfo.inferredFromMonth
   const mobile = getMobile(room) || '—'
   const nationality = getNationality(room) || '—'
   const checkIn = getCheckInDate(room) || '—'
   const contractType = getContractType(room) || 'Monthly'
 
-  const paid = Math.max(0, rent - balance)
+  // When inferred, the "rent" we display comes from the inferred amount
+  // (current month rent is 0, so we show the estimated value instead)
+  const displayRent = isInferred ? balance : rent
+  const paid = getPaid(room)
   const isPaid = balance === 0 && rent > 0
 
   const isBartawi = ['Bartawi', 'bartawi_use'].includes(status) ||
@@ -113,7 +121,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
         </div>
 
         <div style={{ display: 'flex', gap: '8px' }}>
-          {isPaid && (
+          {isPaid && !isInferred && balance === 0 && (
             <span
               style={{
                 padding: '6px 14px',
@@ -142,7 +150,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 textTransform: 'uppercase',
               }}
             >
-              ● Outstanding
+              ● Outstanding{isInferred ? ' (est.)' : ''}
             </span>
           )}
           {isBartawi && (
@@ -495,35 +503,115 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           )}
 
           {/* Financials card */}
-          {status === 'occupied' && rent > 0 && (
+          {status === 'occupied' && (rent > 0 || isInferred) && (
             <motion.div
-              className="p-4 bg-teal/6 rounded-xl border border-teal/20"
+              style={{
+                padding: '16px',
+                background: balance > 0
+                  ? 'rgba(168, 74, 59, 0.06)'       // rust tint for outstanding (both confirmed and inferred)
+                  : 'rgba(30, 77, 82, 0.06)',        // teal tint for paid
+                borderRadius: '12px',
+                border: `0.5px solid ${
+                  balance > 0
+                    ? 'rgba(168, 74, 59, 0.3)'
+                    : 'rgba(30, 77, 82, 0.2)'
+                }`,
+              }}
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.2 }}
             >
-              <div className="flex justify-between items-baseline mb-2">
-                <p className="text-[10px] tracking-[0.14em] uppercase text-teal font-semibold">
+              {/* Header row */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
+                marginBottom: '10px',
+              }}>
+                <p style={{
+                  fontSize: '10px',
+                  letterSpacing: '0.14em',
+                  textTransform: 'uppercase',
+                  color: balance > 0 ? '#A84A3B' : '#1E4D52',
+                  fontWeight: 600,
+                  margin: 0,
+                }}>
                   March 2026
                 </p>
-                <p className="text-[10px] text-teal font-medium">
-                  {isPaid ? '✓ settled' : 'due'}
+                <p style={{
+                  fontSize: '10px',
+                  color: balance > 0 ? '#A84A3B' : '#1E4D52',
+                  fontWeight: 500,
+                  margin: 0,
+                }}>
+                  {balance > 0 ? 'due' : '✓ settled'}
                 </p>
               </div>
-              <div className="flex justify-between font-mono text-[12px] py-0.5">
-                <span className="text-stone">Rent</span>
-                <span className="text-espresso">AED {rent.toLocaleString()}</span>
+
+              {/* Financials */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: '12px',
+                fontFamily: 'JetBrains Mono, monospace',
+                padding: '3px 0',
+              }}>
+                <span style={{ color: '#6A6159' }}>
+                  Rent{isInferred && ' (est.)'}
+                </span>
+                <span style={{ color: '#1A1816' }}>
+                  AED {displayRent.toLocaleString()}
+                </span>
               </div>
-              <div className="flex justify-between font-mono text-[12px] py-0.5">
-                <span className="text-stone">Paid</span>
-                <span className="text-teal">AED {paid.toLocaleString()}</span>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: '12px',
+                fontFamily: 'JetBrains Mono, monospace',
+                padding: '3px 0',
+              }}>
+                <span style={{ color: '#6A6159' }}>Paid</span>
+                <span style={{ color: '#1E4D52' }}>AED {paid.toLocaleString()}</span>
               </div>
-              <div className="flex justify-between font-mono text-[12px] pt-2 mt-1 border-t border-teal/20">
-                <span className="text-espresso font-semibold">Balance</span>
-                <span className={cn('font-semibold', balance > 0 ? 'text-rust' : 'text-teal')}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: '12px',
+                fontFamily: 'JetBrains Mono, monospace',
+                paddingTop: '8px',
+                marginTop: '4px',
+                borderTop: '0.5px solid rgba(106, 97, 89, 0.2)',
+              }}>
+                <span style={{ color: '#1A1816', fontWeight: 600 }}>Balance</span>
+                <span style={{
+                  color: balance > 0 ? '#A84A3B' : '#1E4D52',
+                  fontWeight: 600,
+                }}>
                   AED {balance.toLocaleString()}
                 </span>
               </div>
+
+              {/* Inference explanation (only when inferred) */}
+              {isInferred && (
+                <div style={{
+                  marginTop: '12px',
+                  paddingTop: '10px',
+                  borderTop: '0.5px dashed rgba(106, 97, 89, 0.25)',
+                }}>
+                  <p style={{
+                    fontSize: '10px',
+                    color: '#6A6159',
+                    lineHeight: '1.5',
+                    margin: 0,
+                    fontStyle: 'italic',
+                  }}>
+                    This month's rent hasn't been recorded yet. Amount estimated from
+                    last recorded rent ({inferredFromMonth || 'previous month'}:
+                    AED {displayRent.toLocaleString()}). Confirm with operations and
+                    update the source spreadsheet.
+                  </p>
+                </div>
+              )}
             </motion.div>
           )}
 
