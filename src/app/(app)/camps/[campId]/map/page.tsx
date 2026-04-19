@@ -104,27 +104,6 @@ export default function CampMapPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [level])
 
-  // DIAGNOSTIC — remove after debugging
-  useEffect(() => {
-    if (level === 'room') {
-      console.log('[MAP DEBUG] Level=room triggered')
-      console.log('[MAP DEBUG] selectedRoom:', selectedRoom)
-      console.log('[MAP DEBUG] rooms.length:', rooms.length)
-      console.log('[MAP DEBUG] First room shape:', rooms[0])
-      console.log('[MAP DEBUG] selectedRoomObject:', selectedRoomObject)
-      if (selectedRoomObject) {
-        console.log('[MAP DEBUG] Will render RoomInterior with room:', {
-          id: selectedRoomObject.id,
-          room_number: selectedRoomObject.room_number,
-          block: selectedRoomObject.block,
-          current_occupancy: selectedRoomObject.current_occupancy,
-        })
-      } else {
-        console.error('[MAP DEBUG] selectedRoomObject is null/undefined — fallback will render')
-      }
-    }
-  }, [level, selectedRoom, selectedRoomObject, rooms])
-
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[600px] bg-paper rounded-xl border border-dust">

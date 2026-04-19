@@ -24,14 +24,7 @@ interface RoomInteriorProps {
 }
 
 export function RoomInterior({ room, onBack }: RoomInteriorProps) {
-  console.log('[ROOM INTERIOR DEBUG] Component mounting')
-  console.log('[ROOM INTERIOR DEBUG] Received room prop:', room)
-  console.log('[ROOM INTERIOR DEBUG] room.id:', room?.id)
-  console.log('[ROOM INTERIOR DEBUG] room.room_number:', room?.room_number)
-  console.log('[ROOM INTERIOR DEBUG] room.block:', room?.block)
-
   if (!room) {
-    console.error('[ROOM INTERIOR DEBUG] room prop is null/undefined!')
     return (
       <div className="p-12 text-center">
         <p className="font-serif italic text-[18px] text-espresso mb-2">No room data</p>
@@ -508,7 +501,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
               </p>
               <div className="font-mono text-[11px]">
                 {historyData.data.slice(0, 3).map((entry: any, idx: number) => {
-                  const month = entry.month || ''
+                  const month = entry.month ? String(entry.month) : ''
                   const paid = entry.paid || 0
                   const balance = entry.balance || 0
                   const fullyPaid = balance === 0

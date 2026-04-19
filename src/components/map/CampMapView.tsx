@@ -15,6 +15,27 @@ type MapLevel = 'sky' | 'block' | 'room'
 
 interface Props { campId: string }
 
+// Helper to normalize room codes (handles format differences)
+function normalizeRoomCode(code: string): string {
+  if (!code) return ''
+  // Remove leading zeros and ensure dash format: "A01" → "A-1", "A-01" → "A-1"
+  const match = code.match(/^([A-Z]+)-?0*(\d+)$/i)
+  if (match) return `${match[1]}-${match[2]}`
+  return code
+}
+
+// Find room by code with resilient matching
+function findRoomByCode(rooms: any[], code: string) {
+  if (!code || !rooms) return null
+  // Try exact match first
+  let match = rooms.find((r: any) => r.room_number === code)
+  if (match) return match
+  // Try normalized match (handle format differences)
+  const normalizedCode = normalizeRoomCode(code)
+  match = rooms.find((r: any) => normalizeRoomCode(r.room_number) === normalizedCode)
+  return match || null
+}
+
 export function CampMapView({ campId }: Props) {
   const [level, setLevel] = useState<MapLevel>('sky')
   const [selectedBlock, setSelectedBlock] = useState<string | null>(null)
@@ -83,9 +104,9 @@ export function CampMapView({ campId }: Props) {
               onRoomClick={expandRoom}
             />
           )}
-          {level === 'room' && selectedRoom && rooms.data.find(r => r.room_number === selectedRoom) && (
+          {level === 'room' && selectedRoom && findRoomByCode(rooms.data, selectedRoom) && (
             <RoomInterior
-              room={rooms.data.find(r => r.room_number === selectedRoom)!}
+              room={findRoomByCode(rooms.data, selectedRoom)!}
               onBack={backToBlock}
             />
           )}
