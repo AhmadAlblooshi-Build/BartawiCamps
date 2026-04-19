@@ -62,6 +62,15 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
   const leftColumnRooms = block.rooms.filter(r => r.x === 0)
   const rightColumnRooms = block.rooms.filter(r => r.x > 0)
 
+  // Dynamic positioning based on actual room count to prevent overlap in tall blocks
+  const ROW_HEIGHT = 38  // 32px rect + 6px gap
+  const leftColumnHeight = leftColumnRooms.length * ROW_HEIGHT
+  const rightColumnHeight = rightColumnRooms.length * ROW_HEIGHT
+  const maxColumnHeight = Math.max(leftColumnHeight, rightColumnHeight)
+  const lastRoomBottomY = 50 + maxColumnHeight - 6  // start at y=50, subtract last gap
+  const entranceY = lastRoomBottomY + 28  // 28px gap below last room
+  const blockBottomY = entranceY + 20    // block outline extends below entrance
+
   return (
     <motion.div
       layoutId={`block-${blockCode}`}
@@ -130,7 +139,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
         transition={{ delay: 0.1, duration: 0.4, type: 'spring', stiffness: 280, damping: 30 }}
       >
         <svg
-          viewBox="0 0 800 555"
+          viewBox={`0 0 800 ${blockBottomY + 20}`}
           xmlns="http://www.w3.org/2000/svg"
           className="w-full h-auto"
         >
@@ -139,7 +148,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             x="20"
             y="10"
             width="760"
-            height="535"
+            height={blockBottomY - 10}
             fill="rgba(30, 77, 82, 0.03)"
             stroke="#1E4D52"
             strokeWidth="1.5"
@@ -151,7 +160,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             x="310"
             y="10"
             width="180"
-            height="535"
+            height={blockBottomY - 10}
             fill="#E8E0D6"
           />
 
@@ -506,7 +515,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
           {/* Entrance indicators */}
           <text
             x="155"
-            y="498"
+            y={entranceY}
             textAnchor="middle"
             fontFamily="JetBrains Mono, monospace"
             fontSize="8"
@@ -517,7 +526,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
           </text>
           <text
             x="635"
-            y="498"
+            y={entranceY}
             textAnchor="middle"
             fontFamily="JetBrains Mono, monospace"
             fontSize="8"
