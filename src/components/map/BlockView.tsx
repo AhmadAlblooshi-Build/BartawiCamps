@@ -10,6 +10,7 @@ import {
   getPeopleCount,
   getMonthlyRent,
   getBalance,
+  getBalanceInfo,
   getPaid,
 } from '@/lib/room-helpers'
 import { CaretLeft } from '@phosphor-icons/react'
@@ -55,7 +56,23 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
   const total = blockRooms.length
   const totalRent = blockRooms.reduce((sum, r) => sum + getMonthlyRent(r), 0)
   const totalPaid = blockRooms.reduce((sum, r) => sum + getPaid(r), 0)
-  const totalOutstanding = blockRooms.reduce((sum, r) => sum + getBalance(r), 0)
+
+  const blockStats = useMemo(() => {
+    let totalCollected = 0
+    let totalOutstanding = 0
+    let inferredOutstanding = 0
+
+    blockRooms.forEach((r: any) => {
+      totalCollected += getPaid(r)
+      const bi = getBalanceInfo(r)
+      if (bi.balance > 0) {
+        totalOutstanding += bi.balance
+        if (bi.isInferred) inferredOutstanding += bi.balance
+      }
+    })
+
+    return { totalCollected, totalOutstanding, inferredOutstanding }
+  }, [blockRooms])
 
   // Split rooms by column position (left column includes all rooms with x=0, right column x>0)
   // Extras (B-23, B-24, etc.) are included in their natural columns based on x position
@@ -116,16 +133,37 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
           </p>
         </div>
 
-        <div className="text-right">
-          <p className="font-mono text-[24px] font-semibold text-espresso leading-none">
-            AED {totalPaid.toLocaleString()}
+        <div style={{ textAlign: 'right' }}>
+          <p style={{
+            fontSize: '22px',
+            fontFamily: 'JetBrains Mono, monospace',
+            color: '#1A1816',
+            margin: 0,
+            letterSpacing: '0.02em',
+          }}>
+            AED {blockStats.totalCollected.toLocaleString()}
           </p>
-          <p className="text-[10px] tracking-[0.12em] uppercase text-stone mt-1 font-medium">
+          <p style={{
+            fontSize: '10px',
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: '#6A6159',
+            marginTop: '4px',
+            fontWeight: 500,
+          }}>
             Collected · March 2026
           </p>
-          {totalOutstanding > 0 && (
-            <p className="text-[11px] font-mono text-rust mt-1">
-              AED {totalOutstanding.toLocaleString()} outstanding
+          {blockStats.totalOutstanding > 0 && (
+            <p style={{
+              fontSize: '11px',
+              fontFamily: 'JetBrains Mono, monospace',
+              color: '#A84A3B',
+              marginTop: '6px',
+              fontWeight: 500,
+            }}>
+              AED {blockStats.totalOutstanding.toLocaleString()} outstanding
+              {blockStats.inferredOutstanding > 0 &&
+                ` (incl. AED ${blockStats.inferredOutstanding.toLocaleString()} est.)`}
             </p>
           )}
         </div>
@@ -234,7 +272,9 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             const companyName = apiRoom ? getCompanyName(apiRoom) : ''
             const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
             const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
-            const balance = apiRoom ? getBalance(apiRoom) : 0
+            const balanceInfo = apiRoom ? getBalanceInfo(apiRoom) : { balance: 0, isInferred: false }
+            const balance = balanceInfo.balance
+            const isInferred = balanceInfo.isInferred
             const hasBalance = balance > 0
 
             const displayName = tenantName || companyName || room.label || '—'
@@ -348,13 +388,14 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                   fontSize="9"
                   fill={hasBalance ? '#A84A3B' : status === 'occupied' ? '#1E4D52' : '#9C948B'}
                 >
-                  {isBartawi && rent === 0
-                    ? '—'
-                    : hasBalance
-                    ? `AED ${balance.toLocaleString()} due`
-                    : rent > 0
-                    ? `AED ${rent.toLocaleString()} ✓`
-                    : '—'}
+                  {(() => {
+                    if (isBartawi && rent === 0) return '—'
+                    if (hasBalance) {
+                      return `AED ${balance.toLocaleString()} due${isInferred ? ' (est.)' : ''}`
+                    }
+                    if (rent > 0) return `AED ${rent.toLocaleString()} ✓`
+                    return '—'
+                  })()}
                 </text>
 
                 {/* Invisible click target for reliable clicks */}
@@ -379,7 +420,9 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             const companyName = apiRoom ? getCompanyName(apiRoom) : ''
             const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
             const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
-            const balance = apiRoom ? getBalance(apiRoom) : 0
+            const balanceInfo = apiRoom ? getBalanceInfo(apiRoom) : { balance: 0, isInferred: false }
+            const balance = balanceInfo.balance
+            const isInferred = balanceInfo.isInferred
             const hasBalance = balance > 0
 
             const displayName = tenantName || companyName || room.label || '—'
@@ -489,13 +532,14 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                   fontSize="9"
                   fill={hasBalance ? '#A84A3B' : status === 'occupied' ? '#1E4D52' : '#9C948B'}
                 >
-                  {isBartawi && rent === 0
-                    ? '—'
-                    : hasBalance
-                    ? `AED ${balance.toLocaleString()} due`
-                    : rent > 0
-                    ? `AED ${rent.toLocaleString()} ✓`
-                    : '—'}
+                  {(() => {
+                    if (isBartawi && rent === 0) return '—'
+                    if (hasBalance) {
+                      return `AED ${balance.toLocaleString()} due${isInferred ? ' (est.)' : ''}`
+                    }
+                    if (rent > 0) return `AED ${rent.toLocaleString()} ✓`
+                    return '—'
+                  })()}
                 </text>
 
                 {/* Invisible click target for reliable clicks */}
