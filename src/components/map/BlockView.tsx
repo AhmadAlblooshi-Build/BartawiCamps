@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { motion } from 'motion/react'
 import { getBlockByCode } from '@/data/camp1-layout'
 import {
@@ -13,6 +13,14 @@ import {
   getPaid,
 } from '@/lib/room-helpers'
 import { CaretLeft } from '@phosphor-icons/react'
+
+// Handle format differences: "B01" vs "B-1", "BB01" vs "BB-1", etc.
+function normalizeRoomCode(code: string): string {
+  if (!code) return ''
+  const match = code.match(/^([A-Z]+)-?0*(\d+)$/)
+  if (match) return `${match[1]}-${match[2]}`
+  return code
+}
 
 interface BlockViewProps {
   blockCode: string
@@ -29,6 +37,18 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
 
   // Filter rooms to just this block
   const blockRooms = rooms.filter(r => r.block?.code === blockCode)
+
+  // Map of normalized room code → API room object
+  // This handles format differences between layout ("B-1") and API ("B01")
+  const apiRoomsByNormalizedCode = useMemo(() => {
+    const map = new Map<string, any>()
+    blockRooms.forEach((r: any) => {
+      if (r.room_number) {
+        map.set(normalizeRoomCode(r.room_number), r)
+      }
+    })
+    return map
+  }, [blockRooms])
 
   // Calculate block stats
   const occupied = blockRooms.filter(r => getRoomStatus(r) === 'occupied').length
@@ -110,7 +130,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
         transition={{ delay: 0.1, duration: 0.4, type: 'spring', stiffness: 280, damping: 30 }}
       >
         <svg
-          viewBox="0 0 800 520"
+          viewBox="0 0 800 555"
           xmlns="http://www.w3.org/2000/svg"
           className="w-full h-auto"
         >
@@ -119,7 +139,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             x="20"
             y="10"
             width="760"
-            height="500"
+            height="535"
             fill="rgba(30, 77, 82, 0.03)"
             stroke="#1E4D52"
             strokeWidth="1.5"
@@ -131,7 +151,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             x="310"
             y="10"
             width="180"
-            height="500"
+            height="535"
             fill="#E8E0D6"
           />
 
@@ -199,7 +219,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
 
           {/* LEFT COLUMN ROOMS (1-11, reading top to bottom) */}
           {leftColumnRooms.map((room, idx) => {
-            const apiRoom = blockRooms.find(r => r.room_number === room.code)
+            const apiRoom = apiRoomsByNormalizedCode.get(normalizeRoomCode(room.code))
             const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
             const tenantName = apiRoom ? getTenantName(apiRoom) : ''
             const companyName = apiRoom ? getCompanyName(apiRoom) : ''
@@ -344,7 +364,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
 
           {/* RIGHT COLUMN ROOMS (22-12, reading top to bottom) */}
           {rightColumnRooms.map((room, idx) => {
-            const apiRoom = blockRooms.find(r => r.room_number === room.code)
+            const apiRoom = apiRoomsByNormalizedCode.get(normalizeRoomCode(room.code))
             const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
             const tenantName = apiRoom ? getTenantName(apiRoom) : ''
             const companyName = apiRoom ? getCompanyName(apiRoom) : ''
@@ -487,7 +507,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
           {extraRooms.length > 0 && (
             <g>
               {extraRooms.map((room, idx) => {
-                const apiRoom = blockRooms.find(r => r.room_number === room.code)
+                const apiRoom = apiRoomsByNormalizedCode.get(normalizeRoomCode(room.code))
                 const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
                 const tenantName = apiRoom ? getTenantName(apiRoom) : ''
                 const companyName = apiRoom ? getCompanyName(apiRoom) : ''
@@ -495,8 +515,10 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                 const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
                 const displayName = tenantName || companyName || room.label || '—'
 
-                const xPos = idx === 0 ? 30 : 500
-                const yPos = 478
+                // Extras get their own row at the very bottom, below the main columns
+                // Main column rooms end at y ≈ 460 (50 + 10*38 + 32), so extras start at 490
+                const yPos = 495
+                const xPos = idx === 0 ? 30 : (idx === 1 ? 500 : 30)
 
                 const fillColor = status === 'occupied' ? 'rgba(30, 77, 82, 0.08)' : 'rgba(30, 77, 82, 0.05)'
                 const strokeColor = 'rgba(30, 77, 82, 0.4)'
