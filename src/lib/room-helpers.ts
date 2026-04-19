@@ -191,6 +191,33 @@ export function getBalance(room: any): number {
 }
 
 /**
+ * Get paid amount for room's current month
+ */
+export function getPaid(room: any): number {
+  // Try latestMonthlyRecord first
+  if (room?.latestMonthlyRecord?.paid !== undefined) {
+    return Number(room.latestMonthlyRecord.paid) || 0
+  }
+
+  // Try monthly_records array (backend returns this)
+  if (room?.monthly_records?.length > 0) {
+    const latest = room.monthly_records[0] // First element is most recent due to DESC order
+    if (latest?.paid !== undefined) {
+      return Number(latest.paid) || 0
+    }
+  }
+
+  // Calculate from rent - balance if available
+  const rent = getMonthlyRent(room)
+  const balance = getBalance(room)
+  if (rent > 0) {
+    return Math.max(0, rent - balance)
+  }
+
+  return 0
+}
+
+/**
  * Get payment percentage for room (0-100)
  */
 export function getPaymentPercentage(room: any): number {

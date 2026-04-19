@@ -9,6 +9,7 @@ import {
   getPeopleCount,
   getMonthlyRent,
   getBalance,
+  getPaid,
 } from '@/lib/room-helpers'
 import { CaretLeft } from '@phosphor-icons/react'
 
@@ -30,10 +31,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
   const occupied = blockRooms.filter(r => getRoomStatus(r) === 'occupied').length
   const total = blockRooms.length
   const totalRent = blockRooms.reduce((sum, r) => sum + getMonthlyRent(r), 0)
-  const totalPaid = blockRooms.reduce((sum, r) => {
-    const paid = r.current_occupancy?.paid ?? r.currentOccupancy?.paid ?? 0
-    return sum + paid
-  }, 0)
+  const totalPaid = blockRooms.reduce((sum, r) => sum + getPaid(r), 0)
   const totalOutstanding = blockRooms.reduce((sum, r) => sum + getBalance(r), 0)
 
   // Split rooms by column position (left column rooms 1-11, right column rooms 12-22)
