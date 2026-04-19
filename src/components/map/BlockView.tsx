@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { motion } from 'motion/react'
 import { getBlockByCode } from '@/data/camp1-layout'
 import {
@@ -22,6 +23,8 @@ interface BlockViewProps {
 
 export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewProps) {
   const block = getBlockByCode(blockCode)
+  const [hoveredRoom, setHoveredRoom] = useState<string | null>(null)
+
   if (!block) return null
 
   // Filter rooms to just this block
@@ -211,6 +214,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             const yPos = 50 + idx * 38
 
             const isBartawi = room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners' || room.type === 'restaurant'
+            const isHovered = hoveredRoom === room.code
 
             let fillColor = 'rgba(30, 77, 82, 0.05)'
             let strokeColor = 'rgba(30, 77, 82, 0.3)'
@@ -237,12 +241,19 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
               strokeColor = '#A84A3B'
               strokeWidth = '1.5'
             }
+            // Hover state overrides
+            if (isHovered) {
+              fillColor = 'rgba(184, 136, 61, 0.15)'
+              strokeColor = '#B8883D'
+              strokeWidth = '1.5'
+            }
 
             return (
               <motion.g
                 key={room.code}
                 layoutId={`room-${room.code}`}
-                onClick={() => onRoomClick(room.code)}
+                onMouseEnter={() => setHoveredRoom(room.code)}
+                onMouseLeave={() => setHoveredRoom(null)}
                 className="cursor-pointer"
                 whileHover={{ scale: 1.015 }}
                 whileTap={{ scale: 0.99 }}
@@ -267,6 +278,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                   strokeWidth={strokeWidth}
                   strokeDasharray={status === 'vacant' && !isBartawi ? '4 3' : undefined}
                   rx="3"
+                  className="transition-all duration-150"
                 />
 
                 {/* Room number */}
@@ -315,6 +327,17 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                     ? `AED ${rent.toLocaleString()} ✓`
                     : '—'}
                 </text>
+
+                {/* Invisible click target for reliable clicks */}
+                <rect
+                  x="30"
+                  y={yPos}
+                  width="270"
+                  height="32"
+                  fill="transparent"
+                  className="cursor-pointer"
+                  onClick={() => onRoomClick(room.code)}
+                />
               </motion.g>
             )
           })}
@@ -335,6 +358,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             const yPos = 50 + idx * 38
 
             const isBartawi = room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners' || room.type === 'restaurant'
+            const isHovered = hoveredRoom === room.code
 
             let fillColor = 'rgba(30, 77, 82, 0.05)'
             let strokeColor = 'rgba(30, 77, 82, 0.3)'
@@ -361,12 +385,19 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
               strokeColor = '#A84A3B'
               strokeWidth = '1.5'
             }
+            // Hover state overrides
+            if (isHovered) {
+              fillColor = 'rgba(184, 136, 61, 0.15)'
+              strokeColor = '#B8883D'
+              strokeWidth = '1.5'
+            }
 
             return (
               <motion.g
                 key={room.code}
                 layoutId={`room-${room.code}`}
-                onClick={() => onRoomClick(room.code)}
+                onMouseEnter={() => setHoveredRoom(room.code)}
+                onMouseLeave={() => setHoveredRoom(null)}
                 className="cursor-pointer"
                 whileHover={{ scale: 1.015 }}
                 whileTap={{ scale: 0.99 }}
@@ -391,6 +422,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                   strokeWidth={strokeWidth}
                   strokeDasharray={status === 'vacant' && !isBartawi ? '4 3' : undefined}
                   rx="3"
+                  className="transition-all duration-150"
                 />
 
                 <text
@@ -436,6 +468,17 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                     ? `AED ${rent.toLocaleString()} ✓`
                     : '—'}
                 </text>
+
+                {/* Invisible click target for reliable clicks */}
+                <rect
+                  x="500"
+                  y={yPos}
+                  width="270"
+                  height="32"
+                  fill="transparent"
+                  className="cursor-pointer"
+                  onClick={() => onRoomClick(room.code)}
+                />
               </motion.g>
             )
           })}
