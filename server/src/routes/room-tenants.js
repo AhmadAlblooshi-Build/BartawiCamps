@@ -31,10 +31,12 @@ router.get('/', async (req, res) => {
       where,
       include: {
         leases: {
-          select: {
-            id: true,
-            status: true,
-            room_id: true,
+          include: {
+            room: {
+              select: {
+                room_number: true,
+              },
+            },
           },
         },
       },
@@ -46,17 +48,29 @@ router.get('/', async (req, res) => {
     });
 
     // Serialize response
-    const serialized = tenants.map(t => ({
-      id: t.id,
-      full_name: t.full_name,
-      company_name: t.company_name,
-      is_company: t.is_company,
-      display_name: t.is_company ? t.company_name : t.full_name,
-      phone: t.phone,
-      email: t.email,
-      total_leases: t.leases.length,
-      active_leases: t.leases.filter(l => l.status === 'active').length,
-    }));
+    const serialized = tenants.map(t => {
+      const activeLeases = t.leases.filter(l => l.status === 'active');
+      const monthlyRentTotal = activeLeases.reduce((sum, l) => sum + Number(l.monthly_rent || 0), 0);
+
+      return {
+        id: t.id,
+        full_name: t.full_name,
+        company_name: t.company_name,
+        is_company: t.is_company,
+        display_name: t.is_company ? t.company_name : t.full_name,
+        phone: t.phone,
+        email: t.email,
+        total_leases: t.leases.length,
+        active_leases: activeLeases.length,
+        active_rooms_count: activeLeases.length, // Alias for clarity
+        monthly_rent_total: monthlyRentTotal,
+        active_rooms: activeLeases.map(l => ({
+          room_id: l.room_id,
+          room_number: l.room?.room_number,
+          monthly_rent: Number(l.monthly_rent || 0),
+        })),
+      };
+    });
 
     return res.json({ tenants: serialized });
   } catch (err) {
@@ -76,7 +90,7 @@ router.get('/:id', async (req, res) => {
           include: {
             room: {
               include: {
-                block: {
+                blocks: {
                   select: { code: true, camp_id: true },
                 },
               },
@@ -131,8 +145,8 @@ router.get('/:id', async (req, res) => {
       leases: tenant.leases.map(l => ({
         id: l.id,
         room_number: l.room.room_number,
-        block_code: l.room.block?.code,
-        camp_id: l.room.block?.camp_id,
+        block_code: l.room.blocks?.code,
+        camp_id: l.room.blocks?.camp_id,
         start_date: l.start_date,
         end_date: l.end_date,
         monthly_rent: Number(l.monthly_rent),
