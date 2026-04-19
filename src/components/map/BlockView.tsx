@@ -2,7 +2,8 @@
 
 import { useState, useMemo } from 'react'
 import { motion } from 'motion/react'
-import { getBlockByCode } from '@/data/camp1-layout'
+import { getBlockByCode } from '@/data/camp-layout'
+import type { BlockLayout } from '@/data/camp-layout'
 import {
   getRoomStatus,
   getTenantName,
@@ -10,9 +11,9 @@ import {
   getPeopleCount,
   getMonthlyRent,
   getBalance,
-  getBalanceInfo,
   getPaid,
 } from '@/lib/room-helpers'
+import { getContractInfo } from '@/lib/contract-helpers'
 import { CaretLeft } from '@phosphor-icons/react'
 
 // Handle format differences: "B01" vs "B-1", "BB01" vs "BB-1", etc.
@@ -24,14 +25,15 @@ function normalizeRoomCode(code: string): string {
 }
 
 interface BlockViewProps {
+  campCode: string
   blockCode: string
   rooms: any[]
   onBack: () => void
   onRoomClick: (roomCode: string) => void
 }
 
-export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewProps) {
-  const block = getBlockByCode(blockCode)
+export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: BlockViewProps) {
+  const block = getBlockByCode(campCode, blockCode)
   const [hoveredRoom, setHoveredRoom] = useState<string | null>(null)
 
   if (!block) return null
@@ -60,18 +62,24 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
   const blockStats = useMemo(() => {
     let totalCollected = 0
     let totalOutstanding = 0
-    let inferredOutstanding = 0
 
     blockRooms.forEach((r: any) => {
       totalCollected += getPaid(r)
-      const bi = getBalanceInfo(r)
-      if (bi.balance > 0) {
-        totalOutstanding += bi.balance
-        if (bi.isInferred) inferredOutstanding += bi.balance
+      const balance = getBalance(r)
+      if (balance > 0) {
+        totalOutstanding += balance
       }
     })
 
-    return { totalCollected, totalOutstanding, inferredOutstanding }
+    return { totalCollected, totalOutstanding }
+  }, [blockRooms])
+
+  // Dynamic month label from first available room's current_month
+  const displayMonthLabel = useMemo(() => {
+    const firstRoomWithCurrent = blockRooms.find((r: any) => r.current_month)
+    const cm = firstRoomWithCurrent?.current_month
+    if (cm) return `${cm.month_name} ${cm.year}`
+    return ''
   }, [blockRooms])
 
   // Split rooms by column position (left column includes all rooms with x=0, right column x>0)
@@ -84,9 +92,18 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
   const leftColumnHeight = leftColumnRooms.length * ROW_HEIGHT
   const rightColumnHeight = rightColumnRooms.length * ROW_HEIGHT
   const maxColumnHeight = Math.max(leftColumnHeight, rightColumnHeight)
+  const maxColumnRooms = Math.max(leftColumnRooms.length, rightColumnRooms.length)
   const lastRoomBottomY = 50 + maxColumnHeight - 6  // start at y=50, subtract last gap
   const entranceY = lastRoomBottomY + 28  // 28px gap below last room
   const blockBottomY = entranceY + 20    // block outline extends below entrance
+  const viewBoxHeight = Math.max(555, 80 + maxColumnRooms * 38)
+
+  // Scale toilet/bath pairs with block height
+  const toiletBathPairs = Math.max(2, Math.min(6, Math.ceil(maxColumnRooms / 2.5)))
+  const toiletYPositions = Array.from({ length: toiletBathPairs }, (_, i) => {
+    const totalHeight = maxColumnRooms * 38
+    return 60 + (i * totalHeight / toiletBathPairs)
+  })
 
   return (
     <motion.div
@@ -151,7 +168,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             marginTop: '4px',
             fontWeight: 500,
           }}>
-            Collected · March 2026
+            Collected{displayMonthLabel ? ` · ${displayMonthLabel}` : ''}
           </p>
           {blockStats.totalOutstanding > 0 && (
             <p style={{
@@ -162,8 +179,6 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
               fontWeight: 500,
             }}>
               AED {blockStats.totalOutstanding.toLocaleString()} outstanding
-              {blockStats.inferredOutstanding > 0 &&
-                ` (incl. AED ${blockStats.inferredOutstanding.toLocaleString()} est.)`}
             </p>
           )}
         </div>
@@ -177,7 +192,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
         transition={{ delay: 0.1, duration: 0.4, type: 'spring', stiffness: 280, damping: 30 }}
       >
         <svg
-          viewBox={`0 0 800 ${blockBottomY + 20}`}
+          viewBox={`0 0 800 ${viewBoxHeight}`}
           xmlns="http://www.w3.org/2000/svg"
           className="w-full h-auto"
         >
@@ -186,7 +201,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             x="20"
             y="10"
             width="760"
-            height={blockBottomY - 10}
+            height={viewBoxHeight - 20}
             fill="rgba(30, 77, 82, 0.03)"
             stroke="#1E4D52"
             strokeWidth="1.5"
@@ -198,7 +213,7 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             x="310"
             y="10"
             width="180"
-            height={blockBottomY - 10}
+            height={viewBoxHeight - 20}
             fill="#E8E0D6"
           />
 
@@ -215,8 +230,8 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             CORRIDOR
           </text>
 
-          {/* Toilet/bath pairs down the corridor */}
-          {[60, 150, 240, 330, 420].map((yPos, i) => (
+          {/* Toilet/bath pairs down the corridor - scaled with block height */}
+          {toiletYPositions.map((yPos, i) => (
             <g key={`facilities-${i}`}>
               <rect
                 x="330"
@@ -272,10 +287,9 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             const companyName = apiRoom ? getCompanyName(apiRoom) : ''
             const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
             const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
-            const balanceInfo = apiRoom ? getBalanceInfo(apiRoom) : { balance: 0, isInferred: false }
-            const balance = balanceInfo.balance
-            const isInferred = balanceInfo.isInferred
+            const balance = apiRoom ? getBalance(apiRoom) : 0
             const hasBalance = balance > 0
+            const contract = apiRoom ? getContractInfo(apiRoom) : { type: null, status: 'none', daysUntilExpiry: null, hasLegalIssue: false }
 
             const displayName = tenantName || companyName || room.label || '—'
 
@@ -306,6 +320,18 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
               strokeColor = '#B8883D'
               strokeWidth = '1'
             }
+            // Contract states
+            if (contract.status === 'expired') {
+              fillColor = 'rgba(139, 100, 32, 0.1)'
+              strokeColor = '#8B6420'
+              strokeWidth = '1.5'
+            }
+            if (contract.status === 'expiring_soon') {
+              fillColor = 'rgba(184, 136, 61, 0.12)'
+              strokeColor = '#B8883D'
+              strokeWidth = '1.5'
+            }
+            // Outstanding overrides all (highest priority)
             if (hasBalance) {
               strokeColor = '#A84A3B'
               strokeWidth = '1.5'
@@ -386,13 +412,29 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                   textAnchor="end"
                   fontFamily="JetBrains Mono, monospace"
                   fontSize="9"
-                  fill={hasBalance ? '#A84A3B' : status === 'occupied' ? '#1E4D52' : '#9C948B'}
+                  fill={
+                    hasBalance ? '#A84A3B' :
+                    contract.status === 'expired' ? '#8B6420' :
+                    contract.status === 'expiring_soon' ? '#B8883D' :
+                    status === 'occupied' ? '#1E4D52' :
+                    '#9C948B'
+                  }
                 >
                   {(() => {
                     if (isBartawi && rent === 0) return '—'
-                    if (hasBalance) {
-                      return `AED ${balance.toLocaleString()} due${isInferred ? ' (est.)' : ''}`
+                    if (hasBalance) return `AED ${balance.toLocaleString()} due`
+
+                    // Yearly contracts — show expiry status
+                    if (contract.type === 'yearly') {
+                      if (contract.status === 'expired') {
+                        return `Expired ${Math.abs(contract.daysUntilExpiry || 0)}d ago`
+                      }
+                      if (contract.status === 'expiring_soon') {
+                        return `${contract.daysUntilExpiry}d left`
+                      }
+                      if (rent > 0) return `AED ${rent.toLocaleString()} ✓ yearly`
                     }
+
                     if (rent > 0) return `AED ${rent.toLocaleString()} ✓`
                     return '—'
                   })()}
@@ -420,10 +462,9 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
             const companyName = apiRoom ? getCompanyName(apiRoom) : ''
             const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
             const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
-            const balanceInfo = apiRoom ? getBalanceInfo(apiRoom) : { balance: 0, isInferred: false }
-            const balance = balanceInfo.balance
-            const isInferred = balanceInfo.isInferred
+            const balance = apiRoom ? getBalance(apiRoom) : 0
             const hasBalance = balance > 0
+            const contract = apiRoom ? getContractInfo(apiRoom) : { type: null, status: 'none', daysUntilExpiry: null, hasLegalIssue: false }
 
             const displayName = tenantName || companyName || room.label || '—'
 
@@ -453,6 +494,18 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
               strokeColor = '#B8883D'
               strokeWidth = '1'
             }
+            // Contract states
+            if (contract.status === 'expired') {
+              fillColor = 'rgba(139, 100, 32, 0.1)'
+              strokeColor = '#8B6420'
+              strokeWidth = '1.5'
+            }
+            if (contract.status === 'expiring_soon') {
+              fillColor = 'rgba(184, 136, 61, 0.12)'
+              strokeColor = '#B8883D'
+              strokeWidth = '1.5'
+            }
+            // Outstanding overrides all (highest priority)
             if (hasBalance) {
               strokeColor = '#A84A3B'
               strokeWidth = '1.5'
@@ -530,13 +583,29 @@ export function BlockView({ blockCode, rooms, onBack, onRoomClick }: BlockViewPr
                   textAnchor="end"
                   fontFamily="JetBrains Mono, monospace"
                   fontSize="9"
-                  fill={hasBalance ? '#A84A3B' : status === 'occupied' ? '#1E4D52' : '#9C948B'}
+                  fill={
+                    hasBalance ? '#A84A3B' :
+                    contract.status === 'expired' ? '#8B6420' :
+                    contract.status === 'expiring_soon' ? '#B8883D' :
+                    status === 'occupied' ? '#1E4D52' :
+                    '#9C948B'
+                  }
                 >
                   {(() => {
                     if (isBartawi && rent === 0) return '—'
-                    if (hasBalance) {
-                      return `AED ${balance.toLocaleString()} due${isInferred ? ' (est.)' : ''}`
+                    if (hasBalance) return `AED ${balance.toLocaleString()} due`
+
+                    // Yearly contracts — show expiry status
+                    if (contract.type === 'yearly') {
+                      if (contract.status === 'expired') {
+                        return `Expired ${Math.abs(contract.daysUntilExpiry || 0)}d ago`
+                      }
+                      if (contract.status === 'expiring_soon') {
+                        return `${contract.daysUntilExpiry}d left`
+                      }
+                      if (rent > 0) return `AED ${rent.toLocaleString()} ✓ yearly`
                     }
+
                     if (rent > 0) return `AED ${rent.toLocaleString()} ✓`
                     return '—'
                   })()}

@@ -15,7 +15,6 @@ import { useHasPermission } from '@/lib/auth'
 const MAIN = [
   { href: '/',            label: 'Dashboard',   icon: House,      perm: null },
   { href: '/camps',       label: 'Camps',       icon: Buildings,  perm: 'rooms.read' },
-  { href: '/rooms',       label: 'Rooms',       icon: Bed,        perm: 'rooms.read' },
   { href: '/contracts',   label: 'Contracts',   icon: Files,      perm: 'contracts.read' },
   { href: '/maintenance', label: 'Maintenance', icon: Wrench,     perm: 'maintenance.read' },
   { href: '/complaints',  label: 'Complaints',  icon: ChatDots,   perm: 'complaints.read' },

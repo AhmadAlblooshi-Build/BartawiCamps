@@ -7,16 +7,19 @@ import {
   type FloorLevel,
   type BlockLayout,
   type RoomPosition,
-} from '@/data/camp1-layout'
+} from '@/data/camp-layout'
 import {
   getRoomStatus,
   getBalance,
   getPaid,
   getMonthlyRent,
+  normalizeRoomCode,
 } from '@/lib/room-helpers'
+import { getContractInfo } from '@/lib/contract-helpers'
 import { cn } from '@/lib/utils'
 
 interface SkyViewProps {
+  campCode: string
   rooms: any[]
   onBlockClick: (blockCode: string) => void
   currentFloor: FloorLevel
@@ -28,38 +31,45 @@ interface RoomStripProps {
   room: RoomPosition
   apiRoom: any
   hasBalance: boolean
+  hasExpired: boolean
 }
 
 // Tiny component: a single room rendered as a horizontal strip inside the mini-block
-function RoomStrip({ room, apiRoom, hasBalance }: RoomStripProps) {
+function RoomStrip({ room, apiRoom, hasBalance, hasExpired }: RoomStripProps) {
   const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
-  const isBartawi = ['bartawi', 'office', 'security', 'cleaners', 'restaurant'].includes(
+  const isBartawi = ['bartawi', 'office', 'security', 'cleaners', 'electricity', 'mosque'].includes(
     room.type || ''
   )
 
-  let bg = '#E8DFD3'                    // default vacant
-  if (status === 'occupied') bg = '#1E4D52'
-  if (isBartawi) bg = '#B8883D'
-  if (hasBalance) bg = '#A84A3B'
+  let bg = '#E8DFD3'                              // vacant/default
+  if (status === 'occupied') bg = '#1E4D52'       // teal
+  if (isBartawi) bg = '#B8883D'                   // amber
+  if (hasExpired) bg = '#8B6420'                  // amber-gold
+  if (hasBalance) bg = '#A84A3B'                  // rust (highest priority)
 
   return <div style={{ flex: 1, background: bg, borderRadius: '1px' }} />
 }
 
 export function SkyView({
+  campCode,
   rooms,
   onBlockClick,
   currentFloor,
   onFloorChange,
-  anomalies = [],
+  anomalies,
 }: SkyViewProps) {
   const [hoveredBlock, setHoveredBlock] = useState<string | null>(null)
-  const blocks = getBlocksByFloor(currentFloor)
+  const blocks = getBlocksByFloor(campCode, currentFloor)
 
   // Build a lookup map for fast room-to-API matching
+  // Store both raw and normalized keys to handle format differences (A01 vs A-1)
   const roomsByCode = useMemo(() => {
     const map = new Map<string, any>()
     rooms.forEach((r: any) => {
-      if (r.room_number) map.set(r.room_number, r)
+      if (r.room_number) {
+        map.set(r.room_number, r)
+        map.set(normalizeRoomCode(r.room_number), r)
+      }
     })
     return map
   }, [rooms])
@@ -75,8 +85,7 @@ export function SkyView({
     const totalOutstanding = blockRooms.reduce((sum: number, r: any) => sum + getBalance(r), 0)
     const totalRent = blockRooms.reduce((sum: number, r: any) => sum + getMonthlyRent(r), 0)
 
-    const hasAnomaly = block.rooms.some(r => anomalies.includes(r.code))
-    return { occupied, total, rate, totalPaid, totalOutstanding, totalRent, hasAnomaly }
+    return { occupied, total, rate, totalPaid, totalOutstanding, totalRent }
   }
 
   // Split a block's rooms into left column, right column, and extras
@@ -93,10 +102,12 @@ export function SkyView({
       <div className="flex justify-between items-start px-7 pt-6 pb-4">
         <div>
           <p className="font-serif text-[22px] italic text-espresso leading-tight">
-            Camp 1 · {currentFloor === 'ground' ? 'Ground Floor' : 'First Floor'}
+            {campCode.includes('camp-02') || campCode.includes('camp2')
+              ? 'Camp 2'
+              : 'Camp 1'} · {currentFloor === 'ground' ? 'Ground Floor' : 'First Floor'}
           </p>
           <p className="text-[10px] tracking-[0.14em] uppercase text-stone mt-1 font-medium">
-            Labor Camp-1 · Plot 3650169 · {blocks.length} blocks · {blocks.reduce((s, b) => s + b.rooms.length, 0)} rooms
+            Labor Camp · {blocks.length} blocks · {blocks.reduce((s, b) => s + b.rooms.length, 0)} rooms
           </p>
         </div>
         {/* Floor toggle */}
@@ -153,8 +164,18 @@ export function SkyView({
         <div className="grid grid-cols-3 gap-[18px]">
           {blocks.map((block) => {
             const stats = getBlockStats(block)
+            const blockRooms = rooms.filter((r: any) => r.block?.code === block.code)
+
+            // Expired contract detection
+            const expiredRoomCodes = new Set(
+              blockRooms
+                .filter(r => getContractInfo(r).status === 'expired')
+                .map(r => r.room_number)
+            )
+            const hasExpired = expiredRoomCodes.size > 0
+
             const isHovered = hoveredBlock === block.code
-            const isHotspot = stats.hasAnomaly
+            const hasOutstanding = stats.totalOutstanding > 0
             const { left, right } = splitBlockRooms(block)
 
             return (
@@ -173,28 +194,42 @@ export function SkyView({
                   background: '#FFFFFF',
                   border: isHovered
                     ? '1px solid #B8883D'
-                    : isHotspot
-                    ? '1px solid rgba(168, 74, 59, 0.4)'
+                    : hasOutstanding
+                    ? '1px solid rgba(168, 74, 59, 0.5)'
+                    : hasExpired
+                    ? '1px solid rgba(139, 100, 32, 0.5)'
                     : '0.5px solid #D6CFC5',
                   borderRadius: '12px',
                   padding: '20px 18px',
                   cursor: 'pointer',
                   transition: 'all 0.25s ease',
                   overflow: 'hidden',
-                  // GLOW on hover — this is the key feature user asked for
                   boxShadow: isHovered
                     ? '0 4px 20px rgba(184, 136, 61, 0.25), 0 0 0 1px rgba(184, 136, 61, 0.15)'
-                    : isHotspot
-                    ? '0 0 0 1px rgba(168, 74, 59, 0.25)'
+                    : hasOutstanding
+                    ? '0 0 0 1px rgba(168, 74, 59, 0.3), 0 2px 12px rgba(168, 74, 59, 0.12)'
+                    : hasExpired
+                    ? '0 0 0 1px rgba(139, 100, 32, 0.25), 0 2px 12px rgba(139, 100, 32, 0.1)'
                     : 'none',
                 }}
               >
-                {/* "Due" badge in top-right corner for hotspot blocks */}
-                {isHotspot && (
+                {/* "Due" or "Expired" badge in top-right corner */}
+                {(hasOutstanding || hasExpired) && (
                   <div className="absolute top-3 right-3.5 flex items-center gap-1">
-                    <span style={{ width: '6px', height: '6px', borderRadius: '999px', background: '#A84A3B' }} />
-                    <span style={{ fontSize: '9px', letterSpacing: '0.14em', textTransform: 'uppercase', color: '#A84A3B', fontWeight: 600 }}>
-                      Due
+                    <span style={{
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '999px',
+                      background: hasOutstanding ? '#A84A3B' : '#8B6420'
+                    }} />
+                    <span style={{
+                      fontSize: '9px',
+                      letterSpacing: '0.14em',
+                      textTransform: 'uppercase',
+                      color: hasOutstanding ? '#A84A3B' : '#8B6420',
+                      fontWeight: 600
+                    }}>
+                      {hasOutstanding ? 'Due' : 'Expired'}
                     </span>
                   </div>
                 )}
@@ -207,7 +242,7 @@ export function SkyView({
                   >
                     {block.code}
                   </p>
-                  <div className={cn('text-right', isHotspot && 'pt-5')}>
+                  <div className={cn('text-right', hasOutstanding && 'pt-5')}>
                     <p className="font-mono text-[22px] text-teal font-medium leading-none" style={{ letterSpacing: '-0.02em' }}>
                       {Math.round(stats.rate)}
                       <span className="text-[12px] text-stone">%</span>
@@ -230,16 +265,16 @@ export function SkyView({
                   {/* Left column: rooms 1-11 */}
                   <div className="flex flex-col gap-[1px]">
                     {left.map((room) => {
-                      const apiRoom = roomsByCode.get(room.code)
-                      const hasBalance =
-                        anomalies.includes(room.code) ||
-                        (apiRoom ? getBalance(apiRoom) > 0 : false)
+                      const apiRoom = roomsByCode.get(room.code) || roomsByCode.get(normalizeRoomCode(room.code))
+                      const hasBalance = apiRoom ? getBalance(apiRoom) > 0 : false
+                      const hasExpired = apiRoom ? getContractInfo(apiRoom).status === 'expired' : false
                       return (
                         <RoomStrip
                           key={room.code}
                           room={room}
                           apiRoom={apiRoom}
                           hasBalance={hasBalance}
+                          hasExpired={hasExpired}
                         />
                       )
                     })}
@@ -251,31 +286,40 @@ export function SkyView({
                   {/* Right column: rooms 22-12 */}
                   <div className="flex flex-col gap-[1px]">
                     {right.map((room) => {
-                      const apiRoom = roomsByCode.get(room.code)
-                      const hasBalance =
-                        anomalies.includes(room.code) ||
-                        (apiRoom ? getBalance(apiRoom) > 0 : false)
+                      const apiRoom = roomsByCode.get(room.code) || roomsByCode.get(normalizeRoomCode(room.code))
+                      const hasBalance = apiRoom ? getBalance(apiRoom) > 0 : false
+                      const hasExpired = apiRoom ? getContractInfo(apiRoom).status === 'expired' : false
                       return (
                         <RoomStrip
                           key={room.code}
                           room={room}
                           apiRoom={apiRoom}
                           hasBalance={hasBalance}
+                          hasExpired={hasExpired}
                         />
                       )
                     })}
                   </div>
                 </div>
 
-                {/* Bottom row: Collected or Outstanding */}
+                {/* Bottom row: Collected, Outstanding, or Expired */}
                 <div className="flex justify-between items-baseline pt-3.5 border-t border-dust">
-                  {stats.totalOutstanding > 0 ? (
+                  {hasOutstanding ? (
                     <>
                       <span className="text-[9px] tracking-[0.12em] uppercase text-rust font-semibold">
                         Outstanding
                       </span>
                       <span className="font-mono text-[13px] text-rust font-medium">
                         AED {stats.totalOutstanding.toLocaleString()}
+                      </span>
+                    </>
+                  ) : hasExpired ? (
+                    <>
+                      <span className="text-[9px] tracking-[0.12em] uppercase font-semibold" style={{ color: '#8B6420' }}>
+                        {expiredRoomCodes.size} Expired
+                      </span>
+                      <span className="font-mono text-[13px] font-medium" style={{ color: '#8B6420' }}>
+                        Renewal needed
                       </span>
                     </>
                   ) : (
@@ -300,37 +344,40 @@ export function SkyView({
         style={{
           display: 'flex',
           justifyContent: 'center',
-          gap: '28px',
+          gap: '24px',
           margin: '0 28px 24px',
           padding: '14px',
           background: 'rgba(30, 77, 82, 0.04)',
           borderRadius: '10px',
+          flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#1E4D52', borderRadius: '2px' }} />
-          <span style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6A6159', fontWeight: 500 }}>
-            Occupied
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#B8883D', borderRadius: '2px' }} />
-          <span style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6A6159', fontWeight: 500 }}>
-            Bartawi use
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#A84A3B', borderRadius: '2px' }} />
-          <span style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6A6159', fontWeight: 500 }}>
-            Outstanding
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#E8DFD3', borderRadius: '2px', border: '0.5px solid #D6CFC5' }} />
-          <span style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6A6159', fontWeight: 500 }}>
-            Corridor
-          </span>
-        </div>
+        {[
+          { color: '#1E4D52', label: 'Occupied' },
+          { color: '#B8883D', label: 'Bartawi use' },
+          { color: '#A84A3B', label: 'Outstanding' },
+          { color: '#8B6420', label: 'Expired contract' },
+          { color: '#E8DFD3', label: 'Corridor', border: true },
+        ].map(item => (
+          <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{
+              width: '12px',
+              height: '12px',
+              background: item.color,
+              borderRadius: '2px',
+              border: item.border ? '0.5px solid #D6CFC5' : 'none',
+            }} />
+            <span style={{
+              fontSize: '10px',
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              color: '#6A6159',
+              fontWeight: 500,
+            }}>
+              {item.label}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )

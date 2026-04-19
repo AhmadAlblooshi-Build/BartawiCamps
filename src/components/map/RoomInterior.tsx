@@ -11,13 +11,15 @@ import {
   getMonthlyRent,
   getRoomStatus,
   getBalance,
-  getBalanceInfo,
   getPaid,
   getMobile,
   getNationality,
   getCheckInDate,
   getContractType,
+  getCurrentMonthLabel,
+  getRemarks,
 } from '@/lib/room-helpers'
+import { getContractInfo, formatDateShort } from '@/lib/contract-helpers'
 import { CaretLeft } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
@@ -54,25 +56,26 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
     enabled: !!room.id,
   })
 
+  const contract = getContractInfo(room)
   const status = getRoomStatus(room)
-  const tenantName = getTenantName(room) || '—'
   const companyName = getCompanyName(room)
+  const tenantName = getTenantName(room)
+  const displayTenantName = companyName || tenantName || '—'
   const peopleCount = getPeopleCount(room)
-  const maxCapacity = room.max_capacity || 8
+  const maxCapacity = Math.max(
+    Number(room?.max_capacity) || peopleCount || 8,
+    peopleCount || 8,
+    8
+  )
   const rent = getMonthlyRent(room)
-  const balanceInfo = getBalanceInfo(room)
-  const balance = balanceInfo.balance
-  const isInferred = balanceInfo.isInferred
-  const inferredFromMonth = balanceInfo.inferredFromMonth
+  const balance = getBalance(room)
+  const paid = getPaid(room)
+  const remarks = getRemarks(room)
   const mobile = getMobile(room) || '—'
   const nationality = getNationality(room) || '—'
   const checkIn = getCheckInDate(room) || '—'
   const contractType = getContractType(room) || 'Monthly'
-
-  // When inferred, the "rent" we display comes from the inferred amount
-  // (current month rent is 0, so we show the estimated value instead)
-  const displayRent = isInferred ? balance : rent
-  const paid = getPaid(room)
+  const monthLabel = getCurrentMonthLabel(room)
   const isPaid = balance === 0 && rent > 0
 
   const isBartawi = ['Bartawi', 'bartawi_use'].includes(status) ||
@@ -83,16 +86,19 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const [hoverGiveNotice, setHoverGiveNotice] = useState(false)
   const [hoverNewLease, setHoverNewLease] = useState(false)
 
-  // Generate bed layout — distribute beds along left and right walls
-  // Assumes max 8 beds, 4 on each wall
-  const leftBeds = Array.from({ length: 4 }).map((_, i) => ({
+  // Variable capacity bed layout (4-16 people, tighter spacing for 10+)
+  const bedsPerWall = Math.ceil(maxCapacity / 2)
+  const leftBeds = Array.from({ length: bedsPerWall }).map((_, i) => ({
     id: `B${i + 1}`,
-    occupied: i < Math.min(peopleCount, 4),
+    occupied: i < Math.min(peopleCount, bedsPerWall),
   }))
-  const rightBeds = Array.from({ length: Math.min(4, maxCapacity - 4) }).map((_, i) => ({
-    id: `B${i + 5}`,
-    occupied: i < Math.max(0, peopleCount - 4),
+  const rightBeds = Array.from({ length: bedsPerWall }).map((_, i) => ({
+    id: `B${i + bedsPerWall + 1}`,
+    occupied: i < Math.max(0, peopleCount - bedsPerWall),
   }))
+
+  const roomViewBoxHeight = Math.max(420, 60 + bedsPerWall * 75)
+  const bedSpacing = bedsPerWall > 4 ? 55 : 72
 
   return (
     <motion.div
@@ -120,8 +126,8 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {isPaid && !isInferred && balance === 0 && (
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {isPaid && contract.status !== 'expired' && (
             <span
               style={{
                 padding: '6px 14px',
@@ -150,7 +156,55 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 textTransform: 'uppercase',
               }}
             >
-              ● Outstanding{isInferred ? ' (est.)' : ''}
+              ● Outstanding
+            </span>
+          )}
+          {contract.status === 'expired' && (
+            <span
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(139, 100, 32, 0.12)',
+                color: '#8B6420',
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
+              ● Expired
+            </span>
+          )}
+          {contract.status === 'expiring_soon' && (
+            <span
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(184, 136, 61, 0.15)',
+                color: '#B8883D',
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
+              ● Expiring
+            </span>
+          )}
+          {contract.hasLegalIssue && (
+            <span
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(26, 24, 22, 0.1)',
+                color: '#1A1816',
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
+              ● Legal
             </span>
           )}
           {isBartawi && (
@@ -181,7 +235,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           transition={{ type: 'spring', stiffness: 280, damping: 30 }}
         >
           <svg
-            viewBox="0 0 480 420"
+            viewBox={`0 0 480 ${roomViewBoxHeight}`}
             xmlns="http://www.w3.org/2000/svg"
             className="w-full h-auto"
           >
@@ -190,7 +244,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
               x="40"
               y="30"
               width="400"
-              height="340"
+              height={roomViewBoxHeight - 80}
               fill="#F4EFE7"
               stroke="#1A1816"
               strokeWidth="1.5"
@@ -253,7 +307,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
 
             {/* LEFT WALL beds */}
             {leftBeds.map((bed, idx) => {
-              const yPos = 60 + idx * 72
+              const yPos = 60 + idx * bedSpacing
               return (
                 <g key={bed.id}>
                   {bed.occupied ? (
@@ -262,7 +316,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                         x="60"
                         y={yPos}
                         width="120"
-                        height="56"
+                        height={bedSpacing - 20}
                         fill="#1E4D52"
                         stroke="#0D2A2D"
                         strokeWidth="0.8"
@@ -280,20 +334,20 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                       {/* Tenant name (first name only if occupied by main tenant) */}
                       <text
                         x="130"
-                        y={yPos + 34}
+                        y={yPos + (bedSpacing - 20) / 2 + 4}
                         textAnchor="middle"
                         fontFamily="Geist, Inter, sans-serif"
                         fontSize="13"
                         fontWeight="500"
                         fill="#F4EFE7"
                       >
-                        {idx === 0 && tenantName !== '—'
-                          ? tenantName.split(' ')[0].substring(0, 10)
+                        {idx === 0 && displayTenantName !== '—'
+                          ? displayTenantName.split(' ')[0].substring(0, 10)
                           : `Person ${idx + 1}`}
                       </text>
                       <text
                         x="130"
-                        y={yPos + 48}
+                        y={yPos + (bedSpacing - 20) / 2 + 18}
                         textAnchor="middle"
                         fontFamily="JetBrains Mono, monospace"
                         fontSize="9"
@@ -309,7 +363,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                         x="60"
                         y={yPos}
                         width="120"
-                        height="56"
+                        height={bedSpacing - 20}
                         fill="none"
                         stroke="#B8883D"
                         strokeWidth="1"
@@ -329,7 +383,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                       />
                       <text
                         x="130"
-                        y={yPos + 38}
+                        y={yPos + (bedSpacing - 20) / 2 + 6}
                         textAnchor="middle"
                         fontFamily="Geist, Inter, sans-serif"
                         fontSize="12"
@@ -346,7 +400,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
 
             {/* RIGHT WALL beds */}
             {rightBeds.map((bed, idx) => {
-              const yPos = 60 + idx * 72
+              const yPos = 60 + idx * bedSpacing
               return (
                 <g key={bed.id}>
                   {bed.occupied ? (
@@ -355,7 +409,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                         x="300"
                         y={yPos}
                         width="120"
-                        height="56"
+                        height={bedSpacing - 20}
                         fill="#1E4D52"
                         stroke="#0D2A2D"
                         strokeWidth="0.8"
@@ -372,18 +426,18 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                       />
                       <text
                         x="360"
-                        y={yPos + 34}
+                        y={yPos + (bedSpacing - 20) / 2 + 4}
                         textAnchor="middle"
                         fontFamily="Geist, Inter, sans-serif"
                         fontSize="13"
                         fontWeight="500"
                         fill="#F4EFE7"
                       >
-                        Person {idx + 5}
+                        Person {idx + bedsPerWall + 1}
                       </text>
                       <text
                         x="360"
-                        y={yPos + 48}
+                        y={yPos + (bedSpacing - 20) / 2 + 18}
                         textAnchor="middle"
                         fontFamily="JetBrains Mono, monospace"
                         fontSize="9"
@@ -399,7 +453,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                         x="300"
                         y={yPos}
                         width="120"
-                        height="56"
+                        height={bedSpacing - 20}
                         fill="none"
                         stroke="#B8883D"
                         strokeWidth="1"
@@ -419,7 +473,7 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                       />
                       <text
                         x="360"
-                        y={yPos + 38}
+                        y={yPos + (bedSpacing - 20) / 2 + 6}
                         textAnchor="middle"
                         fontFamily="Geist, Inter, sans-serif"
                         fontSize="12"
@@ -491,11 +545,13 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 Tenant
               </p>
               <p className="font-serif italic text-[18px] text-espresso leading-tight">
-                {tenantName}
+                {displayTenantName}
               </p>
-              <p className="text-[12px] text-stone mt-1">
-                {contractType} · {peopleCount} residents
-              </p>
+              {contract.type && (
+                <p className="text-[12px] text-stone mt-1" style={{ textTransform: 'capitalize' }}>
+                  {contract.type === 'yearly' ? 'Yearly lease' : 'Monthly rental'} · {peopleCount} resident{peopleCount !== 1 ? 's' : ''}
+                </p>
+              )}
               {mobile !== '—' && (
                 <p className="text-[11px] font-mono text-stone mt-1">{mobile}</p>
               )}
@@ -503,16 +559,24 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           )}
 
           {/* Financials card */}
-          {status === 'occupied' && (rent > 0 || isInferred) && (
+          {status === 'occupied' && rent > 0 && (
             <motion.div
               style={{
                 padding: '16px',
-                background: balance > 0
-                  ? 'rgba(168, 74, 59, 0.06)'       // rust tint for outstanding (both confirmed and inferred)
-                  : 'rgba(30, 77, 82, 0.06)',        // teal tint for paid
+                background: contract.status === 'expired'
+                  ? 'rgba(168, 74, 59, 0.06)'
+                  : contract.status === 'expiring_soon'
+                  ? 'rgba(184, 136, 61, 0.08)'
+                  : balance > 0
+                  ? 'rgba(168, 74, 59, 0.06)'
+                  : 'rgba(30, 77, 82, 0.06)',
                 borderRadius: '12px',
                 border: `0.5px solid ${
-                  balance > 0
+                  contract.status === 'expired'
+                    ? 'rgba(168, 74, 59, 0.3)'
+                    : contract.status === 'expiring_soon'
+                    ? 'rgba(184, 136, 61, 0.3)'
+                    : balance > 0
                     ? 'rgba(168, 74, 59, 0.3)'
                     : 'rgba(30, 77, 82, 0.2)'
                 }`,
@@ -532,21 +596,48 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                   fontSize: '10px',
                   letterSpacing: '0.14em',
                   textTransform: 'uppercase',
-                  color: balance > 0 ? '#A84A3B' : '#1E4D52',
+                  color: contract.status === 'expired' ? '#A84A3B'
+                       : contract.status === 'expiring_soon' ? '#8B6420'
+                       : balance > 0 ? '#A84A3B'
+                       : '#1E4D52',
                   fontWeight: 600,
                   margin: 0,
                 }}>
-                  March 2026
+                  {contract.type === 'yearly' ? 'Yearly contract' : monthLabel || 'This month'}
                 </p>
                 <p style={{
                   fontSize: '10px',
-                  color: balance > 0 ? '#A84A3B' : '#1E4D52',
+                  color: balance > 0 ? '#A84A3B' : isPaid ? '#1E4D52' : '#6A6159',
                   fontWeight: 500,
                   margin: 0,
                 }}>
-                  {balance > 0 ? 'due' : '✓ settled'}
+                  {isPaid ? '✓ settled' : balance > 0 ? 'due' : ''}
                 </p>
               </div>
+
+              {/* Contract dates (yearly only) */}
+              {contract.type === 'yearly' && contract.endDate && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', padding: '3px 0' }}>
+                    <span style={{ color: '#6A6159' }}>Start</span>
+                    <span style={{ color: '#1A1816' }}>{formatDateShort(contract.startDate)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', padding: '3px 0' }}>
+                    <span style={{ color: '#6A6159' }}>End</span>
+                    <span style={{
+                      color: contract.status === 'expired' ? '#A84A3B'
+                           : contract.status === 'expiring_soon' ? '#8B6420'
+                           : '#1A1816',
+                      fontWeight: contract.status !== 'active' ? 500 : 400,
+                    }}>
+                      {formatDateShort(contract.endDate)}
+                      {contract.status === 'expired' && ` · ${Math.abs(contract.daysUntilExpiry || 0)}d ago`}
+                      {contract.status === 'expiring_soon' && ` · ${contract.daysUntilExpiry}d left`}
+                    </span>
+                  </div>
+                  <div style={{ height: '0.5px', background: 'rgba(106, 97, 89, 0.2)', margin: '8px 0' }} />
+                </>
+              )}
 
               {/* Financials */}
               <div style={{
@@ -557,10 +648,10 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 padding: '3px 0',
               }}>
                 <span style={{ color: '#6A6159' }}>
-                  Rent{isInferred && ' (est.)'}
+                  Rent
                 </span>
                 <span style={{ color: '#1A1816' }}>
-                  AED {displayRent.toLocaleString()}
+                  AED {rent.toLocaleString()}
                 </span>
               </div>
               <div style={{
@@ -591,26 +682,19 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 </span>
               </div>
 
-              {/* Inference explanation (only when inferred) */}
-              {isInferred && (
-                <div style={{
-                  marginTop: '12px',
+              {/* Remarks (legal, special notes, etc) */}
+              {remarks && (
+                <p style={{
+                  fontSize: '11px',
+                  color: '#6A6159',
+                  fontStyle: 'italic',
+                  marginTop: '10px',
                   paddingTop: '10px',
-                  borderTop: '0.5px dashed rgba(106, 97, 89, 0.25)',
+                  borderTop: '0.5px solid rgba(106, 97, 89, 0.15)',
+                  lineHeight: 1.5,
                 }}>
-                  <p style={{
-                    fontSize: '10px',
-                    color: '#6A6159',
-                    lineHeight: '1.5',
-                    margin: 0,
-                    fontStyle: 'italic',
-                  }}>
-                    This month's rent hasn't been recorded yet. Amount estimated from
-                    last recorded rent ({inferredFromMonth || 'previous month'}:
-                    AED {displayRent.toLocaleString()}). Confirm with operations and
-                    update the source spreadsheet.
-                  </p>
-                </div>
+                  {remarks}
+                </p>
               )}
             </motion.div>
           )}

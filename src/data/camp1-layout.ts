@@ -14,13 +14,26 @@
 
 export type FloorLevel = 'ground' | 'first'
 
+export type RoomType =
+  | 'standard'
+  | 'bartawi'
+  | 'office'
+  | 'security'
+  | 'cleaners'
+  | 'restaurant'
+  | 'mosque'
+  | 'electricity'
+  | 'store'
+  | 'retail'
+  | 'legal'
+
 export interface RoomPosition {
   code: string          // e.g. "A-1" (matches database room_number format)
   x: number             // x offset within block (0 = left edge)
   y: number             // y offset within block (0 = top edge)
   width: number         // room width in layout units
   height: number        // room height in layout units
-  type?: 'standard' | 'bartawi' | 'office' | 'security' | 'cleaners' | 'restaurant'
+  type?: RoomType
   label?: string        // optional override label (e.g. "OFFICE" for D-1)
 }
 
@@ -39,9 +52,11 @@ export interface BlockLayout {
   labelY: number
 }
 
+export type FacilityType = 'corridor' | 'bath_room' | 'water_tank' | 'entrance' | 'retail' | 'bus_stop' | 'security_room' | 'mosque' | 'kitchen_corridor' | 'substation' | 'gas_room' | 'pump_room' | 'store' | 'ac_room' | 'office' | 'road' | 'fence'
+
 export interface Facility {
   id: string
-  type: 'retail' | 'bus_stop' | 'security_room' | 'mosque' | 'kitchen_corridor' | 'substation' | 'gas_room' | 'pump_room' | 'water_tank' | 'store' | 'ac_room' | 'office' | 'road' | 'fence'
+  type: FacilityType
   name: string
   x: number
   y: number

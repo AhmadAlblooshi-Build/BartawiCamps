@@ -1,15 +1,17 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { endpoints } from '@/lib/api'
 import { SkyView } from '@/components/map/SkyView'
 import { BlockView } from '@/components/map/BlockView'
 import { RoomInterior } from '@/components/map/RoomInterior'
-import type { FloorLevel } from '@/data/camp1-layout'
+import { resolveCampFromRooms } from '@/data/camp-layout'
+import type { FloorLevel } from '@/data/camp-layout'
 import { getBalance } from '@/lib/room-helpers'
+import { getContractInfo } from '@/lib/contract-helpers'
 
 type MapLevel = 'sky' | 'block' | 'room'
 
@@ -26,16 +28,29 @@ export default function CampMapPage() {
 
   const rooms = roomsData?.data || []
 
+  // Detect camp code from rooms data
+  const campCode = useMemo(() => {
+    if (!rooms.length) return 'camp-01'
+    const camp = resolveCampFromRooms(rooms)
+    return camp === 'camp2' ? 'camp-02' : 'camp-01'
+  }, [rooms])
+
+  // Anomalies: outstanding balance OR expired contracts
+  const anomalies = useMemo(() => {
+    return rooms
+      .filter((r: any) => {
+        const hasBalance = getBalance(r) > 0
+        const contract = getContractInfo(r)
+        return hasBalance || contract.status === 'expired'
+      })
+      .map((r: any) => r.room_number)
+  }, [rooms])
+
   // Navigation state
   const [level, setLevel] = useState<MapLevel>('sky')
   const [selectedBlock, setSelectedBlock] = useState<string | null>(null)
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
   const [currentFloor, setCurrentFloor] = useState<FloorLevel>('ground')
-
-  // Compute anomalies (rooms with outstanding balance)
-  const anomalies = rooms
-    .filter((r: any) => getBalance(r) > 0)
-    .map((r: any) => r.room_number)
 
   // Helper to normalize room codes (handles format differences)
   function normalizeRoomCode(code: string): string {
@@ -64,8 +79,8 @@ export default function CampMapPage() {
   const handleBlockClick = (blockCode: string) => {
     setSelectedBlock(blockCode)
     setLevel('block')
-    // Auto-set floor based on block code
-    if (['AA', 'BB', 'CC', 'DD', 'EE', 'FF'].includes(blockCode)) {
+    // Auto-set floor based on block code (Camp 1 and Camp 2 both use AA/BB/CC/DD/EE/FF for first floor)
+    if (['AA', 'BB', 'CC', 'DD', 'EE', 'FF', 'SS', 'UU'].includes(blockCode)) {
       setCurrentFloor('first')
     } else {
       setCurrentFloor('ground')
@@ -128,6 +143,7 @@ export default function CampMapPage() {
         {level === 'sky' && (
           <SkyView
             key="sky"
+            campCode={campCode}
             rooms={rooms}
             onBlockClick={handleBlockClick}
             currentFloor={currentFloor}
@@ -138,6 +154,7 @@ export default function CampMapPage() {
         {level === 'block' && selectedBlock && (
           <BlockView
             key="block"
+            campCode={campCode}
             blockCode={selectedBlock}
             rooms={rooms}
             onBack={handleBackToSky}
