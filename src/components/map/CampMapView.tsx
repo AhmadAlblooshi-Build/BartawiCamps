@@ -40,8 +40,8 @@ export function CampMapView({ campId }: Props) {
     setLevel('sky')
   }
 
-  const expandRoom = (roomId: string) => {
-    setSelectedRoom(roomId)
+  const expandRoom = (roomCode: string) => {
+    setSelectedRoom(roomCode)
     setLevel('room')
   }
 
@@ -83,9 +83,9 @@ export function CampMapView({ campId }: Props) {
               onRoomClick={expandRoom}
             />
           )}
-          {level === 'room' && selectedRoom && rooms.data.find(r => r.id === selectedRoom) && (
+          {level === 'room' && selectedRoom && rooms.data.find(r => r.room_number === selectedRoom) && (
             <RoomInterior
-              room={rooms.data.find(r => r.id === selectedRoom)!}
+              room={rooms.data.find(r => r.room_number === selectedRoom)!}
               onBack={backToBlock}
             />
           )}
