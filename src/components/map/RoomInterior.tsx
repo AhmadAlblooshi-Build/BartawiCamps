@@ -24,6 +24,24 @@ interface RoomInteriorProps {
 }
 
 export function RoomInterior({ room, onBack }: RoomInteriorProps) {
+  console.log('[ROOM INTERIOR DEBUG] Component mounting')
+  console.log('[ROOM INTERIOR DEBUG] Received room prop:', room)
+  console.log('[ROOM INTERIOR DEBUG] room.id:', room?.id)
+  console.log('[ROOM INTERIOR DEBUG] room.room_number:', room?.room_number)
+  console.log('[ROOM INTERIOR DEBUG] room.block:', room?.block)
+
+  if (!room) {
+    console.error('[ROOM INTERIOR DEBUG] room prop is null/undefined!')
+    return (
+      <div className="p-12 text-center">
+        <p className="font-serif italic text-[18px] text-espresso mb-2">No room data</p>
+        <button onClick={onBack} className="px-4 py-2 bg-amber text-sand rounded-full text-[12px]">
+          ← Back
+        </button>
+      </div>
+    )
+  }
+
   const roomCode = room.room_number
   const blockCode = room.block?.code
 
