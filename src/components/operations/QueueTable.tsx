@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import type { QueueKey } from './QueueTabs'
 import type { OperationsRoom } from '@/lib/operations-data'
+import { getPaymentStatus, STATUS_COLORS, STATUS_LABELS } from '@/lib/room-helpers'
 
 interface Props {
   queue: QueueKey
@@ -109,7 +110,8 @@ export function QueueTable({ queue, rooms, selected, onSelectionChange }: Props)
                   <th style={thStyle(90, 'right')}>Rent</th>
                   <th style={thStyle(90, 'right')}>Paid</th>
                   <th style={thStyle(100, 'right')}>Balance</th>
-                  <th style={thStyle(80)}>Status</th>
+                  <th style={thStyle(80)}>Source</th>
+                  <th style={thStyle(80)}>Payment</th>
                   <th style={thStyle(0, 'left')}>Remarks</th>
                 </>
               )}
@@ -278,6 +280,27 @@ function OutstandingRow({ r, onGo }: { r: any; onGo: () => void }) {
             Confirmed
           </span>
         )}
+      </td>
+      <td style={{ ...tdStyle, textAlign: 'center' }}>
+        {(() => {
+          const status = getPaymentStatus(r)
+          const color = STATUS_COLORS[status]
+          const label = STATUS_LABELS[status]
+          return (
+            <span style={{
+              fontSize: '9px',
+              padding: '3px 8px',
+              background: `${color}1F`,
+              color: color,
+              borderRadius: '999px',
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}>
+              {label}
+            </span>
+          )
+        })()}
       </td>
       <td style={tdStyle}>
         <span style={{ fontSize: '11px', color: '#6A6159', fontStyle: 'italic' }}>

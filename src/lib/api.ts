@@ -145,6 +145,14 @@ export const endpoints = {
   logPayment: (data: any) => api.post('/payments', data),
   paymentReceiptData: (id: string) => api.get(`/payments/${id}/receipt-data`),
 
+  // --- Phase 4A: lease payments & room tenants ---
+  createPayment: (data: any) => api.post('/lease-payments', data),
+  reversePayment: (id: string, reason: string) => api.post(`/lease-payments/${id}/reverse`, { reason }),
+  leasePayments: (leaseId: string) => api.get<{ payments: any[] }>(`/lease-payments/lease/${leaseId}`),
+  tenantPayments: (tenantId: string) => api.get<{ payments: any[] }>(`/lease-payments/tenant/${tenantId}`),
+  roomTenants: (params?: Record<string, any>) => api.get<{ tenants: any[] }>(`/room-tenants${toQS(params)}`),
+  roomTenant: (id: string) => api.get<{ tenant: any }>(`/room-tenants/${id}`),
+
   // --- teams (admin) ---
   teams: () => api.get<{ data: any[] }>('/teams'),
   createTeam: (data: any) => api.post('/teams', data),

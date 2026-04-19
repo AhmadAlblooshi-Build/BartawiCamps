@@ -250,3 +250,54 @@ export function normalizeRoomCode(code: string): string {
   if (match) return `${match[1]}-${match[2]}`
   return code
 }
+
+/**
+ * PAYMENT STATUS — Single source of truth for payment state visualization
+ * Phase 4A Issue 2 fix
+ */
+export type PaymentStatus = 'paid' | 'partial' | 'unpaid' | 'vacant' | 'bartawi'
+
+/**
+ * Determine payment status for a room based on rent/paid/balance
+ */
+export function getPaymentStatus(room: any): PaymentStatus {
+  // Bartawi/service rooms
+  const propertyType = (typeof room?.property_type === 'object'
+    ? room.property_type?.name : room?.property_type) || ''
+  if (String(propertyType).toLowerCase().includes('bartawi')) return 'bartawi'
+
+  // Vacant — no active lease and no current_month tenant
+  const hasLease = !!(room?.active_lease?.id || room?.current_month?.lease_id)
+  const hasTenant = !!(room?.current_month?.tenant)
+  if (!hasLease && !hasTenant) return 'vacant'
+
+  const rent = toNumber(room?.current_month?.rent)
+  const paid = toNumber(room?.current_month?.paid)
+
+  if (rent === 0) return 'vacant'
+  if (paid === 0) return 'unpaid'
+  if (paid >= rent) return 'paid'
+  return 'partial'
+}
+
+/**
+ * Color mapping for payment status
+ */
+export const STATUS_COLORS: Record<PaymentStatus, string> = {
+  paid:    '#1E4D52',  // teal
+  partial: '#B8883D',  // amber
+  unpaid:  '#A84A3B',  // rust
+  vacant:  '#D6CFC5',  // dust
+  bartawi: '#8B6420',  // amber-gold
+}
+
+/**
+ * Label mapping for payment status
+ */
+export const STATUS_LABELS: Record<PaymentStatus, string> = {
+  paid:    'Paid',
+  partial: 'Partial',
+  unpaid:  'Unpaid',
+  vacant:  'Vacant',
+  bartawi: 'Bartawi',
+}

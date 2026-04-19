@@ -12,6 +12,8 @@ import {
   getMonthlyRent,
   getBalance,
   getPaid,
+  getPaymentStatus,
+  STATUS_COLORS,
 } from '@/lib/room-helpers'
 import { getContractInfo } from '@/lib/contract-helpers'
 import { CaretLeft } from '@phosphor-icons/react'
@@ -288,7 +290,6 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
             const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
             const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
             const balance = apiRoom ? getBalance(apiRoom) : 0
-            const hasBalance = balance > 0
             const contract = apiRoom ? getContractInfo(apiRoom) : { type: null, status: 'none', daysUntilExpiry: null, hasLegalIssue: false }
 
             const displayName = tenantName || companyName || room.label || '—'
@@ -296,46 +297,48 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
             // Position each room as a horizontal strip
             const yPos = 50 + idx * 38
 
-            const isBartawi = room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners' || room.type === 'restaurant'
             const isHovered = hoveredRoom === room.code
 
-            let fillColor = 'rgba(30, 77, 82, 0.05)'
-            let strokeColor = 'rgba(30, 77, 82, 0.3)'
-            let strokeWidth = '1'
-            let roomNumberColor = '#1A1816'
-            let textColor = '#6A6159'
+            // Payment status determines base color
+            const paymentStatus = apiRoom ? getPaymentStatus(apiRoom) : 'vacant'
+            const baseColor = STATUS_COLORS[paymentStatus]
 
-            if (status === 'occupied') {
-              fillColor = 'rgba(30, 77, 82, 0.08)'
-              strokeColor = 'rgba(30, 77, 82, 0.4)'
+            // Convert hex to rgba for fills
+            const hexToRgba = (hex: string, alpha: number) => {
+              const r = parseInt(hex.slice(1, 3), 16)
+              const g = parseInt(hex.slice(3, 5), 16)
+              const b = parseInt(hex.slice(5, 7), 16)
+              return `rgba(${r}, ${g}, ${b}, ${alpha})`
             }
-            if (isBartawi) {
-              fillColor = 'rgba(184, 136, 61, 0.1)'
-              strokeColor = 'rgba(184, 136, 61, 0.5)'
-              roomNumberColor = '#8B6420'
-              textColor = '#8B6420'
-            }
-            if (status === 'vacant' && !isBartawi) {
+
+            let fillColor = hexToRgba(baseColor, 0.08)
+            let strokeColor = baseColor
+            let strokeWidth = '1'
+            let roomNumberColor = paymentStatus === 'bartawi' ? '#8B6420' : '#1A1816'
+            let textColor = paymentStatus === 'bartawi' ? '#8B6420' : '#6A6159'
+
+            // Vacant rooms: lighter fill
+            if (paymentStatus === 'vacant') {
               fillColor = 'none'
-              strokeColor = '#B8883D'
+              strokeColor = '#D6CFC5'
               strokeWidth = '1'
             }
-            // Contract states
+
+            // Contract states override (visual priority for expiry)
             if (contract.status === 'expired') {
-              fillColor = 'rgba(139, 100, 32, 0.1)'
               strokeColor = '#8B6420'
               strokeWidth = '1.5'
             }
             if (contract.status === 'expiring_soon') {
-              fillColor = 'rgba(184, 136, 61, 0.12)'
               strokeColor = '#B8883D'
               strokeWidth = '1.5'
             }
-            // Outstanding overrides all (highest priority)
-            if (hasBalance) {
-              strokeColor = '#A84A3B'
+
+            // Payment status: unpaid and partial get thicker stroke
+            if (paymentStatus === 'unpaid' || paymentStatus === 'partial') {
               strokeWidth = '1.5'
             }
+
             // Hover state overrides
             if (isHovered) {
               fillColor = 'rgba(184, 136, 61, 0.15)'
@@ -371,7 +374,7 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   fill={fillColor}
                   stroke={strokeColor}
                   strokeWidth={strokeWidth}
-                  strokeDasharray={status === 'vacant' && !isBartawi ? '4 3' : undefined}
+                  strokeDasharray={status === 'vacant' && paymentStatus !== 'bartawi' ? '4 3' : undefined}
                   rx="3"
                   className="transition-all duration-150"
                 />
@@ -396,11 +399,11 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   fontFamily="Geist, Inter, sans-serif"
                   fontSize="9"
                   fill={textColor}
-                  fontStyle={status === 'vacant' && !isBartawi ? 'italic' : 'normal'}
+                  fontStyle={status === 'vacant' && paymentStatus !== 'bartawi' ? 'italic' : 'normal'}
                 >
-                  {status === 'vacant' && !isBartawi
+                  {status === 'vacant' && paymentStatus !== 'bartawi'
                     ? 'vacant'
-                    : isBartawi
+                    : paymentStatus === 'bartawi'
                     ? `${displayName} · Bartawi use`
                     : `${displayName.substring(0, 28)} · ${peopleCount}/8`}
                 </text>
@@ -413,7 +416,7 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   fontFamily="JetBrains Mono, monospace"
                   fontSize="9"
                   fill={
-                    hasBalance ? '#A84A3B' :
+                    balance > 0 ? '#A84A3B' :
                     contract.status === 'expired' ? '#8B6420' :
                     contract.status === 'expiring_soon' ? '#B8883D' :
                     status === 'occupied' ? '#1E4D52' :
@@ -421,8 +424,8 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   }
                 >
                   {(() => {
-                    if (isBartawi && rent === 0) return '—'
-                    if (hasBalance) return `AED ${balance.toLocaleString()} due`
+                    if (paymentStatus === 'bartawi' && rent === 0) return '—'
+                    if (balance > 0) return `AED ${balance.toLocaleString()} due`
 
                     // Yearly contracts — show expiry status
                     if (contract.type === 'yearly') {
@@ -463,53 +466,54 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
             const peopleCount = apiRoom ? getPeopleCount(apiRoom) : 0
             const rent = apiRoom ? getMonthlyRent(apiRoom) : 0
             const balance = apiRoom ? getBalance(apiRoom) : 0
-            const hasBalance = balance > 0
             const contract = apiRoom ? getContractInfo(apiRoom) : { type: null, status: 'none', daysUntilExpiry: null, hasLegalIssue: false }
 
             const displayName = tenantName || companyName || room.label || '—'
 
             const yPos = 50 + idx * 38
 
-            const isBartawi = room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners' || room.type === 'restaurant'
             const isHovered = hoveredRoom === room.code
 
-            let fillColor = 'rgba(30, 77, 82, 0.05)'
-            let strokeColor = 'rgba(30, 77, 82, 0.3)'
-            let strokeWidth = '1'
-            let roomNumberColor = '#1A1816'
-            let textColor = '#6A6159'
+            // Payment status determines base color
+            const paymentStatus = apiRoom ? getPaymentStatus(apiRoom) : 'vacant'
+            const baseColor = STATUS_COLORS[paymentStatus]
 
-            if (status === 'occupied') {
-              fillColor = 'rgba(30, 77, 82, 0.08)'
-              strokeColor = 'rgba(30, 77, 82, 0.4)'
+            // Convert hex to rgba for fills
+            const hexToRgba = (hex: string, alpha: number) => {
+              const r = parseInt(hex.slice(1, 3), 16)
+              const g = parseInt(hex.slice(3, 5), 16)
+              const b = parseInt(hex.slice(5, 7), 16)
+              return `rgba(${r}, ${g}, ${b}, ${alpha})`
             }
-            if (isBartawi) {
-              fillColor = 'rgba(184, 136, 61, 0.1)'
-              strokeColor = 'rgba(184, 136, 61, 0.5)'
-              roomNumberColor = '#8B6420'
-              textColor = '#8B6420'
-            }
-            if (status === 'vacant' && !isBartawi) {
+
+            let fillColor = hexToRgba(baseColor, 0.08)
+            let strokeColor = baseColor
+            let strokeWidth = '1'
+            let roomNumberColor = paymentStatus === 'bartawi' ? '#8B6420' : '#1A1816'
+            let textColor = paymentStatus === 'bartawi' ? '#8B6420' : '#6A6159'
+
+            // Vacant rooms: lighter fill
+            if (paymentStatus === 'vacant') {
               fillColor = 'none'
-              strokeColor = '#B8883D'
+              strokeColor = '#D6CFC5'
               strokeWidth = '1'
             }
-            // Contract states
+
+            // Contract states override (visual priority for expiry)
             if (contract.status === 'expired') {
-              fillColor = 'rgba(139, 100, 32, 0.1)'
               strokeColor = '#8B6420'
               strokeWidth = '1.5'
             }
             if (contract.status === 'expiring_soon') {
-              fillColor = 'rgba(184, 136, 61, 0.12)'
               strokeColor = '#B8883D'
               strokeWidth = '1.5'
             }
-            // Outstanding overrides all (highest priority)
-            if (hasBalance) {
-              strokeColor = '#A84A3B'
+
+            // Payment status: unpaid and partial get thicker stroke
+            if (paymentStatus === 'unpaid' || paymentStatus === 'partial') {
               strokeWidth = '1.5'
             }
+
             // Hover state overrides
             if (isHovered) {
               fillColor = 'rgba(184, 136, 61, 0.15)'
@@ -545,7 +549,7 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   fill={fillColor}
                   stroke={strokeColor}
                   strokeWidth={strokeWidth}
-                  strokeDasharray={status === 'vacant' && !isBartawi ? '4 3' : undefined}
+                  strokeDasharray={status === 'vacant' && paymentStatus !== 'bartawi' ? '4 3' : undefined}
                   rx="3"
                   className="transition-all duration-150"
                 />
@@ -568,11 +572,11 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   fontFamily="Geist, Inter, sans-serif"
                   fontSize="9"
                   fill={textColor}
-                  fontStyle={status === 'vacant' && !isBartawi ? 'italic' : 'normal'}
+                  fontStyle={status === 'vacant' && paymentStatus !== 'bartawi' ? 'italic' : 'normal'}
                 >
-                  {status === 'vacant' && !isBartawi
+                  {status === 'vacant' && paymentStatus !== 'bartawi'
                     ? 'vacant'
-                    : isBartawi
+                    : paymentStatus === 'bartawi'
                     ? `${displayName} · Bartawi use`
                     : `${displayName.substring(0, 28)} · ${peopleCount}/8`}
                 </text>
@@ -584,7 +588,7 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   fontFamily="JetBrains Mono, monospace"
                   fontSize="9"
                   fill={
-                    hasBalance ? '#A84A3B' :
+                    balance > 0 ? '#A84A3B' :
                     contract.status === 'expired' ? '#8B6420' :
                     contract.status === 'expiring_soon' ? '#B8883D' :
                     status === 'occupied' ? '#1E4D52' :
@@ -592,8 +596,8 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   }
                 >
                   {(() => {
-                    if (isBartawi && rent === 0) return '—'
-                    if (hasBalance) return `AED ${balance.toLocaleString()} due`
+                    if (paymentStatus === 'bartawi' && rent === 0) return '—'
+                    if (balance > 0) return `AED ${balance.toLocaleString()} due`
 
                     // Yearly contracts — show expiry status
                     if (contract.type === 'yearly') {

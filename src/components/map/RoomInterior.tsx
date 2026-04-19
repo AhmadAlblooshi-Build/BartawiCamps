@@ -18,8 +18,13 @@ import {
   getContractType,
   getCurrentMonthLabel,
   getRemarks,
+  getPaymentStatus,
+  STATUS_COLORS,
+  STATUS_LABELS,
 } from '@/lib/room-helpers'
 import { getContractInfo, formatDateShort } from '@/lib/contract-helpers'
+import { formatMethod, formatDateLong, type PaymentMethod } from '@/lib/payment-helpers'
+import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
 import { CaretLeft } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
@@ -56,6 +61,14 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
     enabled: !!room.id,
   })
 
+  // Fetch payment history for active lease
+  const leaseId = room.current_month?.lease_id || room.active_lease?.id
+  const { data: paymentsData } = useQuery({
+    queryKey: ['lease-payments', leaseId],
+    queryFn: () => endpoints.leasePayments(leaseId),
+    enabled: !!leaseId,
+  })
+
   const contract = getContractInfo(room)
   const status = getRoomStatus(room)
   const companyName = getCompanyName(room)
@@ -78,13 +91,33 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const monthLabel = getCurrentMonthLabel(room)
   const isPaid = balance === 0 && rent > 0
 
+  // Payment status for visualization
+  const paymentStatus = getPaymentStatus(room)
+  const statusColor = STATUS_COLORS[paymentStatus]
+  const statusLabel = STATUS_LABELS[paymentStatus]
+
   const isBartawi = ['Bartawi', 'bartawi_use'].includes(status) ||
                     ['A-17', 'A-18', 'A-19', 'C-11', 'C-20', 'D-1'].includes(roomCode)
+
+  // Payment capabilities
+  const hasActiveLease = !!(room.active_lease?.id || room.current_month?.lease_id)
+  const canLogRent = hasActiveLease && balance > 0
+  const depositRemaining = (room.active_lease?.deposit_amount || 0) - (room.active_lease?.deposit_paid || 0)
+  const canLogDeposit = hasActiveLease && depositRemaining > 0
+
+  const handleOpenPaymentDialog = (type: 'rent' | 'deposit') => {
+    setPaymentType(type)
+    setPaymentDialogOpen(true)
+  }
 
   // Hover states for action buttons
   const [hoverLogPayment, setHoverLogPayment] = useState(false)
   const [hoverGiveNotice, setHoverGiveNotice] = useState(false)
   const [hoverNewLease, setHoverNewLease] = useState(false)
+
+  // Payment dialog state
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
+  const [paymentType, setPaymentType] = useState<'rent' | 'deposit'>('rent')
 
   // Variable capacity bed layout (4-16 people, tighter spacing for 10+)
   const bedsPerWall = Math.ceil(maxCapacity / 2)
@@ -639,6 +672,39 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 </>
               )}
 
+              {/* Payment Status Badge */}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '6px 12px',
+                background: `${statusColor}14`,
+                border: `0.5px solid ${statusColor}`,
+                borderRadius: '999px',
+                marginBottom: '12px',
+              }}>
+                <div style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: statusColor,
+                }} />
+                <span style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: statusColor,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                }}>
+                  {statusLabel}
+                  {paymentStatus === 'partial' && room?.current_month && (
+                    <span style={{ marginLeft: 8, opacity: 0.8, fontFamily: 'JetBrains Mono, monospace' }}>
+                      {Number(room.current_month.paid).toLocaleString()} / {Number(room.current_month.rent).toLocaleString()}
+                    </span>
+                  )}
+                </span>
+              </div>
+
               {/* Financials */}
               <div style={{
                 display: 'flex',
@@ -738,6 +804,57 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
             </motion.div>
           )}
 
+          {/* Payment History */}
+          {paymentsData?.payments && paymentsData.payments.length > 0 && (
+            <motion.div
+              className="p-4 bg-paper rounded-xl border border-dust"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.28 }}
+            >
+              <p className="text-[10px] tracking-[0.14em] uppercase text-stone mb-2.5 font-medium">
+                Payment History
+              </p>
+              <div className="space-y-2">
+                {paymentsData.payments.slice(0, 6).map((payment: any) => {
+                  const isReversed = payment.reversed
+                  const amount = Number(payment.amount)
+                  const method = payment.method as PaymentMethod
+                  const date = payment.payment_date
+
+                  return (
+                    <div
+                      key={payment.id}
+                      className="flex justify-between items-start text-[11px] pb-2 border-b border-dust/50 last:border-0"
+                    >
+                      <div className="flex-1">
+                        <p className="font-mono text-espresso">
+                          AED {amount.toLocaleString()}
+                          {isReversed && (
+                            <span className="ml-2 text-[9px] text-rust font-medium">REVERSED</span>
+                          )}
+                        </p>
+                        <p className="text-[10px] text-stone mt-0.5">
+                          {formatMethod(method)}
+                          {payment.cheque_number && ` • #${payment.cheque_number}`}
+                          {payment.transfer_reference && ` • ${payment.transfer_reference}`}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] text-stone">{formatDateLong(date)}</p>
+                        {payment.payment_type && (
+                          <p className="text-[9px] text-stone/70 mt-0.5 capitalize">
+                            {payment.payment_type}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </motion.div>
+          )}
+
           {/* Action buttons */}
           {status === 'occupied' && (
             <motion.div
@@ -747,24 +864,27 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
               transition={{ delay: 0.3 }}
             >
               <button
-                disabled
+                disabled={!canLogRent && !canLogDeposit}
+                onClick={() => handleOpenPaymentDialog(canLogRent ? 'rent' : 'deposit')}
                 onMouseEnter={() => setHoverLogPayment(true)}
                 onMouseLeave={() => setHoverLogPayment(false)}
-                title="Available in Phase 4"
+                title={!canLogRent && !canLogDeposit ? 'No outstanding balance' : 'Log payment'}
                 style={{
                   flex: 1,
                   padding: '11px 14px',
-                  background: hoverLogPayment ? '#A0732E' : '#B8883D',
-                  color: '#FAF7F2',
+                  background: !canLogRent && !canLogDeposit
+                    ? '#E5DFD5'
+                    : hoverLogPayment ? '#A0732E' : '#B8883D',
+                  color: !canLogRent && !canLogDeposit ? '#9C948B' : '#FAF7F2',
                   border: 'none',
                   borderRadius: '999px',
                   fontSize: '12px',
                   fontWeight: 500,
                   letterSpacing: '0.02em',
-                  cursor: 'not-allowed',
-                  opacity: 0.85,
+                  cursor: !canLogRent && !canLogDeposit ? 'not-allowed' : 'pointer',
+                  opacity: !canLogRent && !canLogDeposit ? 0.5 : 1,
                   transition: 'all 0.2s ease',
-                  boxShadow: hoverLogPayment ? '0 2px 8px rgba(184, 136, 61, 0.35)' : 'none',
+                  boxShadow: hoverLogPayment && (canLogRent || canLogDeposit) ? '0 2px 8px rgba(184, 136, 61, 0.35)' : 'none',
                 }}
               >
                 Log payment
@@ -859,6 +979,14 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
           )}
         </div>
       </div>
+
+      {/* Payment Dialog */}
+      <LogPaymentDialog
+        open={paymentDialogOpen}
+        onClose={() => setPaymentDialogOpen(false)}
+        room={room}
+        paymentType={paymentType}
+      />
     </motion.div>
   )
 }
