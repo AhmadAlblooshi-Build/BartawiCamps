@@ -1,22 +1,17 @@
 'use client'
 
-import { useState } from 'react'
 import { motion } from 'motion/react'
-import {
-  getBlocksByFloor,
-  CAMP1_FACILITIES,
-  type FloorLevel,
-  type BlockLayout,
-} from '@/data/camp1-layout'
-import { getRoomStatus } from '@/lib/room-helpers'
+import { useState } from 'react'
+import { getBlocksByFloor, type FloorLevel, type BlockLayout } from '@/data/camp1-layout'
+import { getRoomStatus, getMonthlyRent, getBalance, getPaid } from '@/lib/room-helpers'
 import { cn } from '@/lib/utils'
 
 interface SkyViewProps {
-  rooms: any[]                              // API rooms data for current camp
+  rooms: any[]
   onBlockClick: (blockCode: string) => void
   currentFloor: FloorLevel
   onFloorChange: (floor: FloorLevel) => void
-  anomalies?: string[]                      // Optional: array of room codes with outstanding balance
+  anomalies?: string[]
 }
 
 export function SkyView({
@@ -26,95 +21,28 @@ export function SkyView({
   onFloorChange,
   anomalies = [],
 }: SkyViewProps) {
-  const blocks = getBlocksByFloor(currentFloor)
   const [hoveredBlock, setHoveredBlock] = useState<string | null>(null)
+  const blocks = getBlocksByFloor(currentFloor)
 
   // Compute per-block stats from real data
   const getBlockStats = (block: BlockLayout) => {
-    const blockRooms = rooms.filter(r => r.block?.code === block.code)
-    const occupied = blockRooms.filter(r => getRoomStatus(r) === 'occupied').length
+    const blockRooms = rooms.filter((r: any) => r.block?.code === block.code)
+    const occupied = blockRooms.filter((r: any) => getRoomStatus(r) === 'occupied').length
     const total = blockRooms.length || block.rooms.length
     const rate = total > 0 ? (occupied / total) * 100 : 0
+
+    const totalPaid = blockRooms.reduce((sum: number, r: any) => sum + getPaid(r), 0)
+    const totalOutstanding = blockRooms.reduce((sum: number, r: any) => sum + getBalance(r), 0)
+    const totalRent = blockRooms.reduce((sum: number, r: any) => sum + getMonthlyRent(r), 0)
+
     const hasAnomaly = block.rooms.some(r => anomalies.includes(r.code))
-    return { occupied, total, rate, hasAnomaly }
+    return { occupied, total, rate, totalPaid, totalOutstanding, totalRent, hasAnomaly }
   }
 
   return (
-    <div className="relative w-full">
-      {/* Mobile fallback - simple block list */}
-      <div className="sm:hidden px-4 py-6 space-y-4">
-        <div>
-          <p className="font-serif text-[22px] italic text-espresso leading-tight">
-            Camp 1 · {currentFloor === 'ground' ? 'Ground Floor' : 'First Floor'}
-          </p>
-          <p className="text-[11px] tracking-[0.12em] uppercase text-stone mt-1 font-medium">
-            Labor Camp-1 · Plot 3650169 · {blocks.length} blocks
-          </p>
-        </div>
-
-        {/* Floor toggle */}
-        <div className="flex gap-1 p-1 bg-dust rounded-full w-fit">
-          <button
-            onClick={() => onFloorChange('ground')}
-            className={cn(
-              'px-3 py-1.5 text-[10px] font-semibold tracking-wider uppercase rounded-full transition-colors',
-              currentFloor === 'ground'
-                ? 'bg-amber text-sand'
-                : 'text-stone hover:text-espresso'
-            )}
-          >
-            Ground
-          </button>
-          <button
-            onClick={() => onFloorChange('first')}
-            className={cn(
-              'px-3 py-1.5 text-[10px] font-semibold tracking-wider uppercase rounded-full transition-colors',
-              currentFloor === 'first'
-                ? 'bg-amber text-sand'
-                : 'text-stone hover:text-espresso'
-            )}
-          >
-            First
-          </button>
-        </div>
-
-        {/* 2-column block grid */}
-        <div className="grid grid-cols-2 gap-3">
-          {blocks.map(block => {
-            const stats = getBlockStats(block)
-            const isHotspot = stats.hasAnomaly
-
-            return (
-              <button
-                key={block.code}
-                onClick={() => onBlockClick(block.code)}
-                className={cn(
-                  'p-4 rounded-lg border-2 text-left transition-all',
-                  isHotspot
-                    ? 'border-rust bg-rust/5'
-                    : 'border-dust bg-paper hover:bg-dust/30'
-                )}
-              >
-                <p className="font-serif text-[20px] italic text-espresso">{block.code}</p>
-                <p className="font-mono text-[11px] text-stone mt-1">
-                  {stats.occupied}/{stats.total} · {Math.round(stats.rate)}%
-                </p>
-                <div className="w-full h-1 bg-dust rounded-full mt-2 overflow-hidden">
-                  <div
-                    className={cn('h-full', isHotspot ? 'bg-rust' : 'bg-teal')}
-                    style={{ width: `${stats.rate}%` }}
-                  />
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Desktop SVG view - hidden on mobile */}
-      <div className="hidden sm:block">
+    <div className="w-full">
       {/* Header */}
-      <div className="flex justify-between items-start mb-4 px-6 pt-6">
+      <div className="flex justify-between items-start px-6 pt-6 pb-4">
         <div>
           <p className="font-serif text-[22px] italic text-espresso leading-tight">
             Camp 1 · {currentFloor === 'ground' ? 'Ground Floor' : 'First Floor'}
@@ -150,427 +78,117 @@ export function SkyView({
         </div>
       </div>
 
-      {/* The architectural SVG */}
-      <div className="px-4 pb-6">
-        <motion.svg
-          viewBox="0 0 720 780"
-          xmlns="http://www.w3.org/2000/svg"
-          className="w-full h-auto"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.4 }}
-        >
-          {/* Background grid (finer for professional architectural feel) */}
-          <defs>
-            <pattern id="micro-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-              <path
-                d="M 10 0 L 0 0 0 10"
-                fill="none"
-                stroke="rgba(214,207,197,0.25)"
-                strokeWidth="0.3"
-              />
-            </pattern>
-            <pattern id="major-grid" width="50" height="50" patternUnits="userSpaceOnUse">
-              <path
-                d="M 50 0 L 0 0 0 50"
-                fill="none"
-                stroke="rgba(214,207,197,0.45)"
-                strokeWidth="0.4"
-              />
-            </pattern>
-          </defs>
-          <rect width="720" height="780" fill="url(#micro-grid)" />
-          <rect width="720" height="780" fill="url(#major-grid)" />
-
-          {/* Steel fence perimeter (dashed) */}
-          <rect
-            x="10"
-            y="10"
-            width="700"
-            height="760"
-            fill="none"
-            stroke="#D6CFC5"
-            strokeWidth="1.5"
-            strokeDasharray="3 4"
-          />
-
-          {/* Front entrance label */}
-          <text
-            x="360"
-            y="28"
-            textAnchor="middle"
-            fontFamily="Geist, Inter, sans-serif"
-            fontSize="10"
-            letterSpacing="2"
-            fill="#9C948B"
-          >
-            ▼ FRONT ENTRANCE · NORTH
-          </text>
-
-          {/* Back door label */}
-          <text
-            x="360"
-            y="770"
-            textAnchor="middle"
-            fontFamily="Geist, Inter, sans-serif"
-            fontSize="10"
-            letterSpacing="2"
-            fill="#9C948B"
-          >
-            ▲ BACK DOOR · SOUTH
-          </text>
-
-          {/* Retail strip */}
-          {CAMP1_FACILITIES.filter(f => f.type === 'retail').map(shop => (
-            <g key={shop.id}>
-              <rect
-                x={shop.x}
-                y={shop.y}
-                width={shop.width}
-                height={shop.height}
-                fill="#F4EFE7"
-                stroke="#D6CFC5"
-                strokeWidth="0.5"
-                rx="2"
-              />
-              <text
-                x={shop.x + shop.width / 2}
-                y={shop.y + shop.height / 2 - 2}
-                textAnchor="middle"
-                fontFamily="Geist, Inter, sans-serif"
-                fontSize="8"
-                fontWeight="500"
-                fill="#6A6159"
-              >
-                {shop.name.split(' ')[0].toUpperCase()}
-              </text>
-              <text
-                x={shop.x + shop.width / 2}
-                y={shop.y + shop.height / 2 + 9}
-                textAnchor="middle"
-                fontFamily="Geist, Inter, sans-serif"
-                fontSize="7"
-                fill="#9C948B"
-              >
-                {shop.name.split(' ').slice(1).join(' ').substring(0, 14)}
-              </text>
-            </g>
-          ))}
-
-          {/* Bus stop */}
-          {CAMP1_FACILITIES.filter(f => f.type === 'bus_stop').map(f => (
-            <g key={f.id}>
-              <rect
-                x={f.x}
-                y={f.y}
-                width={f.width}
-                height={f.height}
-                fill="#E8E0D6"
-                stroke="#D6CFC5"
-                strokeWidth="0.5"
-                rx="2"
-              />
-              <text
-                x={f.x + f.width / 2}
-                y={f.y + f.height / 2 + 3}
-                textAnchor="middle"
-                fontFamily="JetBrains Mono, monospace"
-                fontSize="8"
-                letterSpacing="1"
-                fill="#6A6159"
-              >
-                BUS STOP
-              </text>
-            </g>
-          ))}
-
-          {/* Security room */}
-          {CAMP1_FACILITIES.filter(f => f.type === 'security_room').map(f => (
-            <g key={f.id}>
-              <rect
-                x={f.x}
-                y={f.y}
-                width={f.width}
-                height={f.height}
-                fill="#E8E0D6"
-                stroke="#D6CFC5"
-                strokeWidth="0.5"
-                rx="2"
-              />
-              <text
-                x={f.x + f.width / 2}
-                y={f.y + f.height / 2 + 3}
-                textAnchor="middle"
-                fontFamily="JetBrains Mono, monospace"
-                fontSize="8"
-                letterSpacing="1"
-                fill="#6A6159"
-              >
-                SECURITY
-              </text>
-            </g>
-          ))}
-
-          {/* Kitchen corridor */}
-          {CAMP1_FACILITIES.filter(f => f.type === 'kitchen_corridor').map(f => (
-            <g key={f.id}>
-              <rect
-                x={f.x}
-                y={f.y}
-                width={f.width}
-                height={f.height}
-                fill="#E8E0D6"
-                stroke="#D6CFC5"
-                strokeWidth="0.5"
-                rx="2"
-              />
-              <text
-                x={f.x + f.width / 2}
-                y={f.y + f.height / 2 + 3}
-                textAnchor="middle"
-                fontFamily="JetBrains Mono, monospace"
-                fontSize="9"
-                letterSpacing="3"
-                fontWeight="500"
-                fill="#6A6159"
-              >
-                {f.name.toUpperCase()}
-              </text>
-            </g>
-          ))}
-
-          {/* Mosque */}
-          {CAMP1_FACILITIES.filter(f => f.type === 'mosque').map(f => (
-            <g key={f.id}>
-              <rect
-                x={f.x}
-                y={f.y}
-                width={f.width}
-                height={f.height}
-                fill="#D8E3E4"
-                stroke="#1E4D52"
-                strokeWidth="0.8"
-                rx="4"
-              />
-              {/* Dome shape */}
-              <path
-                d={`M ${f.x + 15} ${f.y + 22} Q ${f.x + f.width / 2} ${f.y + 12} ${f.x + f.width - 15} ${f.y + 22}`}
-                fill="none"
-                stroke="#1E4D52"
-                strokeWidth="1"
-              />
-              <text
-                x={f.x + f.width / 2}
-                y={f.y + f.height - 6}
-                textAnchor="middle"
-                fontFamily="JetBrains Mono, monospace"
-                fontSize="9"
-                letterSpacing="2"
-                fontWeight="500"
-                fill="#1E4D52"
-              >
-                MOSQUE
-              </text>
-            </g>
-          ))}
-
-          {/* Other utility rooms — only on ground floor */}
-          {currentFloor === 'ground' &&
-            CAMP1_FACILITIES.filter(f =>
-              ['gas_room', 'pump_room', 'water_tank', 'store', 'ac_room', 'substation'].includes(f.type)
-            ).map(f => (
-              <g key={f.id}>
-                <rect
-                  x={f.x}
-                  y={f.y}
-                  width={f.width}
-                  height={f.height}
-                  fill="#F0E8D6"
-                  stroke="#D6CFC5"
-                  strokeWidth="0.5"
-                  rx="1"
-                />
-                <text
-                  x={f.x + f.width / 2}
-                  y={f.y + f.height / 2 + 3}
-                  textAnchor="middle"
-                  fontFamily="JetBrains Mono, monospace"
-                  fontSize="7"
-                  fill="#6A6159"
-                >
-                  {f.name.toUpperCase().substring(0, 10)}
-                </text>
-              </g>
-            ))}
-
-          {/* BLOCKS — the main interactive elements */}
-          {blocks.map(block => {
+      {/* 3×2 grid of block cards */}
+      <div className="px-6 pb-4">
+        <div className="grid grid-cols-3 gap-4">
+          {blocks.map((block) => {
             const stats = getBlockStats(block)
-            const isHotspot = stats.hasAnomaly
             const isHovered = hoveredBlock === block.code
-
-            // Color based on occupancy
-            let fillColor = 'rgba(30, 77, 82, 0.08)'
-            let strokeColor = 'rgba(30, 77, 82, 0.4)'
-            if (stats.rate === 100) {
-              fillColor = 'rgba(30, 77, 82, 0.12)'
-              strokeColor = 'rgba(30, 77, 82, 0.5)'
-            } else if (stats.rate < 50) {
-              fillColor = 'rgba(184, 136, 61, 0.1)'
-              strokeColor = 'rgba(184, 136, 61, 0.5)'
-            }
-            if (isHotspot) {
-              strokeColor = '#A84A3B'
-            }
-            // Hover state overrides
-            if (isHovered) {
-              fillColor = 'rgba(184, 136, 61, 0.12)'
-              strokeColor = '#B8883D'
-            }
+            const isHotspot = stats.hasAnomaly
 
             return (
-              <motion.g
+              <motion.button
                 key={block.code}
                 layoutId={`block-${block.code}`}
+                onClick={() => onBlockClick(block.code)}
                 onMouseEnter={() => setHoveredBlock(block.code)}
                 onMouseLeave={() => setHoveredBlock(null)}
-                className="cursor-pointer"
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                style={{ transformOrigin: `${block.skyX + block.skyWidth / 2}px ${block.skyY + block.skyHeight / 2}px` }}
+                className={cn(
+                  'relative text-left bg-paper border rounded-xl p-5 transition-all duration-200',
+                  isHovered
+                    ? 'border-amber shadow-sm'
+                    : isHotspot
+                    ? 'border-rust/40'
+                    : 'border-dust'
+                )}
               >
-                {/* Block outline */}
-                <rect
-                  x={block.skyX}
-                  y={block.skyY}
-                  width={block.skyWidth}
-                  height={block.skyHeight}
-                  fill={fillColor}
-                  stroke={strokeColor}
-                  strokeWidth={isHovered ? '2.5' : (isHotspot ? '2' : '1.5')}
-                  rx="4"
-                  className="transition-all duration-200"
-                />
+                {/* Block code — large italic */}
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <p className="font-serif italic text-[32px] text-espresso leading-none">
+                      {block.code}
+                    </p>
+                    <p className="text-[10px] tracking-[0.12em] uppercase text-stone mt-1 font-medium">
+                      {currentFloor === 'ground' ? 'Ground' : 'First'} floor
+                    </p>
+                  </div>
+                  {isHotspot && (
+                    <span className="px-2 py-0.5 text-[9px] font-semibold tracking-wider uppercase bg-rust/12 text-rust rounded-full">
+                      ● Due
+                    </span>
+                  )}
+                </div>
 
-                {/* Block code — larger with more breathing room */}
-                <text
-                  x={block.labelX}
-                  y={block.skyY + 32}
-                  textAnchor="middle"
-                  fontFamily="Fraunces, Georgia, serif"
-                  fontStyle="italic"
-                  fontSize="26"
-                  fontWeight="500"
-                  fill="#1A1816"
-                >
-                  {block.code}
-                </text>
-
-                {/* Stats line — just below block code */}
-                <text
-                  x={block.labelX}
-                  y={block.skyY + 50}
-                  textAnchor="middle"
-                  fontFamily="JetBrains Mono, monospace"
-                  fontSize="9"
-                  letterSpacing="1.5"
-                  fill="#6A6159"
-                >
-                  {stats.occupied}/{stats.total} · {Math.round(stats.rate)}%
-                </text>
-
-                {/* Mini room grid — visual density indicator (distributed evenly) */}
-                {block.rooms.slice(0, 22).map((room, idx) => {
-                  const apiRoom = rooms.find(r => r.room_number === room.code)
-                  const status = apiRoom ? getRoomStatus(apiRoom) : 'vacant'
-                  const hasAnomaly = anomalies.includes(room.code)
-
-                  // Distribute dots across larger area for better visual balance
-                  const col = idx % 11
-                  const row = Math.floor(idx / 11)
-                  const dotX = block.skyX + 14 + col * 10     // was 10+7 — wider spacing
-                  const dotY = block.skyY + 70 + row * 14     // was 60+10 — taller spacing, centered in block
-
-                  let dotFill = '#E8DFD3'
-                  let dotStroke = '#D6CFC5'
-                  if (status === 'occupied') dotFill = '#1E4D52'
-                  if (room.type === 'bartawi' || room.type === 'office' || room.type === 'security' || room.type === 'cleaners') {
-                    dotFill = '#B8883D'
-                  }
-                  if (hasAnomaly) {
-                    dotFill = '#A84A3B'
-                    dotStroke = '#A84A3B'
-                  }
-
-                  return (
-                    <circle
-                      key={room.code}
-                      cx={dotX}
-                      cy={dotY}
-                      r="3"
-                      fill={dotFill}
-                      stroke={dotStroke}
-                      strokeWidth="0.4"
+                {/* Occupancy bar */}
+                <div className="mb-4">
+                  <div className="flex justify-between items-baseline mb-1.5">
+                    <span className="text-[10px] tracking-[0.1em] uppercase text-stone font-medium">
+                      Occupancy
+                    </span>
+                    <span className="font-mono text-[12px] text-espresso font-medium">
+                      {stats.occupied}/{stats.total}
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-dust/60 rounded-full overflow-hidden">
+                    <motion.div
+                      className={cn(
+                        'h-full rounded-full',
+                        stats.rate === 100 ? 'bg-teal' : 'bg-amber'
+                      )}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${stats.rate}%` }}
+                      transition={{ duration: 0.6, ease: 'easeOut' }}
                     />
-                  )
-                })}
+                  </div>
+                  <p className="font-mono text-[10px] text-stone mt-1 text-right">
+                    {Math.round(stats.rate)}%
+                  </p>
+                </div>
 
-                {/* Progress bar INSIDE block at bottom edge (thin line) */}
-                <g>
-                  <rect
-                    x={block.skyX + 4}
-                    y={block.skyY + block.skyHeight - 8}
-                    width={block.skyWidth - 8}
-                    height="2"
-                    fill="rgba(214, 207, 197, 0.5)"
-                    rx="1"
-                  />
-                  <rect
-                    x={block.skyX + 4}
-                    y={block.skyY + block.skyHeight - 8}
-                    width={(block.skyWidth - 8) * (stats.rate / 100)}
-                    height="2"
-                    fill={isHotspot ? '#A84A3B' : (stats.rate === 100 ? '#1E4D52' : '#B8883D')}
-                    rx="1"
-                  />
-                </g>
-
-                {/* Invisible click target for reliable clicks */}
-                <rect
-                  x={block.skyX}
-                  y={block.skyY}
-                  width={block.skyWidth}
-                  height={block.skyHeight}
-                  fill="transparent"
-                  className="cursor-pointer"
-                  onClick={() => onBlockClick(block.code)}
-                />
-              </motion.g>
+                {/* Financials (compact) */}
+                <div className="pt-3 border-t border-dust">
+                  <div className="flex justify-between items-baseline mb-1">
+                    <span className="text-[10px] tracking-[0.1em] uppercase text-stone font-medium">
+                      Collected
+                    </span>
+                    <span className="font-mono text-[13px] text-espresso font-medium">
+                      AED {stats.totalPaid.toLocaleString()}
+                    </span>
+                  </div>
+                  {stats.totalOutstanding > 0 && (
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-[10px] tracking-[0.1em] uppercase text-rust font-medium">
+                        Outstanding
+                      </span>
+                      <span className="font-mono text-[12px] text-rust font-medium">
+                        AED {stats.totalOutstanding.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </motion.button>
             )
           })}
-        </motion.svg>
+        </div>
       </div>
 
       {/* Legend */}
       <div className="flex items-center justify-center gap-6 pb-6 text-[10px] tracking-[0.1em] uppercase text-stone">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-teal" />
-          <span>Occupied</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full border border-dust bg-transparent" />
-          <span>Vacant</span>
+          <span>Fully occupied</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-amber" />
-          <span>Bartawi use</span>
+          <span>Partial</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-rust" />
-          <span>Outstanding</span>
+          <span>Outstanding balance</span>
         </div>
-      </div>
       </div>
     </div>
   )
