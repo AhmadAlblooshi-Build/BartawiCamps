@@ -75,7 +75,15 @@
       "Bash(PGPASSWORD=bartawi_dev_password psql:*)",
       "Bash(jq:*)",
       "Bash(npm start)",
-      "Bash(npx ts-node:*)"
+      "Bash(npx ts-node:*)",
+      "Bash(npx tsx:*)",
+      "Bash(git checkout:*)",
+      "Bash(npx kill-port:*)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYzFjNjEwMC0yODM2LWM2MGEtYjU0YS1iMGJkYTU2ZDU0ZDQiLCJ0ZW5hbnRJZCI6ImExN2U5ZDQwLWEwMTEtYTE0ZS0wYjBlLTY3YjBhMGRiYzcxZiIsImVtYWlsIjoiaGFtZWRAYmFydGF3aS5hZSIsImlhdCI6MTc3NjYyNzE3MSwiZXhwIjoxNzc2NzEzNTcxfQ.IqlCZlL1wRSbRdYsaJZNsQ_1CfFFaqAsJyVXG91_lvA\")",
+      "Bash(__NEW_LINE_8832ec342090902d__ curl -s -X POST \"http://localhost:3001/api/v1/lease-payments\" -H \"Content-Type: application/json\" -H \"Authorization: Bearer $TOKEN\" -d \"{\"\"lease_id\"\":\"\"8ca78318-e6f4-444e-9d38-f97d23b0349d\"\",\"\"monthly_record_id\"\":\"\"f02a22ab-cc45-6772-e974-6891b28f5710\"\",\"\"amount\"\":3300,\"\"payment_date\"\":\"\"2026-04-19\"\",\"\"method\"\":\"\"cash\"\",\"\"payment_type\"\":\"\"rent\"\",\"\"notes\"\":\"\"API verification test\"\"}\")",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYzFjNjEwMC0yODM2LWM2MGEtYjU0YS1iMGJkYTU2ZDU0ZDQiLCJ0ZW5hbnRJZCI6ImExN2U5ZDQwLWEwMTEtYTE0ZS0wYjBlLTY3YjBhMGRiYzcxZiIsImVtYWlsIjoiaGFtZWRAYmFydGF3aS5hZSIsImlhdCI6MTc3NjYzMzI3MywiZXhwIjoxNzc2NzE5NjczfQ.EOoclwBIMpv5HOtnYBT41d3tgm1Ha5bL2FQILok-BVs\")",
+      "Bash(HHM_ID=\"e1f04271-f3ae-4f4c-bce3-43ebeae9a457\":*)",
+      "Bash(git remote add:*)"
     ]
   }
 }
