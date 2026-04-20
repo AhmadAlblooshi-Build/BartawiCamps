@@ -57,6 +57,31 @@ model bed_spaces {
   @@unique([room_id, bed_number])
 }
 
+// Phase 4B.5: Bedspaces as first-class entities for bed-level leasing
+model bedspaces {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id   String    @db.Uuid                              // SaaS scoping
+  room_id     String    @db.Uuid
+  bed_number  Int                                             // 1, 2, 3... within the room
+  position_x  Float?                                          // floor plan coordinate (optional)
+  position_y  Float?
+  capacity    Int       @default(1)                           // future-proof for bunks
+  label       String?   @db.VarChar(100)                      // e.g. "Bed near window"
+  notes       String?                                          // operational notes
+  is_active   Boolean   @default(true)                        // soft-disable a bed (damaged, etc.)
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime  @updatedAt @db.Timestamptz(6)
+
+  room        rooms                @relation(fields: [room_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant      tenants              @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  leases      leases[]
+  monthly_records monthly_records[]
+
+  @@unique([room_id, bed_number])                             // one bed #1 per room
+  @@index([room_id])
+  @@index([tenant_id])
+}
+
 model blocks {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   building_id  String    @db.Uuid
@@ -421,6 +446,7 @@ model monthly_records {
   // Write layer foreign keys (Phase 4A)
   room_tenant_id    String?             @db.Uuid
   lease_id          String?             @db.Uuid
+  bedspace_id       String?             @db.Uuid  // Phase 4B.5: null = whole-room record, non-null = bed-level record
 
   camps             camps               @relation(fields: [camp_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   companies         companies?          @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -430,16 +456,18 @@ model monthly_records {
   rooms             rooms               @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   room_tenant       room_tenants?       @relation(fields: [room_tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lease             leases?             @relation(fields: [lease_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bedspace          bedspaces?          @relation(fields: [bedspace_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   payment_schedules payment_schedules[]
   old_payments      payments[]
   lease_payments    lease_payments[]
 
-  @@unique([room_id, month, year])
+  @@unique([room_id, bedspace_id, month, year])
   @@index([camp_id], map: "idx_monthly_camp")
   @@index([year, month], map: "idx_monthly_period")
   @@index([room_id], map: "idx_monthly_room")
   @@index([room_tenant_id], map: "idx_monthly_room_tenant")
   @@index([lease_id], map: "idx_monthly_lease")
+  @@index([bedspace_id])
 }
 
 model notifications {
@@ -601,6 +629,7 @@ model rooms {
   balance_writeoffs    balance_writeoffs[]
   bed_occupancy        bed_occupancy[]
   bed_spaces           bed_spaces[]
+  bedspaces            bedspaces[]
   complaints           complaints[]
   contracts            contracts[]
   leases               leases[]
@@ -712,6 +741,7 @@ model tenants {
   updated_at           DateTime?              @default(now()) @db.Timestamptz(6)
   audit_logs           audit_logs[]
   balance_writeoffs    balance_writeoffs[]
+  bedspaces            bedspaces[]
   camps                camps[]
   companies            companies[]
   complaint_categories complaint_categories[]
@@ -839,6 +869,7 @@ model leases {
   saas_tenant_id        String   @db.Uuid  // SaaS multi-tenancy
   room_tenant_id        String   @db.Uuid  // The camp tenant (individual/company)
   room_id               String   @db.Uuid
+  bedspace_id           String?  @db.Uuid  // Phase 4B.5: null = whole-room lease, non-null = bed-level lease
 
   // Lease terms
   start_date       DateTime @db.Date
@@ -863,12 +894,14 @@ model leases {
   platform_tenant  tenants       @relation(fields: [saas_tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tenant           room_tenants  @relation(fields: [room_tenant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   room             rooms         @relation(fields: [room_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bedspace         bedspaces?    @relation(fields: [bedspace_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   payments         lease_payments[]
   monthly_records  monthly_records[]
 
   @@index([saas_tenant_id])
   @@index([room_tenant_id])
   @@index([room_id])
+  @@index([bedspace_id])
   @@index([status])
   @@index([end_date])
 }
