@@ -34,6 +34,7 @@ import tenantRouter from './routes/tenant.js';
 import featureFlagsRouter from './routes/featureFlags.js';
 import leasePaymentsRouter from './routes/lease-payments.js';
 import roomTenantsRouter from './routes/room-tenants.js';
+import leasesRouter from './routes/leases.js';
 
 // Jobs
 import { startAlertCron } from './jobs/alertCron.js';
@@ -179,6 +180,9 @@ app.use('/api/v1/feature-flags', featureFlagsRouter);
 // Phase 4A Write Layer routes
 app.use('/api/v1/lease-payments', leasePaymentsRouter);
 app.use('/api/v1/room-tenants', roomTenantsRouter);
+
+// Phase 4B Lease Creation routes
+app.use('/api/v1/leases', leasesRouter);
 
 // ============================================================
 // ERROR HANDLERS

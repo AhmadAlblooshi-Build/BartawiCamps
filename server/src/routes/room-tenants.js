@@ -1,8 +1,11 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import { z } from 'zod';
 
 const prisma = new PrismaClient();
 const router = express.Router();
+
+const BARTAWI_TENANT_ID = process.env.BARTAWI_TENANT_ID || 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f';
 
 // ---------- GET /room-tenants — List with search and type filter ----------
 
@@ -179,6 +182,81 @@ router.get('/:id', async (req, res) => {
   } catch (err) {
     console.error('Room tenant detail failed:', err);
     return res.status(500).json({ error: 'fetch_failed' });
+  }
+});
+
+// ---------- POST /api/v1/room-tenants — create new room tenant ----------
+
+const CreateTenantSchema = z.object({
+  is_company: z.boolean().default(false),
+  full_name: z.string().trim().min(2).nullable().optional(),
+  company_name: z.string().trim().min(2).nullable().optional(),
+  mobile: z.string().trim().optional().nullable(),
+  nationality: z.string().trim().optional().nullable(),
+  id_type: z.enum(['emirates_id', 'passport', 'driver_license', 'other']).optional().nullable(),
+  id_number: z.string().trim().optional().nullable(),
+  emergency_contact_name: z.string().trim().optional().nullable(),
+  emergency_contact_phone: z.string().trim().optional().nullable(),
+  notes: z.string().optional().nullable(),
+}).refine(
+  d => (d.is_company ? !!d.company_name : !!d.full_name),
+  { message: 'Individual requires full_name; company requires company_name' }
+);
+
+router.post('/', async (req, res) => {
+  const parse = CreateTenantSchema.safeParse(req.body);
+  if (!parse.success) {
+    return res.status(400).json({ error: 'invalid_payload', details: parse.error.issues });
+  }
+  const d = parse.data;
+
+  try {
+    // Fuzzy duplicate warning (not blocking — just informational)
+    let warning = null;
+    const nameToCheck = d.is_company ? d.company_name : d.full_name;
+    if (nameToCheck) {
+      const normalized = nameToCheck.trim().toUpperCase();
+      const similar = await prisma.room_tenants.findFirst({
+        where: {
+          tenant_id: BARTAWI_TENANT_ID,
+          OR: [
+            { full_name: { equals: nameToCheck, mode: 'insensitive' } },
+            { company_name: { equals: nameToCheck, mode: 'insensitive' } },
+          ],
+        },
+      });
+      if (similar) {
+        warning = {
+          type: 'possible_duplicate',
+          existing_id: similar.id,
+          existing_name: similar.is_company ? similar.company_name : similar.full_name,
+        };
+      }
+    }
+
+    const rt = await prisma.room_tenants.create({
+      data: {
+        tenant_id: BARTAWI_TENANT_ID,
+        is_company: d.is_company,
+        full_name: d.is_company ? null : d.full_name,
+        company_name: d.is_company ? d.company_name : null,
+        mobile: d.mobile,
+        nationality: d.nationality,
+        id_type: d.id_type,
+        id_number: d.id_number,
+        emergency_contact_name: d.emergency_contact_name,
+        emergency_contact_phone: d.emergency_contact_phone,
+        notes: d.notes,
+      },
+    });
+
+    res.status(201).json({
+      tenant: rt,
+      warning,
+    });
+  } catch (err) {
+    console.error('Tenant creation failed:', err);
+    res.status(500).json({ error: 'tenant_creation_failed', message: err?.message });
   }
 });
 

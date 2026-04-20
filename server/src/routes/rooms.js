@@ -374,6 +374,122 @@ router.get('/:roomId/history', requirePermission('rooms.read'), async (req, res)
 });
 
 // ──────────────────────────────────────────────────────────────
+// GET /api/v1/rooms/availability
+// Returns rooms that are available (no active lease) OR whose active lease
+// ends before the requested start_date. Filterable by campId and block.
+// ──────────────────────────────────────────────────────────────
+router.get('/availability', requirePermission('rooms.read'), async (req, res) => {
+  const tenantId = req.tenantId;
+  const { campId, blockId, start_date, end_date } = req.query;
+
+  if (!start_date) {
+    return res.status(400).json({ error: 'start_date_required' });
+  }
+
+  const start = new Date(String(start_date) + 'T00:00:00Z');
+  const end = end_date ? new Date(String(end_date) + 'T00:00:00Z') : null;
+
+  try {
+    const where = { camps: { tenant_id: tenantId } };
+    if (campId) where.camp_id = String(campId);
+    if (blockId) where.block_id = String(blockId);
+
+    const rooms = await prisma.rooms.findMany({
+      where,
+      include: {
+        blocks: { include: { camps: true } },
+        property_types: { select: { name: true } },
+        leases: {
+          where: { status: 'active' },
+          orderBy: { start_date: 'desc' },
+          take: 1,
+          include: { tenant: true },
+        },
+      },
+      orderBy: [{ room_number: 'asc' }],
+    });
+
+    // Filter by availability for the requested period
+    const available = [];
+    const occupied = [];
+
+    for (const r of rooms) {
+      const activeLease = r.leases[0];
+
+      if (!activeLease) {
+        // Never leased — available
+        available.push({
+          room_id: r.id,
+          room_number: r.room_number,
+          camp_id: r.camp_id,
+          camp_name: r.blocks?.camps?.name,
+          block_id: r.block_id,
+          block_code: r.blocks?.code,
+          property_type: r.property_types?.name || r.property_type || null,
+          status: 'available',
+          conflict: null,
+        });
+        continue;
+      }
+
+      // Check if active lease overlaps with requested period
+      const leaseStart = new Date(activeLease.start_date);
+      const leaseEnd = activeLease.end_date ? new Date(activeLease.end_date) : null;
+
+      let overlaps = false;
+      if (!leaseEnd) {
+        // Open-ended existing lease — always blocks
+        overlaps = true;
+      } else if (end) {
+        // Both bounded — standard interval overlap
+        overlaps = leaseStart <= end && leaseEnd >= start;
+      } else {
+        // New lease open-ended, existing bounded — overlap if existing ends after new start
+        overlaps = leaseEnd >= start;
+      }
+
+      if (overlaps) {
+        occupied.push({
+          room_id: r.id,
+          room_number: r.room_number,
+          camp_id: r.camp_id,
+          camp_name: r.blocks?.camps?.name,
+          block_id: r.block_id,
+          block_code: r.blocks?.code,
+          property_type: r.property_types?.name || r.property_type || null,
+          status: 'occupied',
+          conflict: {
+            lease_id: activeLease.id,
+            tenant_name: activeLease.tenant?.is_company
+              ? activeLease.tenant.company_name
+              : activeLease.tenant?.full_name,
+            lease_end_date: activeLease.end_date,
+          },
+        });
+      } else {
+        available.push({
+          room_id: r.id,
+          room_number: r.room_number,
+          camp_id: r.camp_id,
+          camp_name: r.blocks?.camps?.name,
+          block_id: r.block_id,
+          block_code: r.blocks?.code,
+          property_type: r.property_types?.name || r.property_type || null,
+          status: 'available_from',
+          available_from: leaseEnd,
+          conflict: null,
+        });
+      }
+    }
+
+    res.json({ available, occupied, total_available: available.length, total_occupied: occupied.length });
+  } catch (err) {
+    console.error('Availability check failed:', err);
+    res.status(500).json({ error: 'availability_failed' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
 // GET /api/v1/rooms/:roomId
 // Full room details. Must come AFTER more specific :roomId/* routes.
 // ──────────────────────────────────────────────────────────────

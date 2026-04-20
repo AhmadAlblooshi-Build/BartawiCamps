@@ -10,7 +10,7 @@ const router = express.Router();
 
 const searchSchema = z.object({
   query: z.string().min(2).max(100),
-  type: z.enum(['individual', 'company']),
+  type: z.enum(['individual', 'company', 'both']).optional(),
 });
 
 // ============================================================================
@@ -359,60 +359,64 @@ router.post('/checkin', requirePermission('rooms.write'), validate(checkinSchema
 });
 
 // ============================================================================
-// GET /api/v1/occupancy/search-entities - Entity autocomplete for dedup
+// GET /api/v1/occupancy/search-entities - Search room_tenants for wizard
 // ============================================================================
 
 router.get('/search-entities', requirePermission('rooms.read'), validate(searchSchema, 'query'), async (req, res) => {
   const tenantId = req.tenantId;
   const { query, type } = req.validQuery;
-  const normalized = query.trim().toUpperCase();
 
   try {
-    if (type === 'company') {
-      const matches = await prisma.companies.findMany({
-        where: {
-          tenant_id: tenantId,
-          is_active: true,
-          OR: [
-            { name_normalized: { contains: normalized } },
-            { name: { contains: query, mode: 'insensitive' } },
-          ]
-        },
-        select: {
-          id: true,
-          name: true,
-          contact_person: true,
-          contact_phone: true,
-          related_entity_id: true
-        },
-        take: 10,
-        orderBy: { name: 'asc' }
-      });
-      return res.json({ data: matches });
+    const where = { tenant_id: tenantId };
+
+    // Search filter
+    if (query && query.trim()) {
+      where.OR = [
+        { full_name: { contains: query, mode: 'insensitive' } },
+        { company_name: { contains: query, mode: 'insensitive' } },
+        { mobile: { contains: query } },
+        { id_number: { contains: query } },
+      ];
     }
 
-    // individuals
-    const matches = await prisma.individuals.findMany({
-      where: {
-        tenant_id: tenantId,
-        is_active: true,
-        OR: [
-          { owner_name: { contains: query, mode: 'insensitive' } },
-          { full_name: { contains: query, mode: 'insensitive' } },
-          { mobile_number: { contains: query } },
-        ]
-      },
+    // Type filter
+    if (type === 'individual') {
+      where.is_company = false;
+    } else if (type === 'company') {
+      where.is_company = true;
+    }
+
+    const tenants = await prisma.room_tenants.findMany({
+      where,
       select: {
         id: true,
-        owner_name: true,
         full_name: true,
-        mobile_number: true,
-        nationality: true
+        company_name: true,
+        is_company: true,
+        mobile: true,
+        id_type: true,
+        id_number: true,
       },
       take: 10,
-      orderBy: { owner_name: 'asc' }
+      orderBy: [
+        { is_company: 'desc' },
+        { company_name: 'asc' },
+        { full_name: 'asc' }
+      ],
     });
-    res.json({ data: matches });
+
+    // Format for wizard compatibility
+    const formatted = tenants.map(t => ({
+      id: t.id,
+      full_name: t.full_name,
+      company_name: t.company_name,
+      type: t.is_company ? 'company' : 'individual',
+      phone: t.mobile,
+      national_id: t.id_number, // Wizard expects this field name
+      commercial_reg: t.id_number, // Wizard expects this field name
+    }));
+
+    res.json({ data: formatted });
   } catch (err) {
     console.error('[occupancy/search-entities]', err);
     res.status(500).json({ error: { code: 'INTERNAL', message: 'Search failed' } });
