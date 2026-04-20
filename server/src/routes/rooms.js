@@ -130,9 +130,15 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
           },
           leases: {
             where: { status: 'active' },
-            include: { tenant: true },  // Phase 4A: relation to room_tenants
+            include: {
+              tenant: true,  // Phase 4A: relation to room_tenants
+              bedspace: { select: { id: true, bed_number: true } },  // Phase 4B.5
+            },
             orderBy: { start_date: 'desc' },
-            take: 1,
+          },
+          bedspaces: {  // Phase 4B.5
+            where: { is_active: true },
+            orderBy: { bed_number: 'asc' },
           },
         },
         orderBy: { room_number: 'asc' },
@@ -258,6 +264,85 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
         status: activeLease.status,
       } : null;
 
+      // Phase 4B.5: Build bedspaces_state with per-bed occupancy
+      const roomLevelLease = r.leases?.find(l => !l.bedspace_id) || null;
+      const bedLevelLeases = r.leases?.filter(l => l.bedspace_id) || [];
+      const hasRoomLevelLease = !!roomLevelLease;
+
+      const bedspacesState = (r.bedspaces || []).map(bed => {
+        const bedLease = bedLevelLeases.find(l => l.bedspace_id === bed.id);
+
+        let status = 'vacant';
+        let paymentStatus = 'vacant';
+        let leaseId = null;
+        let tenant = null;
+        let currentMonthRecordId = null;
+
+        // If room-level lease exists, it overrides all beds
+        if (roomLevelLease) {
+          status = 'occupied';
+          paymentStatus = 'whole_room';
+          leaseId = roomLevelLease.id;
+          tenant = roomLevelLease.tenant ? {
+            id: roomLevelLease.tenant.id,
+            display_name: roomLevelLease.tenant.is_company
+              ? roomLevelLease.tenant.company_name
+              : roomLevelLease.tenant.full_name,
+            is_company: roomLevelLease.tenant.is_company,
+          } : null;
+        } else if (bedLease) {
+          // Bed-level lease
+          status = 'occupied';
+          leaseId = bedLease.id;
+          tenant = bedLease.tenant ? {
+            id: bedLease.tenant.id,
+            display_name: bedLease.tenant.is_company
+              ? bedLease.tenant.company_name
+              : bedLease.tenant.full_name,
+            is_company: bedLease.tenant.is_company,
+          } : null;
+
+          // Find current month record for this bed
+          const bedRecord = r.monthly_records?.find(rec =>
+            rec.bedspace_id === bed.id &&
+            rec.month === currentMonthNum &&
+            rec.year === currentYear
+          );
+
+          if (bedRecord) {
+            currentMonthRecordId = bedRecord.id;
+            const rentNum = Number(bedRecord.rent) || 0;
+            const paidNum = Number(bedRecord.paid) || 0;
+            const balanceNum = Number(bedRecord.balance) || 0;
+
+            if (balanceNum <= 0) {
+              paymentStatus = 'paid';
+            } else if (paidNum > 0) {
+              paymentStatus = 'partial';
+            } else {
+              paymentStatus = 'unpaid';
+            }
+          } else {
+            paymentStatus = 'unpaid';  // No record = unpaid
+          }
+        }
+
+        return {
+          bedspace_id: bed.id,
+          bed_number: bed.bed_number,
+          position_x: bed.position_x ? Number(bed.position_x) : null,
+          position_y: bed.position_y ? Number(bed.position_y) : null,
+          status,
+          payment_status: paymentStatus,
+          lease_id: leaseId,
+          tenant,
+          current_month_record_id: currentMonthRecordId,
+        };
+      });
+
+      const totalBeds = bedspacesState.length;
+      const bedLevelCount = bedLevelLeases.length;
+
       return {
         id: r.id,
         camp_id: r.camp_id,
@@ -277,6 +362,10 @@ router.get('/', requirePermission('rooms.read'), async (req, res) => {
         current_month: currentMonthSerialized,
         monthly_records: history,
         active_lease: activeLeaseData,  // Phase 4A: active lease with tenant
+        bedspaces_state: bedspacesState,  // Phase 4B.5: per-bed state
+        total_beds: totalBeds,  // Phase 4B.5
+        bed_level_count: bedLevelCount,  // Phase 4B.5
+        has_room_level_lease: hasRoomLevelLease,  // Phase 4B.5
       };
     });
 
@@ -375,8 +464,8 @@ router.get('/:roomId/history', requirePermission('rooms.read'), async (req, res)
 
 // ──────────────────────────────────────────────────────────────
 // GET /api/v1/rooms/availability
-// Returns rooms that are available (no active lease) OR whose active lease
-// ends before the requested start_date. Filterable by campId and block.
+// Phase 4B.5: Returns room-level AND bed-level availability state.
+// Supports mixed occupancy (some beds leased, others vacant).
 // ──────────────────────────────────────────────────────────────
 router.get('/availability', requirePermission('rooms.read'), async (req, res) => {
   const tenantId = req.tenantId;
@@ -399,56 +488,26 @@ router.get('/availability', requirePermission('rooms.read'), async (req, res) =>
       include: {
         blocks: { include: { camps: true } },
         property_types: { select: { name: true } },
+        bedspaces: {
+          where: { is_active: true },
+          orderBy: { bed_number: 'asc' },
+        },
         leases: {
           where: { status: 'active' },
-          orderBy: { start_date: 'desc' },
-          take: 1,
-          include: { tenant: true },
+          include: { tenant: true, bedspace: true },
         },
       },
       orderBy: [{ room_number: 'asc' }],
     });
 
-    // Filter by availability for the requested period
     const available = [];
     const occupied = [];
 
     for (const r of rooms) {
-      const activeLease = r.leases[0];
+      const propertyType = r.property_types?.name || r.property_type || '';
+      const isBartawi = String(propertyType).toLowerCase().includes('bartawi');
 
-      if (!activeLease) {
-        // Never leased — available
-        available.push({
-          room_id: r.id,
-          room_number: r.room_number,
-          camp_id: r.camp_id,
-          camp_name: r.blocks?.camps?.name,
-          block_id: r.block_id,
-          block_code: r.blocks?.code,
-          property_type: r.property_types?.name || r.property_type || null,
-          status: 'available',
-          conflict: null,
-        });
-        continue;
-      }
-
-      // Check if active lease overlaps with requested period
-      const leaseStart = new Date(activeLease.start_date);
-      const leaseEnd = activeLease.end_date ? new Date(activeLease.end_date) : null;
-
-      let overlaps = false;
-      if (!leaseEnd) {
-        // Open-ended existing lease — always blocks
-        overlaps = true;
-      } else if (end) {
-        // Both bounded — standard interval overlap
-        overlaps = leaseStart <= end && leaseEnd >= start;
-      } else {
-        // New lease open-ended, existing bounded — overlap if existing ends after new start
-        overlaps = leaseEnd >= start;
-      }
-
-      if (overlaps) {
+      if (isBartawi) {
         occupied.push({
           room_id: r.id,
           room_number: r.room_number,
@@ -457,32 +516,141 @@ router.get('/availability', requirePermission('rooms.read'), async (req, res) =>
           block_id: r.block_id,
           block_code: r.blocks?.code,
           property_type: r.property_types?.name || r.property_type || null,
+          status: 'bartawi',
+          total_beds: 0,
+          available_beds: 0,
+          bed_state: [],
+          room_level_lease: null,
+          conflict: { reason: 'bartawi_service_room' },
+        });
+        continue;
+      }
+
+      // Find active room-level lease (bedspace_id === null)
+      const roomLevelLease = r.leases.find(l => !l.bedspace_id);
+
+      // Determine overlap with requested period for room-level lease
+      let roomLevelOverlaps = false;
+      if (roomLevelLease) {
+        const ls = new Date(roomLevelLease.start_date);
+        const le = roomLevelLease.end_date ? new Date(roomLevelLease.end_date) : null;
+        if (!le) {
+          roomLevelOverlaps = true;
+        } else if (end) {
+          roomLevelOverlaps = ls <= end && le >= start;
+        } else {
+          roomLevelOverlaps = le >= start;
+        }
+      }
+
+      // Per-bed state
+      const bedState = r.bedspaces.map(b => {
+        const bedLease = r.leases.find(l => l.bedspace_id === b.id);
+        let bedStatus = 'available';
+        let conflict = null;
+
+        if (bedLease) {
+          const ls = new Date(bedLease.start_date);
+          const le = bedLease.end_date ? new Date(bedLease.end_date) : null;
+          let overlaps = false;
+          if (!le) {
+            overlaps = true;
+          } else if (end) {
+            overlaps = ls <= end && le >= start;
+          } else {
+            overlaps = le >= start;
+          }
+
+          if (overlaps) {
+            bedStatus = 'occupied';
+            const tenantName = bedLease.tenant?.is_company
+              ? bedLease.tenant.company_name
+              : bedLease.tenant?.full_name;
+            conflict = {
+              lease_id: bedLease.id,
+              tenant_name: tenantName,
+              lease_end_date: bedLease.end_date,
+            };
+          }
+        }
+
+        // If room-level lease overlaps, ALL beds marked occupied by that lease
+        if (roomLevelOverlaps) {
+          const tenantName = roomLevelLease.tenant?.is_company
+            ? roomLevelLease.tenant.company_name
+            : roomLevelLease.tenant?.full_name;
+          bedStatus = 'occupied';
+          conflict = {
+            lease_id: roomLevelLease.id,
+            tenant_name: tenantName,
+            lease_end_date: roomLevelLease.end_date,
+            reason: 'whole_room_leased',
+          };
+        }
+
+        return {
+          bedspace_id: b.id,
+          bed_number: b.bed_number,
+          status: bedStatus,
+          conflict,
+        };
+      });
+
+      const availableBedCount = bedState.filter(b => b.status === 'available').length;
+      const totalBeds = bedState.length;
+
+      const roomBase = {
+        room_id: r.id,
+        room_number: r.room_number,
+        camp_id: r.camp_id,
+        camp_name: r.blocks?.camps?.name,
+        block_id: r.block_id,
+        block_code: r.blocks?.code,
+        property_type: r.property_types?.name || r.property_type || null,
+        total_beds: totalBeds,
+        available_beds: availableBedCount,
+        bed_state: bedState,
+        room_level_lease: roomLevelOverlaps ? {
+          lease_id: roomLevelLease.id,
+          tenant_name: roomLevelLease.tenant?.is_company
+            ? roomLevelLease.tenant.company_name
+            : roomLevelLease.tenant?.full_name,
+          end_date: roomLevelLease.end_date,
+        } : null,
+      };
+
+      // Bucket the room
+      if (roomLevelOverlaps) {
+        occupied.push({
+          ...roomBase,
           status: 'occupied',
           conflict: {
-            lease_id: activeLease.id,
-            tenant_name: activeLease.tenant?.is_company
-              ? activeLease.tenant.company_name
-              : activeLease.tenant?.full_name,
-            lease_end_date: activeLease.end_date,
+            reason: 'whole_room_leased',
+            lease_id: roomLevelLease.id,
+            tenant_name: roomBase.room_level_lease.tenant_name,
           },
         });
-      } else {
-        available.push({
-          room_id: r.id,
-          room_number: r.room_number,
-          camp_id: r.camp_id,
-          camp_name: r.blocks?.camps?.name,
-          block_id: r.block_id,
-          block_code: r.blocks?.code,
-          property_type: r.property_types?.name || r.property_type || null,
-          status: 'available_from',
-          available_from: leaseEnd,
-          conflict: null,
+      } else if (availableBedCount === 0 && totalBeds > 0) {
+        occupied.push({
+          ...roomBase,
+          status: 'fully_bed_occupied',
+          conflict: { reason: 'all_beds_occupied' },
         });
+      } else if (availableBedCount > 0 && availableBedCount < totalBeds) {
+        available.push({ ...roomBase, status: 'partial_vacancy', conflict: null });
+      } else {
+        // Fully available (no leases at all)
+        available.push({ ...roomBase, status: 'available', conflict: null });
       }
     }
 
-    res.json({ available, occupied, total_available: available.length, total_occupied: occupied.length });
+    res.json({
+      available,
+      occupied,
+      total_available_rooms: available.length,
+      total_occupied_rooms: occupied.length,
+      total_available_beds: available.reduce((s, r) => s + r.available_beds, 0),
+    });
   } catch (err) {
     console.error('Availability check failed:', err);
     res.status(500).json({ error: 'availability_failed' });

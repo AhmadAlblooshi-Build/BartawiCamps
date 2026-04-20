@@ -8,10 +8,13 @@ const router = express.Router();
 // SaaS tenant ID for Bartawi (loaded from env or fallback to known UUID)
 const BARTAWI_TENANT_ID = process.env.BARTAWI_TENANT_ID || 'a17e9d40-a011-a14e-0b0e-67b0a0dbc71f';
 
+// Version-agnostic UUID validation (accepts v1/v4/v5/v7)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ---------- Validation Schemas ----------
 
 const CreatePaymentSchema = z.object({
-  lease_id: z.string().uuid(),
+  lease_id: z.string().regex(UUID_REGEX, 'Invalid UUID'),
   monthly_record_id: z.string().nullable().optional(),  // Relaxed: DB has non-v4 UUIDs
   target_month: z.coerce.number().int().min(1).max(12).optional(),  // For materialization
   target_year: z.coerce.number().int().min(2024).max(2030).optional(),  // For materialization

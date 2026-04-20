@@ -24,15 +24,12 @@ const CreateTenantSchema = z.object({
   { message: 'Individual requires full_name; company requires company_name' }
 )
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const CreateLeaseSchema = z.object({
-  room_tenant_id: z.string().regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    'Invalid UUID format'
-  ),
-  room_id: z.string().regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    'Invalid UUID format'
-  ),
+  room_tenant_id: z.string().regex(UUID_REGEX, 'Invalid UUID format'),
+  room_id: z.string().regex(UUID_REGEX, 'Invalid UUID format'),
+  bedspace_id: z.string().regex(UUID_REGEX, 'Invalid UUID format').nullable().optional(),  // Phase 4B.5
   start_date: z.string(),                // ISO date
   end_date: z.string().nullable().optional(),
   monthly_rent: z.coerce.number().positive(),
@@ -82,6 +79,9 @@ router.get('/', async (req, res) => {
             blocks: { select: { code: true, camps: { select: { name: true } } } },
           },
         },
+        bedspace: {
+          select: { id: true, bed_number: true },
+        },
         monthly_records: {
           select: { balance: true, month: true, year: true, paid: true, rent: true },
         },
@@ -117,6 +117,9 @@ router.get('/', async (req, res) => {
         camp_id: l.room?.camp_id,
         camp_name: l.room?.blocks?.camps?.name,
         block_code: l.room?.blocks?.code,
+        bedspace_id: l.bedspace_id,
+        bed_number: l.bedspace?.bed_number || null,
+        is_bed_level: !!l.bedspace_id,
         total_outstanding: totalOutstanding,
         records_count: (l.monthly_records || []).length,
       }
@@ -165,45 +168,90 @@ router.post('/', async (req, res) => {
       })
       if (!rt) throw { code: 404, msg: 'room_tenant_not_found' }
 
-      // 3. Availability check — no overlapping active lease on this room
+      // 3. Phase 4B.5: Validate bedspace if provided
+      if (d.bedspace_id) {
+        const bedspace = await tx.bedspaces.findFirst({
+          where: {
+            id: d.bedspace_id,
+            room_id: d.room_id,            // MUST match the lease's room
+            is_active: true,
+          },
+        })
+        if (!bedspace) {
+          throw {
+            code: 400,
+            msg: 'bedspace_invalid',
+            details: { reason: 'Bedspace does not belong to specified room or is inactive' },
+          }
+        }
+      }
+
+      // 4. Phase 4B.5: Three-way conflict detection
       const start = new Date(d.start_date + 'T00:00:00Z')
       const end = d.end_date ? new Date(d.end_date + 'T00:00:00Z') : null
 
-      const overlap = await tx.leases.findFirst({
+      const activeLeasesOnRoom = await tx.leases.findMany({
         where: {
-          saas_tenant_id: BARTAWI_TENANT_ID,  // Scope to current SaaS tenant
           room_id: d.room_id,
           status: 'active',
+          saas_tenant_id: BARTAWI_TENANT_ID,
           OR: [
-            // Existing lease starts before new lease ends (or open-ended)
             end
               ? { start_date: { lte: end }, OR: [{ end_date: null }, { end_date: { gte: start } }] }
               : { OR: [{ end_date: null }, { end_date: { gte: start } }] },
           ],
         },
-        include: { tenant: true },
+        include: { tenant: true, bedspace: true },
       })
-      if (overlap) {
-        const overlapName = overlap.tenant?.is_company
-          ? overlap.tenant.company_name
-          : overlap.tenant?.full_name
-        throw {
-          code: 409,
-          msg: 'room_unavailable',
-          details: {
-            conflict_lease_id: overlap.id,
-            conflict_tenant: overlapName,
-            conflict_end_date: overlap.end_date,
-          },
+
+      if (d.bedspace_id) {
+        // New lease is bed-level. Conflicts:
+        //   a) Any active room-level lease on this room
+        //   b) Another active bed-level lease on THIS specific bed
+        const conflict = activeLeasesOnRoom.find(l =>
+          !l.bedspace_id || l.bedspace_id === d.bedspace_id
+        )
+        if (conflict) {
+          const name = conflict.tenant?.is_company
+            ? conflict.tenant.company_name : conflict.tenant?.full_name
+          throw {
+            code: 409,
+            msg: conflict.bedspace_id ? 'bed_unavailable' : 'room_blocks_bed',
+            details: {
+              conflict_lease_id: conflict.id,
+              conflict_tenant: name,
+              conflict_type: conflict.bedspace_id ? 'bed-level' : 'whole-room',
+              conflict_end_date: conflict.end_date,
+            },
+          }
+        }
+      } else {
+        // New lease is whole-room. Conflicts:
+        //   ANY active lease on this room (room-level or bed-level)
+        const conflict = activeLeasesOnRoom[0]
+        if (conflict) {
+          const name = conflict.tenant?.is_company
+            ? conflict.tenant.company_name : conflict.tenant?.full_name
+          throw {
+            code: 409,
+            msg: conflict.bedspace_id ? 'beds_blocking_room' : 'room_unavailable',
+            details: {
+              conflict_lease_id: conflict.id,
+              conflict_tenant: name,
+              conflict_type: conflict.bedspace_id ? 'bed-level' : 'whole-room',
+              conflict_end_date: conflict.end_date,
+            },
+          }
         }
       }
 
-      // 4. Create lease in DRAFT status (not active yet — activation is separate)
+      // 5. Create lease in DRAFT status (not active yet — activation is separate)
       const lease = await tx.leases.create({
         data: {
           saas_tenant_id: BARTAWI_TENANT_ID,
           room_tenant_id: d.room_tenant_id,
           room_id: d.room_id,
+          bedspace_id: d.bedspace_id || null,   // Phase 4B.5: null = whole-room, non-null = bed-level
           start_date: start,
           end_date: end,
           monthly_rent: d.monthly_rent,
@@ -248,10 +296,10 @@ router.post('/:id/activate', async (req, res) => {
         throw { code: 400, msg: 'lease_not_in_draft_state', currentStatus: lease.status }
       }
 
-      // Re-verify availability at activation time (another tx may have leased the room)
-      const overlap = await tx.leases.findFirst({
+      // Phase 4B.5: Re-verify availability with three-way conflict detection
+      const activeLeasesOnRoom = await tx.leases.findMany({
         where: {
-          saas_tenant_id: BARTAWI_TENANT_ID,  // Scope to current SaaS tenant
+          saas_tenant_id: BARTAWI_TENANT_ID,
           room_id: lease.room_id,
           status: 'active',
           id: { not: lease.id },
@@ -264,9 +312,22 @@ router.post('/:id/activate', async (req, res) => {
               : { OR: [{ end_date: null }, { end_date: { gte: lease.start_date } }] },
           ],
         },
+        include: { tenant: true },
       })
-      if (overlap) {
-        throw { code: 409, msg: 'room_became_unavailable' }
+
+      if (lease.bedspace_id) {
+        // Bed-level lease: check for room-level OR same-bed conflicts
+        const conflict = activeLeasesOnRoom.find(l =>
+          !l.bedspace_id || l.bedspace_id === lease.bedspace_id
+        )
+        if (conflict) {
+          throw { code: 409, msg: 'room_became_unavailable' }
+        }
+      } else {
+        // Room-level lease: ANY active lease blocks
+        if (activeLeasesOnRoom.length > 0) {
+          throw { code: 409, msg: 'room_became_unavailable' }
+        }
       }
 
       // Generate payment schedule — create monthly_records from start_date forward
@@ -292,11 +353,12 @@ router.post('/:id/activate', async (req, res) => {
         const month = d.getUTCMonth() + 1
         const year = d.getUTCFullYear()
 
-        // Check if ANY record exists for this room + month + year
-        // (DB constraint is on room_id, not lease_id — rooms change tenants over time)
+        // Phase 4B.5: Check if record exists for (room_id, bedspace_id, month, year)
+        // Constraint changed to include bedspace_id for bed-level leasing
         const existing = await tx.monthly_records.findFirst({
           where: {
             room_id: lease.room_id,
+            bedspace_id: lease.bedspace_id || null,  // scope by bed when applicable
             month,
             year,
           },
@@ -312,6 +374,7 @@ router.post('/:id/activate', async (req, res) => {
               data: {
                 lease_id: lease.id,
                 room_tenant_id: lease.room_tenant_id,
+                bedspace_id: lease.bedspace_id || null,  // Phase 4B.5: inherit from lease
                 rent: Number(lease.monthly_rent),
                 owner_name: lease.tenant?.full_name || null,
                 company_name: lease.tenant?.company_name || null,
@@ -334,6 +397,7 @@ router.post('/:id/activate', async (req, res) => {
             camp_id: lease.room.camp_id,
             lease_id: lease.id,
             room_tenant_id: lease.room_tenant_id,
+            bedspace_id: lease.bedspace_id || null,  // Phase 4B.5: null = whole-room, non-null = bed-level
             month,
             year,
             rent: Number(lease.monthly_rent),
