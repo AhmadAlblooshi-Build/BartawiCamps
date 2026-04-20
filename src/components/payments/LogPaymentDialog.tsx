@@ -33,6 +33,8 @@ interface LogPaymentDialogProps {
       paid: number
       lease_id?: string
       tenant?: any
+      month?: number
+      year?: number
     }
     active_lease?: {
       id: string

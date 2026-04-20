@@ -179,4 +179,39 @@ export const endpoints = {
     api.post<{ narration: string }>('/ai/narrate-anomaly', data),
   aiMatchEntity: (name: string, candidates: any[]) =>
     api.post<{ match_index: number | null; confidence: number; reason: string }>('/ai/match-entity', { name, candidates }),
+
+  // --- Phase 4B: Lease creation flow ---
+  createRoomTenant: (data: any) =>
+    api.post<{ tenant: any; warning: any | null }>('/room-tenants', data),
+
+  roomAvailability: (params: {
+    campId?: string
+    blockId?: string
+    start_date: string
+    end_date?: string
+  }) => {
+    const qs = new URLSearchParams()
+    if (params.campId) qs.set('campId', params.campId)
+    if (params.blockId) qs.set('blockId', params.blockId)
+    qs.set('start_date', params.start_date)
+    if (params.end_date) qs.set('end_date', params.end_date)
+    return api.get<{ available: any[]; occupied: any[]; total_available: number; total_occupied: number }>(`/rooms/availability?${qs}`)
+  },
+
+  leases: (params?: { status?: string; q?: string; camp_id?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', params.status)
+    if (params?.q) qs.set('q', params.q)
+    if (params?.camp_id) qs.set('camp_id', params.camp_id)
+    return api.get<{ leases: any[]; counts: any }>(`/leases${qs.toString() ? '?' + qs : ''}`)
+  },
+
+  createLease: (data: any) =>
+    api.post<{ lease: any }>('/leases', data),
+
+  activateLease: (leaseId: string) =>
+    api.post<{ lease: any; scheduled_months: number; already_active: boolean }>(`/leases/${leaseId}/activate`),
+
+  deleteDraftLease: (leaseId: string) =>
+    api.delete<{ deleted: boolean }>(`/leases/${leaseId}`),
 }

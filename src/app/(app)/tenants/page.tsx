@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { endpoints } from '@/lib/api'
 import { Search } from 'lucide-react'
+import CreateLeaseWizard from '@/components/leases/CreateLeaseWizard'
 
 type FilterType = 'all' | 'company' | 'individual'
 
@@ -12,6 +13,7 @@ export default function TenantsPage() {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState<FilterType>('all')
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['room-tenants', { search, type: filterType }],
@@ -33,25 +35,49 @@ export default function TenantsPage() {
     }}>
       {/* Header */}
       <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-end',
         marginBottom: '32px',
       }}>
-        <h1 style={{
-          fontFamily: 'Fraunces, serif',
-          fontStyle: 'italic',
-          fontSize: '36px',
-          fontWeight: 600,
-          color: '#231F20',
-          marginBottom: '8px',
-        }}>
-          People & Companies
-        </h1>
-        <p style={{
-          fontFamily: 'Geist, sans-serif',
-          fontSize: '14px',
-          color: '#666',
-        }}>
-          Tenants
-        </p>
+        <div>
+          <h1 style={{
+            fontFamily: 'Fraunces, serif',
+            fontStyle: 'italic',
+            fontSize: '36px',
+            fontWeight: 600,
+            color: '#231F20',
+            marginBottom: '8px',
+          }}>
+            People & Companies
+          </h1>
+          <p style={{
+            fontFamily: 'Geist, sans-serif',
+            fontSize: '14px',
+            color: '#666',
+          }}>
+            Tenants
+          </p>
+        </div>
+        <button
+          onClick={() => setWizardOpen(true)}
+          style={{
+            padding: '12px 22px',
+            background: '#1A1816',
+            color: '#F4EFE7',
+            border: 'none',
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            letterSpacing: '0.03em',
+            transition: 'opacity 0.15s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.85' }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
+        >
+          + New lease
+        </button>
       </div>
 
       {/* Search and Filters */}
@@ -284,6 +310,8 @@ export default function TenantsPage() {
           })}
         </div>
       )}
+
+      <CreateLeaseWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   )
 }

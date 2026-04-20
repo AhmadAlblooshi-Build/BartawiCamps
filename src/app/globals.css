@@ -29,6 +29,17 @@
   --color-status-legal-fg:       #5A3E8A;
   --color-status-maintenance-bg: #F0E8D1;
   --color-status-maintenance-fg: #5F4F2C;
+
+  /* ─── Desert Noir Palette ─── */
+  --color-teal: #1E4D52;
+  --color-rust: #A84A3B;
+  --color-amber: #B8883D;
+  --color-amber-gold: #8B6420;
+  --color-espresso: #1A1816;
+  --color-sand: #FAF7F2;
+  --color-wash: #E8DFD3;
+  --color-dust: #D6CFC5;
+  --color-stone: #6A6159;
 }
 
 *, *::before, *::after { box-sizing: border-box; }

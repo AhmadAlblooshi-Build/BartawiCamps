@@ -6,17 +6,20 @@ import {
   House, Buildings, Bed, Files, Wrench, ChatDots, CreditCard,
   ChartBar, UsersThree, Gear, CaretLeft, MapTrifold, ListChecks,
 } from '@phosphor-icons/react'
+import { FileText } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { cn } from '@/lib/utils'
 import { motion, AnimatePresence } from 'motion/react'
 import { spring } from '@/lib/motion'
 import { useHasPermission } from '@/lib/auth'
+import CreateLeaseWizard from '@/components/leases/CreateLeaseWizard'
 
 const MAIN = [
   { href: '/',            label: 'Dashboard',   icon: House,       perm: null },
   { href: '/camps',       label: 'Camps',       icon: Buildings,   perm: 'rooms.read' },
   { href: '/operations',  label: 'Operations',  icon: ListChecks,  perm: 'rooms.read' },
   { href: '/tenants',     label: 'Tenants',     icon: UsersThree,  perm: 'tenants.read' },
+  { href: '/leases',      label: 'Leases',      icon: FileText,    perm: 'contracts.read' },
   { href: '/contracts',   label: 'Contracts',   icon: Files,       perm: 'contracts.read' },
   { href: '/maintenance', label: 'Maintenance', icon: Wrench,      perm: 'maintenance.read' },
   { href: '/complaints',  label: 'Complaints',  icon: ChatDots,    perm: 'complaints.read' },
@@ -34,6 +37,7 @@ const ADMIN = [
 export function Sidebar() {
   const path = usePathname() || '/'
   const [collapsed, setCollapsed] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   return (
     <motion.aside
@@ -74,6 +78,35 @@ export function Sidebar() {
       </div>
       <div className="divider-warm mx-4" />
 
+      {!collapsed && (
+        <div className="px-4 mb-3">
+          <button
+            onClick={() => setWizardOpen(true)}
+            style={{
+              width: '100%',
+              padding: '12px 16px',
+              background: '#1A1816',
+              color: '#F4EFE7',
+              border: 'none',
+              borderRadius: 10,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              letterSpacing: '0.03em',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.85' }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
+          >
+            + New lease
+          </button>
+        </div>
+      )}
+
       <nav className="flex-1 overflow-y-auto py-3 px-2">
         <NavSection items={MAIN} path={path} collapsed={collapsed} />
         <div className="divider-warm mx-2 my-4" />
@@ -92,6 +125,8 @@ export function Sidebar() {
           <Icon icon={CaretLeft} size={12} />
         </motion.span>
       </button>
+
+      <CreateLeaseWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </motion.aside>
   )
 }

@@ -217,7 +217,7 @@ export function QueueTable({ queue, rooms, selected, onSelectionChange }: Props)
         room={payFor}
         open={!!payFor}
         onClose={() => setPayFor(null)}
-        defaultPaymentType="rent"
+        paymentType="rent"
       />
     </div>
   )

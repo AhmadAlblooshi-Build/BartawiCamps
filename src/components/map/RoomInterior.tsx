@@ -25,6 +25,7 @@ import {
 import { getContractInfo, formatDateShort } from '@/lib/contract-helpers'
 import { formatMethod, formatDateLong, type PaymentMethod } from '@/lib/payment-helpers'
 import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
+import CreateLeaseWizard from '@/components/leases/CreateLeaseWizard'
 import { CaretLeft } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
@@ -99,6 +100,10 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const isBartawi = ['Bartawi', 'bartawi_use'].includes(status) ||
                     ['A-17', 'A-18', 'A-19', 'C-11', 'C-20', 'D-1'].includes(roomCode)
 
+  // Vacancy check for "Lease this room" button
+  const isVacant = !room?.active_lease && !room?.current_month?.tenant
+  const canLease = isVacant && !isBartawi
+
   // Payment capabilities
   const hasActiveLease = !!(room.active_lease?.id || room.current_month?.lease_id)
   const canLogRent = hasActiveLease && balance > 0
@@ -118,6 +123,9 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   // Payment dialog state
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [paymentType, setPaymentType] = useState<'rent' | 'deposit'>('rent')
+
+  // Lease wizard state
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   // Variable capacity bed layout (4-16 people, tighter spacing for 10+)
   const bedsPerWall = Math.ceil(maxCapacity / 2)
@@ -914,6 +922,38 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
             </motion.div>
           )}
 
+          {/* Action button for vacant rooms */}
+          {canLease && (
+            <motion.div
+              style={{ display: 'flex', gap: '8px', marginTop: '4px' }}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <button
+                onClick={() => setWizardOpen(true)}
+                onMouseEnter={() => setHoverNewLease(true)}
+                onMouseLeave={() => setHoverNewLease(false)}
+                style={{
+                  flex: 1,
+                  padding: '10px 18px',
+                  background: hoverNewLease ? '#164045' : '#1E4D52',
+                  color: '#F4EFE7',
+                  border: 'none',
+                  borderRadius: 10,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                  boxShadow: hoverNewLease ? '0 2px 8px rgba(30, 77, 82, 0.35)' : 'none',
+                }}
+              >
+                Lease this room
+              </button>
+            </motion.div>
+          )}
+
           {/* For Bartawi rooms */}
           {isBartawi && (
             <motion.div
@@ -986,6 +1026,13 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
         onClose={() => setPaymentDialogOpen(false)}
         room={room}
         paymentType={paymentType}
+      />
+
+      {/* Lease Wizard */}
+      <CreateLeaseWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        campId={room?.camp_id}
       />
     </motion.div>
   )
