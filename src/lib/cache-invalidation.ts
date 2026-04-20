@@ -76,9 +76,10 @@ export function invalidateLeaseCaches(
     campId?: string
     tenantId?: string
     leaseId?: string
+    bedspaceId?: string  // Phase 4B.5
   }
 ) {
-  const { roomId, campId, tenantId, leaseId } = context
+  const { roomId, campId, tenantId, leaseId, bedspaceId } = context
   const opts = { refetchType: 'all' as const }
 
   // ── Rooms (availability changes) ──
@@ -121,4 +122,10 @@ export function invalidateLeaseCaches(
 
   // ── Payment schedules ──
   queryClient.invalidateQueries({ queryKey: ['payment-schedules'], ...opts })
+
+  // ── Phase 4B.5: Bedspaces (bed-level leases) ──
+  queryClient.invalidateQueries({ queryKey: ['bedspace'], ...opts })
+  if (bedspaceId) {
+    queryClient.invalidateQueries({ queryKey: ['bedspace', bedspaceId], ...opts })
+  }
 }

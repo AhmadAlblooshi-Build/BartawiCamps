@@ -26,6 +26,7 @@ import { getContractInfo, formatDateShort } from '@/lib/contract-helpers'
 import { formatMethod, formatDateLong, type PaymentMethod } from '@/lib/payment-helpers'
 import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
 import CreateLeaseWizard from '@/components/leases/CreateLeaseWizard'
+import BedInterior from '@/components/map/BedInterior'
 import { CaretLeft } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
@@ -126,20 +127,103 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
 
   // Lease wizard state
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [prefilledBedspaceId, setPrefilledBedspaceId] = useState<string | null>(null)
+  const [openedBedspaceId, setOpenedBedspaceId] = useState<string | null>(null)
 
-  // Variable capacity bed layout (4-16 people, tighter spacing for 10+)
+  // Phase 4B.5: Real bedspace data from API (bedspaces_state)
+  const bedspaces = (room?.bedspaces_state || []).slice().sort(
+    (a: any, b: any) => a.bed_number - b.bed_number
+  )
+
+  // Fallback: if bedspaces_state is empty (pre-4B.5 data or Bartawi),
+  // use the existing static logic to preserve visuals
+  const useStaticFallback = bedspaces.length === 0
+
+  // Wall assignment: left gets ceiling when odd
+  // 1 bed → left[1], right[]
+  // 2 beds → left[1], right[2]
+  // 3 beds → left[1,2], right[3]
+  // 7 beds → left[1,2,3,4], right[5,6,7]  ← matches Ahmad's screenshot
+  // 8 beds → left[1-4], right[5-8]
+  // 12 beds → left[1-6], right[7-12]
+  const leftCount = Math.ceil(bedspaces.length / 2)
+  const leftBeds = bedspaces.slice(0, leftCount)
+  const rightBeds = bedspaces.slice(leftCount)
+
+  // Keep existing static fallback variables for rooms without bedspaces_state
   const bedsPerWall = Math.ceil(maxCapacity / 2)
-  const leftBeds = Array.from({ length: bedsPerWall }).map((_, i) => ({
+  const staticLeftBeds = Array.from({ length: bedsPerWall }).map((_, i) => ({
     id: `B${i + 1}`,
     occupied: i < Math.min(peopleCount, bedsPerWall),
   }))
-  const rightBeds = Array.from({ length: bedsPerWall }).map((_, i) => ({
+  const staticRightBeds = Array.from({ length: bedsPerWall }).map((_, i) => ({
     id: `B${i + bedsPerWall + 1}`,
     occupied: i < Math.max(0, peopleCount - bedsPerWall),
   }))
 
-  const roomViewBoxHeight = Math.max(420, 60 + bedsPerWall * 75)
-  const bedSpacing = bedsPerWall > 4 ? 55 : 72
+  // Phase 4B.5: Use actual bed count for spacing when real data available
+  const activeBedsPerWall = useStaticFallback
+    ? bedsPerWall
+    : Math.max(leftBeds.length, rightBeds.length, 1)
+
+  const roomViewBoxHeight = Math.max(420, 60 + activeBedsPerWall * 75)
+  const bedSpacing = activeBedsPerWall > 4 ? 55 : 72
+
+  // Phase 4B.5: Desert Noir bed state colors — map payment_status to fill/stroke
+  const BED_FILL = {
+    paid: '#1E4D52',        // teal
+    partial: '#B8883D',     // amber
+    unpaid: '#A84A3B',      // rust
+    whole_room: '#1A1816',  // espresso
+    vacant: 'transparent',
+  } as const
+
+  const BED_STROKE = {
+    paid: '#0D2A2D',
+    partial: '#8B6420',
+    unpaid: '#6E2E22',
+    whole_room: '#0D0C0B',
+    vacant: '#B8883D',      // amber dashed outline
+  } as const
+
+  type BedStatus = keyof typeof BED_FILL
+
+  const getBedColors = (bed: any) => {
+    const status: BedStatus = (bed?.payment_status || 'vacant') as BedStatus
+    return {
+      fill: BED_FILL[status] ?? BED_FILL.vacant,
+      stroke: BED_STROKE[status] ?? BED_STROKE.vacant,
+      isDashed: status === 'vacant',
+      status,
+    }
+  }
+
+  const getBedLabel = (bed: any) => {
+    if (!bed?.tenant) return 'vacant'
+    const name = bed.tenant.display_name || 'Unknown'
+    // First word, capped at 10 chars to fit bed rect
+    return name.split(' ')[0].substring(0, 10)
+  }
+
+  const handleBedClick = (bed: any, e: React.MouseEvent) => {
+    e.stopPropagation()  // CRITICAL — prevent room-level click bubble
+
+    // Whole-room leased → bed clicks are no-ops (the room detail
+    // is already the current view, so nothing to open)
+    if (room?.has_room_level_lease) {
+      return
+    }
+
+    // Occupied bed → open BedInterior detail panel
+    if (bed?.status === 'occupied' || bed?.tenant) {
+      setOpenedBedspaceId(bed.bedspace_id)
+      return
+    }
+
+    // Vacant bed → open wizard prefilled with bedspace_id
+    setPrefilledBedspaceId(bed.bedspace_id)
+    setWizardOpen(true)
+  }
 
   return (
     <motion.div
@@ -347,23 +431,38 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
             </text>
 
             {/* LEFT WALL beds */}
-            {leftBeds.map((bed, idx) => {
-              const yPos = 60 + idx * bedSpacing
-              return (
-                <g key={bed.id}>
-                  {bed.occupied ? (
-                    <>
-                      <rect
-                        x="60"
-                        y={yPos}
-                        width="120"
-                        height={bedSpacing - 20}
-                        fill="#1E4D52"
-                        stroke="#0D2A2D"
-                        strokeWidth="0.8"
-                        rx="2"
-                      />
-                      {/* Pillow */}
+            {!useStaticFallback ? (
+              // Phase 4B.5: Real bedspace data
+              leftBeds.map((bed: any, idx: number) => {
+                const colors = getBedColors(bed)
+                const label = getBedLabel(bed)
+                const isVacant = colors.isDashed
+                const isWholeRoom = bed?.payment_status === 'whole_room'
+                const yPos = 60 + idx * bedSpacing
+
+                return (
+                  <g
+                    key={bed.bedspace_id}
+                    className={`transition-all duration-150 ${
+                      isWholeRoom ? '' : 'cursor-pointer hover:opacity-80'
+                    }`}
+                    onClick={(e) => handleBedClick(bed, e)}
+                  >
+                    {/* Bed rect */}
+                    <rect
+                      x="60"
+                      y={yPos}
+                      width="120"
+                      height={bedSpacing - 20}
+                      fill={colors.fill}
+                      stroke={colors.stroke}
+                      strokeWidth={isVacant ? 1 : 0.8}
+                      strokeDasharray={isVacant ? '4 3' : undefined}
+                      rx="2"
+                    />
+
+                    {/* Pillow — only for non-vacant beds */}
+                    {!isVacant && (
                       <rect
                         x="66"
                         y={yPos + 6}
@@ -371,92 +470,165 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                         height="18"
                         fill="#F4EFE7"
                         rx="1.5"
+                        opacity="0.9"
                       />
-                      {/* Tenant name (first name only if occupied by main tenant) */}
-                      <text
-                        x="130"
-                        y={yPos + (bedSpacing - 20) / 2 + 4}
-                        textAnchor="middle"
-                        fontFamily="Geist, Inter, sans-serif"
-                        fontSize="13"
-                        fontWeight="500"
-                        fill="#F4EFE7"
-                      >
-                        {idx === 0 && displayTenantName !== '—'
-                          ? displayTenantName.split(' ')[0].substring(0, 10)
-                          : `Person ${idx + 1}`}
-                      </text>
-                      <text
-                        x="130"
-                        y={yPos + (bedSpacing - 20) / 2 + 18}
-                        textAnchor="middle"
-                        fontFamily="JetBrains Mono, monospace"
-                        fontSize="9"
-                        fill="#9FE1CB"
-                        letterSpacing="1"
-                      >
-                        BED {bed.id.substring(1)}
-                      </text>
-                    </>
-                  ) : (
-                    <>
-                      <rect
-                        x="60"
-                        y={yPos}
-                        width="120"
-                        height={bedSpacing - 20}
-                        fill="none"
-                        stroke="#B8883D"
-                        strokeWidth="1"
-                        strokeDasharray="4 3"
-                        rx="2"
-                      />
-                      <rect
-                        x="66"
-                        y={yPos + 6}
-                        width="30"
-                        height="18"
-                        fill="none"
-                        stroke="#B8883D"
-                        strokeWidth="0.6"
-                        strokeDasharray="2 2"
-                        rx="1.5"
-                      />
-                      <text
-                        x="130"
-                        y={yPos + (bedSpacing - 20) / 2 + 6}
-                        textAnchor="middle"
-                        fontFamily="Geist, Inter, sans-serif"
-                        fontSize="12"
-                        fontStyle="italic"
-                        fill="#B8883D"
-                      >
-                        vacant
-                      </text>
-                    </>
-                  )}
-                </g>
-              )
-            })}
+                    )}
+
+                    {/* Tenant name or 'vacant' */}
+                    <text
+                      x="130"
+                      y={yPos + (bedSpacing - 20) / 2 + 4}
+                      textAnchor="middle"
+                      fontFamily="Geist, Inter, sans-serif"
+                      fontSize="13"
+                      fontWeight={isVacant ? '400' : '500'}
+                      fontStyle={isVacant ? 'italic' : 'normal'}
+                      fill={isVacant ? '#B8883D' : '#F4EFE7'}
+                    >
+                      {label}
+                    </text>
+
+                    {/* BED N small label */}
+                    <text
+                      x="130"
+                      y={yPos + (bedSpacing - 20) / 2 + 18}
+                      textAnchor="middle"
+                      fontFamily="JetBrains Mono, monospace"
+                      fontSize="9"
+                      fill={isVacant ? '#9C948B' : '#9FE1CB'}
+                      letterSpacing="1"
+                    >
+                      BED {bed.bed_number}
+                    </text>
+                  </g>
+                )
+              })
+            ) : (
+              // FALLBACK: Static rendering for Bartawi/pre-4B.5 rooms
+              staticLeftBeds.map((bed, idx) => {
+                const yPos = 60 + idx * bedSpacing
+                return (
+                  <g key={bed.id}>
+                    {bed.occupied ? (
+                      <>
+                        <rect
+                          x="60"
+                          y={yPos}
+                          width="120"
+                          height={bedSpacing - 20}
+                          fill="#1E4D52"
+                          stroke="#0D2A2D"
+                          strokeWidth="0.8"
+                          rx="2"
+                        />
+                        <rect
+                          x="66"
+                          y={yPos + 6}
+                          width="30"
+                          height="18"
+                          fill="#F4EFE7"
+                          rx="1.5"
+                        />
+                        <text
+                          x="130"
+                          y={yPos + (bedSpacing - 20) / 2 + 4}
+                          textAnchor="middle"
+                          fontFamily="Geist, Inter, sans-serif"
+                          fontSize="13"
+                          fontWeight="500"
+                          fill="#F4EFE7"
+                        >
+                          {idx === 0 && displayTenantName !== '—'
+                            ? displayTenantName.split(' ')[0].substring(0, 10)
+                            : `Person ${idx + 1}`}
+                        </text>
+                        <text
+                          x="130"
+                          y={yPos + (bedSpacing - 20) / 2 + 18}
+                          textAnchor="middle"
+                          fontFamily="JetBrains Mono, monospace"
+                          fontSize="9"
+                          fill="#9FE1CB"
+                          letterSpacing="1"
+                        >
+                          BED {bed.id.substring(1)}
+                        </text>
+                      </>
+                    ) : (
+                      <>
+                        <rect
+                          x="60"
+                          y={yPos}
+                          width="120"
+                          height={bedSpacing - 20}
+                          fill="none"
+                          stroke="#B8883D"
+                          strokeWidth="1"
+                          strokeDasharray="4 3"
+                          rx="2"
+                        />
+                        <rect
+                          x="66"
+                          y={yPos + 6}
+                          width="30"
+                          height="18"
+                          fill="none"
+                          stroke="#B8883D"
+                          strokeWidth="0.6"
+                          strokeDasharray="2 2"
+                          rx="1.5"
+                        />
+                        <text
+                          x="130"
+                          y={yPos + (bedSpacing - 20) / 2 + 6}
+                          textAnchor="middle"
+                          fontFamily="Geist, Inter, sans-serif"
+                          fontSize="12"
+                          fontStyle="italic"
+                          fill="#B8883D"
+                        >
+                          vacant
+                        </text>
+                      </>
+                    )}
+                  </g>
+                )
+              })
+            )}
 
             {/* RIGHT WALL beds */}
-            {rightBeds.map((bed, idx) => {
-              const yPos = 60 + idx * bedSpacing
-              return (
-                <g key={bed.id}>
-                  {bed.occupied ? (
-                    <>
-                      <rect
-                        x="300"
-                        y={yPos}
-                        width="120"
-                        height={bedSpacing - 20}
-                        fill="#1E4D52"
-                        stroke="#0D2A2D"
-                        strokeWidth="0.8"
-                        rx="2"
-                      />
-                      {/* Pillow on the wall-adjacent side (right) */}
+            {!useStaticFallback ? (
+              // Phase 4B.5: Real bedspace data
+              rightBeds.map((bed: any, idx: number) => {
+                const colors = getBedColors(bed)
+                const label = getBedLabel(bed)
+                const isVacant = colors.isDashed
+                const isWholeRoom = bed?.payment_status === 'whole_room'
+                const yPos = 60 + idx * bedSpacing
+
+                return (
+                  <g
+                    key={bed.bedspace_id}
+                    className={`transition-all duration-150 ${
+                      isWholeRoom ? '' : 'cursor-pointer hover:opacity-80'
+                    }`}
+                    onClick={(e) => handleBedClick(bed, e)}
+                  >
+                    {/* Bed rect */}
+                    <rect
+                      x="300"
+                      y={yPos}
+                      width="120"
+                      height={bedSpacing - 20}
+                      fill={colors.fill}
+                      stroke={colors.stroke}
+                      strokeWidth={isVacant ? 1 : 0.8}
+                      strokeDasharray={isVacant ? '4 3' : undefined}
+                      rx="2"
+                    />
+
+                    {/* Pillow — only for non-vacant beds */}
+                    {!isVacant && (
                       <rect
                         x="384"
                         y={yPos + 6}
@@ -464,70 +636,129 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                         height="18"
                         fill="#F4EFE7"
                         rx="1.5"
+                        opacity="0.9"
                       />
-                      <text
-                        x="360"
-                        y={yPos + (bedSpacing - 20) / 2 + 4}
-                        textAnchor="middle"
-                        fontFamily="Geist, Inter, sans-serif"
-                        fontSize="13"
-                        fontWeight="500"
-                        fill="#F4EFE7"
-                      >
-                        Person {idx + bedsPerWall + 1}
-                      </text>
-                      <text
-                        x="360"
-                        y={yPos + (bedSpacing - 20) / 2 + 18}
-                        textAnchor="middle"
-                        fontFamily="JetBrains Mono, monospace"
-                        fontSize="9"
-                        fill="#9FE1CB"
-                        letterSpacing="1"
-                      >
-                        BED {bed.id.substring(1)}
-                      </text>
-                    </>
-                  ) : (
-                    <>
-                      <rect
-                        x="300"
-                        y={yPos}
-                        width="120"
-                        height={bedSpacing - 20}
-                        fill="none"
-                        stroke="#B8883D"
-                        strokeWidth="1"
-                        strokeDasharray="4 3"
-                        rx="2"
-                      />
-                      <rect
-                        x="384"
-                        y={yPos + 6}
-                        width="30"
-                        height="18"
-                        fill="none"
-                        stroke="#B8883D"
-                        strokeWidth="0.6"
-                        strokeDasharray="2 2"
-                        rx="1.5"
-                      />
-                      <text
-                        x="360"
-                        y={yPos + (bedSpacing - 20) / 2 + 6}
-                        textAnchor="middle"
-                        fontFamily="Geist, Inter, sans-serif"
-                        fontSize="12"
-                        fontStyle="italic"
-                        fill="#B8883D"
-                      >
-                        vacant
-                      </text>
-                    </>
-                  )}
-                </g>
-              )
-            })}
+                    )}
+
+                    {/* Tenant name or 'vacant' */}
+                    <text
+                      x="360"
+                      y={yPos + (bedSpacing - 20) / 2 + 4}
+                      textAnchor="middle"
+                      fontFamily="Geist, Inter, sans-serif"
+                      fontSize="13"
+                      fontWeight={isVacant ? '400' : '500'}
+                      fontStyle={isVacant ? 'italic' : 'normal'}
+                      fill={isVacant ? '#B8883D' : '#F4EFE7'}
+                    >
+                      {label}
+                    </text>
+
+                    {/* BED N small label */}
+                    <text
+                      x="360"
+                      y={yPos + (bedSpacing - 20) / 2 + 18}
+                      textAnchor="middle"
+                      fontFamily="JetBrains Mono, monospace"
+                      fontSize="9"
+                      fill={isVacant ? '#9C948B' : '#9FE1CB'}
+                      letterSpacing="1"
+                    >
+                      BED {bed.bed_number}
+                    </text>
+                  </g>
+                )
+              })
+            ) : (
+              // FALLBACK: Static rendering for Bartawi/pre-4B.5 rooms
+              staticRightBeds.map((bed, idx) => {
+                const yPos = 60 + idx * bedSpacing
+                return (
+                  <g key={bed.id}>
+                    {bed.occupied ? (
+                      <>
+                        <rect
+                          x="300"
+                          y={yPos}
+                          width="120"
+                          height={bedSpacing - 20}
+                          fill="#1E4D52"
+                          stroke="#0D2A2D"
+                          strokeWidth="0.8"
+                          rx="2"
+                        />
+                        <rect
+                          x="384"
+                          y={yPos + 6}
+                          width="30"
+                          height="18"
+                          fill="#F4EFE7"
+                          rx="1.5"
+                        />
+                        <text
+                          x="360"
+                          y={yPos + (bedSpacing - 20) / 2 + 4}
+                          textAnchor="middle"
+                          fontFamily="Geist, Inter, sans-serif"
+                          fontSize="13"
+                          fontWeight="500"
+                          fill="#F4EFE7"
+                        >
+                          Person {idx + bedsPerWall + 1}
+                        </text>
+                        <text
+                          x="360"
+                          y={yPos + (bedSpacing - 20) / 2 + 18}
+                          textAnchor="middle"
+                          fontFamily="JetBrains Mono, monospace"
+                          fontSize="9"
+                          fill="#9FE1CB"
+                          letterSpacing="1"
+                        >
+                          BED {bed.id.substring(1)}
+                        </text>
+                      </>
+                    ) : (
+                      <>
+                        <rect
+                          x="300"
+                          y={yPos}
+                          width="120"
+                          height={bedSpacing - 20}
+                          fill="none"
+                          stroke="#B8883D"
+                          strokeWidth="1"
+                          strokeDasharray="4 3"
+                          rx="2"
+                        />
+                        <rect
+                          x="384"
+                          y={yPos + 6}
+                          width="30"
+                          height="18"
+                          fill="none"
+                          stroke="#B8883D"
+                          strokeWidth="0.6"
+                          strokeDasharray="2 2"
+                          rx="1.5"
+                        />
+                        <text
+                          x="360"
+                          y={yPos + (bedSpacing - 20) / 2 + 6}
+                          textAnchor="middle"
+                          fontFamily="Geist, Inter, sans-serif"
+                          fontSize="12"
+                          fontStyle="italic"
+                          fill="#B8883D"
+                        >
+                          vacant
+                        </text>
+                      </>
+                    )}
+                  </g>
+                )
+              })
+            )}
 
             {/* Center: table */}
             <rect
@@ -1031,8 +1262,19 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
       {/* Lease Wizard */}
       <CreateLeaseWizard
         open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
+        onClose={() => {
+          setWizardOpen(false)
+          setPrefilledBedspaceId(null)  // Clear prefill on close
+        }}
         campId={room?.camp_id}
+        prefilledRoomId={room?.id}
+        prefilledBedspaceId={prefilledBedspaceId}
+      />
+
+      {/* Bed Detail Panel — Phase 4B.5 */}
+      <BedInterior
+        bedspaceId={openedBedspaceId}
+        onClose={() => setOpenedBedspaceId(null)}
       />
     </motion.div>
   )

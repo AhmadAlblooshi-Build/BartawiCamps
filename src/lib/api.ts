@@ -214,4 +214,8 @@ export const endpoints = {
 
   deleteDraftLease: (leaseId: string) =>
     api.delete<{ deleted: boolean }>(`/leases/${leaseId}`),
+
+  // --- Phase 4B.5: Bed-level leasing ---
+  bedspace: (bedspaceId: string) =>
+    api.get<any>(`/bedspaces/${bedspaceId}`),
 }
