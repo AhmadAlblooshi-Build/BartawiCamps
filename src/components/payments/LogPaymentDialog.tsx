@@ -129,6 +129,7 @@ export function LogPaymentDialog({ open, onClose, room, paymentType = 'rent' }: 
   // Mutation
   const createPaymentMutation = useMutation({
     mutationFn: (data: PaymentData) => endpoints.createPayment(data),
+    retry: false,  // Disable retry to prevent storm on validation errors
     onSuccess: () => {
       // Invalidate all caches affected by payment write (centralized helper)
       invalidatePaymentCaches(queryClient, {
