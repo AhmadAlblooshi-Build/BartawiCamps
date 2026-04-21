@@ -13,11 +13,10 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Mount SQL files for easy execution
+      # Mount current schema for initial setup
       - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
-      - ./seed_structure.sql:/docker-entrypoint-initdb.d/02_seed_structure.sql
-      - ./seed_entities.sql:/docker-entrypoint-initdb.d/03_seed_entities.sql
-      - ./seed_monthly.sql:/docker-entrypoint-initdb.d/04_seed_monthly.sql
+      # Note: Use Prisma migrations & seed scripts for data:
+      #   cd server && npx prisma migrate deploy && npx prisma db seed
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bartawi -d bartawi_cms"]
       interval: 10s
