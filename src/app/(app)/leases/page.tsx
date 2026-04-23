@@ -202,6 +202,13 @@ export default function LeasesPage() {
                     Co.
                   </span>
                 )}
+                {/* Phase 4B.6: Occupant count chip */}
+                {lease.occupant_count !== undefined && lease.occupant_count > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-teal/10 text-teal">
+                    <Icon icon={User} size={10} />
+                    {lease.occupant_count} occupant{lease.occupant_count !== 1 ? 's' : ''}
+                  </span>
+                )}
               </div>
 
               {/* Block + Camp */}

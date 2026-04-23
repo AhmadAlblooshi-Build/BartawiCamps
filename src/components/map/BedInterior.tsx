@@ -3,11 +3,15 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'motion/react'
-import { endpoints } from '@/lib/api'
+import { endpoints, type Occupant } from '@/lib/api'
 import { Icon } from '@/components/ui/Icon'
-import { X, User, Calendar, DollarSign, LogOut } from 'lucide-react'
+import { X, User, Calendar, DollarSign, LogOut, UserPlus, Users } from 'lucide-react'
 import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
 import CheckoutWizard from '@/components/leases/CheckoutWizard'
+import { OccupantCard } from '@/components/occupants/OccupantCard'
+import { AddOccupantDialog } from '@/components/occupants/AddOccupantDialog'
+import { ArchiveOccupantDialog } from '@/components/occupants/ArchiveOccupantDialog'
+import { SwapOccupantDialog } from '@/components/occupants/SwapOccupantDialog'
 
 const SPRING = { type: 'spring' as const, stiffness: 340, damping: 32 }
 
@@ -22,10 +26,21 @@ const monthName = (m: number) =>
 export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
   const [payOpen, setPayOpen] = useState(false)
   const [checkoutOpen, setCheckoutOpen] = useState(false)
+  const [addOccupantOpen, setAddOccupantOpen] = useState(false)
+  const [archiveOccupantOpen, setArchiveOccupantOpen] = useState(false)
+  const [swapOccupantOpen, setSwapOccupantOpen] = useState(false)
+  const [selectedOccupant, setSelectedOccupant] = useState<Occupant | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['bedspace', bedspaceId],
     queryFn: () => endpoints.bedspace(bedspaceId!),
+    enabled: !!bedspaceId,
+  })
+
+  // Phase 4B.6: Query bedspace occupants
+  const { data: occupantsData } = useQuery({
+    queryKey: ['bedspace-occupants', bedspaceId],
+    queryFn: () => endpoints.bedspaceOccupants(bedspaceId!),
     enabled: !!bedspaceId,
   })
 
@@ -34,6 +49,10 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
   // Phase 4B.5: Backend returns flat response, not wrapped in .bedspace
   const bed = data
   const lease = bed?.active_lease
+  const activeOccupant = occupantsData?.occupants?.find((o: Occupant) => o.status === 'active')
+  const history = occupantsData?.occupants?.filter(
+    (o: Occupant) => o.status === 'archived'
+  ) || []
 
   return (
     <AnimatePresence>
@@ -93,6 +112,63 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
                   <div className="font-display italic text-lg text-espresso">
                     {lease.tenant?.display_name}
                   </div>
+                </div>
+
+                {/* Phase 4B.6: Occupant Section */}
+                <div className="border-t border-dust pt-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-xs uppercase tracking-wider text-stone">
+                      <Users size={12} className="inline mr-1" />
+                      Occupant
+                    </div>
+                    {!activeOccupant && lease.status === 'active' && (
+                      <button
+                        onClick={() => setAddOccupantOpen(true)}
+                        className="text-xs text-teal hover:text-teal/80 flex items-center gap-1 transition-colors"
+                      >
+                        <UserPlus size={12} />
+                        Add
+                      </button>
+                    )}
+                  </div>
+
+                  {activeOccupant ? (
+                    <OccupantCard
+                      occupant={activeOccupant}
+                      showActions={lease.status === 'active'}
+                      onArchive={() => {
+                        setSelectedOccupant(activeOccupant)
+                        setArchiveOccupantOpen(true)
+                      }}
+                      onSwap={() => {
+                        setSelectedOccupant(activeOccupant)
+                        setSwapOccupantOpen(true)
+                      }}
+                    />
+                  ) : (
+                    <div className="p-4 bg-wash border border-dust rounded-xl text-center">
+                      <div className="text-sm text-stone">No active occupant</div>
+                      {lease.status === 'active' && (
+                        <div className="text-xs text-stone/60 mt-1">
+                          Click &quot;Add&quot; to assign someone to this bed
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Occupant History */}
+                  {history.length > 0 && (
+                    <details className="mt-4">
+                      <summary className="text-xs text-stone cursor-pointer hover:text-espresso select-none">
+                        Occupant history ({history.length})
+                      </summary>
+                      <div className="space-y-2 mt-2">
+                        {history.map((o: Occupant) => (
+                          <OccupantCard key={o.id} occupant={o} />
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </div>
 
                 {/* Lease Terms */}
@@ -239,6 +315,46 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
                 camp_id: bed?.camp_id,
               }}
             />
+          )}
+
+          {/* Phase 4B.6: Occupant Dialogs */}
+          {lease && (
+            <>
+              <AddOccupantDialog
+                isOpen={addOccupantOpen}
+                onClose={() => setAddOccupantOpen(false)}
+                leaseId={lease.id}
+                roomId={bed?.room_id}
+                bedspaceId={bedspaceId}
+                bedNumber={bed?.bed_number}
+              />
+
+              {selectedOccupant && (
+                <>
+                  <ArchiveOccupantDialog
+                    isOpen={archiveOccupantOpen}
+                    onClose={() => {
+                      setArchiveOccupantOpen(false)
+                      setSelectedOccupant(null)
+                    }}
+                    occupant={selectedOccupant}
+                    leaseId={lease.id}
+                    roomId={bed?.room_id}
+                  />
+
+                  <SwapOccupantDialog
+                    isOpen={swapOccupantOpen}
+                    onClose={() => {
+                      setSwapOccupantOpen(false)
+                      setSelectedOccupant(null)
+                    }}
+                    occupant={selectedOccupant}
+                    leaseId={lease.id}
+                    roomId={bed?.room_id}
+                  />
+                </>
+              )}
+            </>
           )}
         </>
       )}

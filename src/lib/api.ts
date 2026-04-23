@@ -11,6 +11,57 @@ export interface ApiError extends Error {
   details?: any
 }
 
+// Phase 4B.6: Occupant Management types
+export interface Occupant {
+  id: string
+  saas_tenant_id: string
+  lease_id: string
+  bedspace_id: string
+  linked_tenant_id: string | null
+  full_name: string
+  national_id: string | null
+  passport_number: string | null
+  phone: string | null
+  nationality: string | null
+  date_of_birth: string | null
+  photo_url: string | null
+  status: 'active' | 'archived'
+  checked_in_at: string
+  checked_out_at: string | null
+  checkout_reason: 'swap' | 'lease_ended' | 'left_voluntarily' | 'terminated' | 'other' | null
+  checkout_notes: string | null
+  notes: string | null
+  emergency_contact: string | null
+  emergency_phone: string | null
+  created_at: string
+  updated_at: string
+  created_by: string | null
+  bedspace?: any
+  linked_tenant?: any
+  lease?: any
+}
+
+export interface OccupantCreatePayload {
+  bedspace_id: string
+  full_name: string
+  national_id?: string | null
+  passport_number?: string | null
+  phone?: string | null
+  nationality?: string | null
+  date_of_birth?: string | null
+  emergency_contact?: string | null
+  emergency_phone?: string | null
+  notes?: string | null
+  checked_in_at?: string | null
+  linked_tenant_id?: string | null
+}
+
+export interface OccupantSwapPayload {
+  from_occupant_id: string
+  to_occupant: Omit<OccupantCreatePayload, 'bedspace_id'>
+  reason?: string | null
+}
+
 function makeError(status: number, body: any, fallback = 'Request failed'): ApiError {
   const err = new Error(body?.error?.message || body?.message || fallback) as ApiError
   err.code = body?.error?.code
@@ -277,4 +328,55 @@ export const endpoints = {
     const qs = checkoutDate ? `?checkout_date=${checkoutDate}` : ''
     return api.get<any>(`/leases/${leaseId}/checkout-preview${qs}`)
   },
+
+  // --- Phase 4B.6: Occupant Management ---
+  leaseOccupants: (leaseId: string, includeArchived = false) => {
+    const qs = includeArchived ? '?include_archived=true' : ''
+    return api.get<{ lease_id: string; occupants: Occupant[]; counts: { active: number; archived: number } }>(
+      `/leases/${leaseId}/occupants${qs}`
+    )
+  },
+
+  bedspaceOccupants: (bedspaceId: string) =>
+    api.get<{ bedspace_id: string; occupants: Occupant[]; counts: { total: number; active: number; archived: number } }>(
+      `/bedspaces/${bedspaceId}/occupants`
+    ),
+
+  roomOccupants: (roomId: string) =>
+    api.get<{ room_id: string; roster: Array<{ bedspace_id: string; bed_number: string; active_occupant: Occupant | null }> }>(
+      `/rooms/${roomId}/occupants`
+    ),
+
+  createOccupant: (leaseId: string, payload: OccupantCreatePayload) =>
+    api.post<{ occupant: Occupant }>(`/leases/${leaseId}/occupants`, payload),
+
+  archiveOccupant: (occupantId: string, payload: {
+    checkout_reason: 'swap' | 'lease_ended' | 'left_voluntarily' | 'terminated' | 'other'
+    checkout_notes?: string | null
+    checked_out_at?: string | null
+  }) =>
+    api.post<{ occupant: Occupant }>(`/occupants/${occupantId}/archive`, payload),
+
+  swapOccupants: (leaseId: string, payload: OccupantSwapPayload) =>
+    api.post<{ archived: Occupant; created: Occupant }>(`/leases/${leaseId}/occupants/swap`, payload),
+
+  peopleSearch: (query: string) =>
+    api.get<{
+      query: string
+      results: Array<{
+        type: 'tenant' | 'occupant'
+        id: string
+        name: string
+        display_subtype: string
+        national_id?: string | null
+        passport_number?: string | null
+        phone?: string | null
+        current_bed?: string | null
+        lease_id?: string
+        lease_status?: string
+        tenant_id?: string
+        lessee_name?: string | null
+      }>
+      counts: { total: number; tenants: number; occupants: number }
+    }>(`/people/search?q=${encodeURIComponent(query)}`),
 }

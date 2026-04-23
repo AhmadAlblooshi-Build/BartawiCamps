@@ -10,7 +10,7 @@ import { toast } from 'sonner'
 import { Icon } from '@/components/ui/Icon'
 import {
   X, Calendar, ClipboardCheck, DollarSign, CheckCircle2, AlertTriangle,
-  AlertCircle, ArrowRight, ArrowLeft, Home, Trash2, Plus
+  AlertCircle, ArrowRight, ArrowLeft, Home, Trash2, Plus, User
 } from 'lucide-react'
 
 const SPRING = { type: 'spring' as const, stiffness: 340, damping: 32 }
@@ -805,6 +805,24 @@ export default function CheckoutWizard({ open, onClose, lease }: CheckoutWizardP
                     )}
                   </div>
                 </div>
+
+                {/* Phase 4B.6: Occupants being checked out */}
+                {preview.occupants_to_archive && preview.occupants_to_archive.length > 0 && (
+                  <div className="mt-4 p-3 bg-rust/5 border border-rust/20 rounded-lg">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-rust font-medium mb-2">
+                      Occupants being checked out
+                    </div>
+                    <div className="space-y-1">
+                      {preview.occupants_to_archive.map((o: any) => (
+                        <div key={o.id} className="text-xs text-espresso flex items-center gap-2">
+                          <Icon icon={User} size={11} className="text-stone" />
+                          <span>{o.full_name}</span>
+                          {o.bed_number && <span className="text-stone">· Bed {o.bed_number}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {refundAmount > 0 && (
                   <div className="space-y-4">

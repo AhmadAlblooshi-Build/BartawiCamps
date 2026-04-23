@@ -30,8 +30,8 @@ export function GlobalSearch() {
     enabled: q.length >= 2,
   })
   const { data: people } = useQuery({
-    queryKey: ['search-individuals', q],
-    queryFn: () => endpoints.searchEntities(q, 'individual'),
+    queryKey: ['people-search', q],
+    queryFn: () => endpoints.peopleSearch(q),
     enabled: q.length >= 2,
   })
   const { data: companies } = useQuery({
@@ -84,14 +84,20 @@ export function GlobalSearch() {
                     ))}
                   </ResultSection>
                 )}
-                {people?.data && people.data.length > 0 && (
-                  <ResultSection title="Tenants" icon={UsersThree}>
-                    {people.data.map((p: any) => (
-                      <ResultItem
-                        key={p.id}
-                        label={p.full_name || p.owner_name}
-                        sub={p.mobile_number || p.nationality || ''}
-                        onClick={() => { router.push(`/rooms?tenant=${p.id}`); setOpen(false) }}
+                {people?.results && people.results.length > 0 && (
+                  <ResultSection title="People" icon={UsersThree}>
+                    {people.results.map((person: any) => (
+                      <PeopleResultItem
+                        key={person.id}
+                        person={person}
+                        onClick={() => {
+                          if (person.type === 'tenant') {
+                            router.push(`/tenants/${person.id}`)
+                          } else if (person.type === 'occupant' && person.tenant_id) {
+                            router.push(`/tenants/${person.tenant_id}`)
+                          }
+                          setOpen(false)
+                        }}
                       />
                     ))}
                   </ResultSection>
@@ -108,7 +114,7 @@ export function GlobalSearch() {
                     ))}
                   </ResultSection>
                 )}
-                {(!rooms?.data?.length && !people?.data?.length && !companies?.data?.length) && (
+                {(!rooms?.data?.length && !people?.results?.length && !companies?.data?.length) && (
                   <div className="px-5 py-10 text-center text-[12px] text-espresso-muted">
                     No matches for &ldquo;{q}&rdquo;
                   </div>
@@ -139,6 +145,54 @@ function ResultItem({ label, sub, onClick }: { label: string; sub: string; onCli
     <button onClick={onClick} className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-sand-100 transition-colors text-left">
       <div className="font-body text-[13px] font-medium text-espresso truncate">{label}</div>
       <div className="font-body text-[11px] text-espresso-muted truncate ml-4">{sub}</div>
+    </button>
+  )
+}
+
+function PeopleResultItem({ person, onClick }: { person: any; onClick: () => void }) {
+  // Determine badge styling based on display_subtype
+  const getBadgeStyles = (subtype: string) => {
+    if (subtype === 'Lessee') {
+      return { bg: 'bg-teal/10', text: 'text-teal' }
+    } else if (subtype === 'Active occupant') {
+      return { bg: 'bg-amber/10', text: 'text-amber-gold' }
+    } else if (subtype === 'Past occupant') {
+      return { bg: 'bg-stone/10', text: 'text-stone' }
+    }
+    return { bg: 'bg-sand-100', text: 'text-espresso-muted' }
+  }
+
+  // Determine secondary info based on type
+  const getSecondaryInfo = () => {
+    if (person.type === 'tenant') {
+      return person.national_id || person.phone || ''
+    } else if (person.type === 'occupant') {
+      if (person.current_bed) {
+        const parts = [person.current_bed]
+        if (person.lessee_name) parts.push(`Under: ${person.lessee_name}`)
+        if (person.phone) parts.push(person.phone)
+        return parts.join(' · ')
+      } else {
+        return `Past occupant${person.national_id ? ' · ' + person.national_id : ''}`
+      }
+    }
+    return ''
+  }
+
+  const badge = getBadgeStyles(person.display_subtype)
+  const secondaryInfo = getSecondaryInfo()
+
+  return (
+    <button onClick={onClick} className="w-full px-3 py-2 rounded-lg hover:bg-sand-100 transition-colors text-left">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-body text-[13px] font-bold text-espresso truncate">{person.name}</div>
+        <span className={`ml-2 px-2 py-0.5 rounded text-[10px] font-medium ${badge.bg} ${badge.text} shrink-0`}>
+          {person.display_subtype}
+        </span>
+      </div>
+      {secondaryInfo && (
+        <div className="font-body text-[11px] text-espresso-muted truncate">{secondaryInfo}</div>
+      )}
     </button>
   )
 }

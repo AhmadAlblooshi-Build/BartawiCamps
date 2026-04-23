@@ -30,6 +30,9 @@ import CheckoutWizard from '@/components/leases/CheckoutWizard'
 import BedInterior from '@/components/map/BedInterior'
 import { CaretLeft } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { AddOccupantDialog } from '@/components/occupants/AddOccupantDialog'
+import { SwapOccupantDialog } from '@/components/occupants/SwapOccupantDialog'
+import type { Occupant } from '@/lib/api'
 
 interface RoomInteriorProps {
   room: any
@@ -66,10 +69,22 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
 
   // Fetch payment history for active lease
   const leaseId = room.current_month?.lease_id || room.active_lease?.id
+
+  // Phase 4B.6: Room-level lease check (bedspace_id is null for whole-room leases)
+  const hasActiveLease = !!leaseId
+  const hasRoomLevelLease = hasActiveLease && room.active_lease?.bedspace_id === null
+
   const { data: paymentsData } = useQuery({
     queryKey: ['lease-payments', leaseId],
     queryFn: () => endpoints.leasePayments(leaseId),
     enabled: !!leaseId,
+  })
+
+  // Phase 4B.6: Fetch room occupants roster (only for whole-room leases)
+  const { data: rosterData } = useQuery({
+    queryKey: ['room-occupants', room.id],
+    queryFn: () => endpoints.roomOccupants(room.id),
+    enabled: !!room.id && hasRoomLevelLease,
   })
 
   const contract = getContractInfo(room)
@@ -107,7 +122,6 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const canLease = isVacant && !isBartawi
 
   // Payment capabilities
-  const hasActiveLease = !!(room.active_lease?.id || room.current_month?.lease_id)
   const canLogRent = hasActiveLease && balance > 0
   const depositRemaining = (room.active_lease?.deposit_amount || 0) - (room.active_lease?.deposit_paid || 0)
   const canLogDeposit = hasActiveLease && depositRemaining > 0
@@ -133,6 +147,10 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
 
   // Checkout wizard state
   const [checkoutOpen, setCheckoutOpen] = useState(false)
+
+  // Phase 4B.6: Occupant management state
+  const [addOccupantBedspaceId, setAddOccupantBedspaceId] = useState<string | null>(null)
+  const [swapFromOccupant, setSwapFromOccupant] = useState<Occupant | null>(null)
 
   // Phase 4B.5: Real bedspace data from API (bedspaces_state)
   const bedspaces = (room?.bedspaces_state || []).slice().sort(
@@ -203,8 +221,11 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   }
 
   const getBedLabel = (bed: any) => {
-    if (!bed?.tenant) return 'vacant'
-    const name = bed.tenant.display_name || 'Unknown'
+    if (!bed?.tenant && !bed?.active_occupant) return 'vacant'
+    // Prefer occupant name (bed-specific) over lessee name (room-wide)
+    const name = bed.active_occupant?.full_name
+              ?? bed.tenant?.display_name
+              ?? 'Unknown'
     // First word, capped at 10 chars to fit bed rect
     return name.split(' ')[0].substring(0, 10)
   }
@@ -212,21 +233,23 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const handleBedClick = (bed: any, e: React.MouseEvent) => {
     e.stopPropagation()  // CRITICAL — prevent room-level click bubble
 
-    // Whole-room leased → bed clicks are no-ops (the room detail
-    // is already the current view, so nothing to open)
-    if (room?.has_room_level_lease) {
-      return
-    }
-
     // Occupied bed → open BedInterior detail panel
     if (bed?.status === 'occupied' || bed?.tenant) {
       setOpenedBedspaceId(bed.bedspace_id)
       return
     }
 
-    // Vacant bed → open wizard prefilled with bedspace_id
-    setPrefilledBedspaceId(bed.bedspace_id)
-    setWizardOpen(true)
+    // Phase 4B.6: Two-path vacant bed click logic
+    // If room has active whole-room lease → add occupant to that lease
+    // Otherwise → create new lease (bed-level or room-level)
+    if (hasRoomLevelLease) {
+      // Room has whole-room lease → add occupant
+      setAddOccupantBedspaceId(bed.bedspace_id)
+    } else {
+      // No whole-room lease (room vacant or has bed-level leases) → create new lease
+      setPrefilledBedspaceId(bed.bedspace_id)
+      setWizardOpen(true)
+    }
   }
 
   return (
@@ -1098,6 +1121,70 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
             </motion.div>
           )}
 
+          {/* Phase 4B.6: Occupant Roster */}
+          {hasRoomLevelLease && rosterData?.roster && (
+            <motion.div
+              className="p-4 bg-paper rounded-xl border border-dust"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.32 }}
+            >
+              <p className="text-[10px] tracking-[0.14em] uppercase text-stone mb-2.5 font-medium">
+                Occupants ({rosterData.roster.filter((r: any) => r.active_occupant).length} of{' '}
+                {rosterData.roster.length} beds)
+              </p>
+              <div className="space-y-2">
+                {rosterData.roster.map((bedRoster: any) => {
+                  const occupant = bedRoster.active_occupant
+                  return (
+                    <div
+                      key={bedRoster.bedspace_id}
+                      className="flex justify-between items-center pb-2 border-b border-dust/50 last:border-0"
+                    >
+                      <div className="flex-1">
+                        <div className="text-[10px] text-stone/70 mb-0.5">
+                          Bed {bedRoster.bed_number}
+                        </div>
+                        {occupant ? (
+                          <div>
+                            <div className="text-[11px] font-medium text-espresso">
+                              {occupant.full_name}
+                            </div>
+                            <div className="text-[10px] text-stone mt-0.5">
+                              {occupant.nationality && `${occupant.nationality} • `}
+                              Check-in: {new Date(occupant.checked_in_at).toLocaleDateString()}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-[11px] italic text-stone/60">
+                            No occupant — click to add
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        {occupant ? (
+                          <button
+                            onClick={() => setSwapFromOccupant(occupant)}
+                            className="px-3 py-1.5 text-[10px] font-medium rounded-full bg-amber-gold/10 hover:bg-amber-gold/20 text-amber-gold transition-colors"
+                          >
+                            Manage
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setAddOccupantBedspaceId(bedRoster.bedspace_id)}
+                            className="px-3 py-1.5 text-[10px] font-medium rounded-full bg-teal/10 hover:bg-teal/20 text-teal transition-colors"
+                          >
+                            Add
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </motion.div>
+          )}
+
           {/* Action buttons */}
           {status === 'occupied' && (
             <motion.div
@@ -1295,6 +1382,30 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
             camp_id: room.camp_id,
             tenant_name: displayTenantName,
           }}
+        />
+      )}
+
+      {/* Phase 4B.6: Occupant Dialogs */}
+      {hasRoomLevelLease && addOccupantBedspaceId && (
+        <AddOccupantDialog
+          isOpen={!!addOccupantBedspaceId}
+          onClose={() => setAddOccupantBedspaceId(null)}
+          leaseId={room.active_lease.id}
+          roomId={room.id}
+          bedspaceId={addOccupantBedspaceId}
+          bedNumber={
+            bedspaces.find((b: any) => b.id === addOccupantBedspaceId)?.bed_number || ''
+          }
+        />
+      )}
+
+      {hasRoomLevelLease && swapFromOccupant && (
+        <SwapOccupantDialog
+          isOpen={!!swapFromOccupant}
+          onClose={() => setSwapFromOccupant(null)}
+          occupant={swapFromOccupant}
+          leaseId={room.active_lease.id}
+          roomId={room.id}
         />
       )}
     </motion.div>

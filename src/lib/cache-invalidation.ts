@@ -198,3 +198,57 @@ export function invalidateCheckoutCaches(
   queryClient.invalidateQueries({ queryKey: ['all-summaries'], ...opts })
   queryClient.invalidateQueries({ queryKey: ['outstanding-leaderboard'], ...opts })
 }
+
+/**
+ * Invalidates ALL query keys affected by occupant write operations.
+ * Use this from any component that creates/archives/swaps occupants.
+ *
+ * Phase 4B.6: Occupant operations affect lease status, bedspace availability,
+ * room roster, checkout preview, and people search. This helper ensures
+ * consistent cache invalidation across all occupant management flows.
+ */
+export function invalidateOccupantCaches(
+  queryClient: QueryClient,
+  context: {
+    leaseId: string
+    bedspaceId?: string
+    roomId?: string
+  }
+) {
+  const opts = { refetchType: 'all' as const }
+  const { leaseId, bedspaceId, roomId } = context
+
+  // ── Occupant-specific caches ──
+  queryClient.invalidateQueries({ queryKey: ['lease-occupants', leaseId], ...opts })
+  if (bedspaceId) {
+    queryClient.invalidateQueries({ queryKey: ['bedspace-occupants', bedspaceId], ...opts })
+  }
+  if (roomId) {
+    queryClient.invalidateQueries({ queryKey: ['room-occupants', roomId], ...opts })
+  }
+
+  // ── Lease (occupant_count field) ──
+  queryClient.invalidateQueries({ queryKey: ['lease', leaseId], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['leases'], ...opts })
+
+  // ── Bedspace (occupancy status) ──
+  if (bedspaceId) {
+    queryClient.invalidateQueries({ queryKey: ['bedspace', bedspaceId], ...opts })
+  }
+  queryClient.invalidateQueries({ queryKey: ['bedspace'], ...opts })
+
+  // ── Room (roster view) ──
+  if (roomId) {
+    queryClient.invalidateQueries({ queryKey: ['room', roomId], ...opts })
+  }
+
+  // ── Checkout preview (occupants_to_archive field) ──
+  queryClient.invalidateQueries({ queryKey: ['checkout-preview', leaseId], ...opts })
+
+  // ── People search (merged tenant + occupant results) ──
+  queryClient.invalidateQueries({ queryKey: ['people-search'], ...opts })
+
+  // ── Map views (room tiles show occupant counts) ──
+  queryClient.invalidateQueries({ queryKey: ['rooms-for-map'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['camp-rooms'], ...opts })
+}
