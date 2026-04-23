@@ -17,6 +17,36 @@ import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
 
 const SPRING = { type: 'spring' as const, stiffness: 340, damping: 32 }
 
+// Phase 4B.7: Duration presets for Terms step
+const DURATION_PRESETS = [
+  { label: '2 weeks', days: 14, months: 1 },
+  { label: '1 month', days: 30, months: 1 },
+  { label: '3 months', days: 90, months: 3 },
+  { label: '6 months', days: 180, months: 6 },
+  { label: '1 year', days: 365, months: 12 },
+  { label: 'Custom', custom: true },
+  { label: 'Open-ended', openEnded: true },
+] as const
+
+function applyDurationPreset(preset: any, startDate: string) {
+  if (preset.openEnded) {
+    return { end_date: '', schedule_months: 12 }
+  }
+  if (preset.custom) {
+    return null  // user manually adjusts
+  }
+  if (!startDate) return null
+  const start = new Date(startDate + 'T00:00:00Z')
+  const end = new Date(start)
+  if (preset.days) {
+    end.setUTCDate(end.getUTCDate() + preset.days)
+  }
+  return {
+    end_date: end.toISOString().slice(0, 10),
+    schedule_months: preset.months,
+  }
+}
+
 interface WizardProps {
   open: boolean
   onClose: () => void
@@ -25,7 +55,7 @@ interface WizardProps {
   prefilledBedspaceId?: string | null
 }
 
-type Step = 'identify' | 'profile' | 'room' | 'bed' | 'terms' | 'deposit' | 'review' | 'activating' | 'done'
+type Step = 'identify' | 'profile' | 'room' | 'scope' | 'bed' | 'terms' | 'deposit' | 'review' | 'activating' | 'done'
 
 interface WizardData {
   // Tenant
@@ -48,6 +78,10 @@ interface WizardData {
   // Room selection
   roomId?: string
   roomNumber?: string
+  totalBeds?: number  // Phase 4B.7
+  propertyType?: string  // Phase 4B.7
+  suggestedWholeRoomRent?: number | null  // Phase 4B.7
+  suggestedBedLevelRent?: number | null  // Phase 4B.7
 
   // Phase 4B.5: Bed selection
   bedspaceId?: string
@@ -69,6 +103,7 @@ interface WizardData {
 export default function CreateLeaseWizard({ open, onClose, campId, prefilledRoomId, prefilledBedspaceId }: WizardProps) {
   const [step, setStep] = useState<Step>('identify')
   const [data, setData] = useState<WizardData>({ tenantType: 'individual' })
+  const [leaseScope, setLeaseScope] = useState<'whole_room' | 'bed_level'>('bed_level')
   const queryClient = useQueryClient()
 
   // SSR-safe portal mounting
@@ -86,9 +121,18 @@ export default function CreateLeaseWizard({ open, onClose, campId, prefilledRoom
     }
   }, [open, prefilledRoomId, prefilledBedspaceId])
 
+  // Phase 4B.7: Default scope initializer (backup, primary init is in RoomStep routing)
+  useEffect(() => {
+    if (step === 'scope' && data.roomId) {
+      const isCompany = data.tenantType === 'company' || data.profileIsCompany
+      setLeaseScope(isCompany ? 'whole_room' : 'bed_level')
+    }
+  }, [step, data.roomId, data.tenantType, data.profileIsCompany])
+
   const reset = () => {
     setStep('identify')
     setData({ tenantType: 'individual' })
+    setLeaseScope('bed_level')  // Phase 4B.7: Reset scope default
   }
 
   const handleClose = () => {
@@ -194,11 +238,51 @@ export default function CreateLeaseWizard({ open, onClose, campId, prefilledRoom
                 setStep('room')
               }
             }} onBack={() => setStep('identify')} />}
-            {step === 'room' && <RoomStep key="room" data={data} setData={setData} campId={campId} onNext={(nextStep: Step) => setStep(nextStep)} onBack={(prevStep: Step) => setStep(prevStep)} />}
+            {step === 'room' && <RoomStep key="room" data={data} setData={setData} campId={campId} onNext={(nextStep: Step) => {
+              // Phase 4B.7: Scope-aware routing - intercept and check if scope step needed
+              if (nextStep === 'bed' || nextStep === 'terms') {
+                const totalBeds = data.totalBeds || 1
+                const propertyTypeName = data.propertyType || ''
+                const isBartawi = propertyTypeName.toLowerCase().includes('bartawi')
+
+                if (totalBeds <= 1 || isBartawi) {
+                  // Skip scope step — whole-room is only option
+                  setLeaseScope('whole_room')
+                  setData((prev: any) => ({ ...prev, bedspaceId: null }))
+                  setStep('terms')
+                } else {
+                  // Multi-bed, non-Bartawi → go to scope step
+                  // Phase 4B.7: Initialize scope before showing step
+                  const isCompany = data.tenantType === 'company' || data.profileIsCompany
+                  setLeaseScope(isCompany ? 'whole_room' : 'bed_level')
+                  setStep('scope')
+                }
+              } else {
+                setStep(nextStep)
+              }
+            }} onBack={(prevStep: Step) => setStep(prevStep)} />}
+            {step === 'scope' && (
+              <ScopeStep
+                key="scope"
+                leaseScope={leaseScope}
+                setLeaseScope={setLeaseScope}
+                room={data}
+                isCompany={data.tenantType === 'company' || data.profileIsCompany || false}
+                onBack={() => setStep('room')}
+                onContinue={() => {
+                  if (leaseScope === 'whole_room') {
+                    setData((prev: any) => ({ ...prev, bedspaceId: null }))
+                    setStep('terms')
+                  } else {
+                    setStep('bed')
+                  }
+                }}
+              />
+            )}
             {step === 'bed' && <BedStep key="bed" data={data} setData={setData} onNext={() => setStep('terms')} onBack={() => setStep('room')} />}
-            {step === 'terms' && <TermsStep key="terms" data={data} setData={setData} onNext={() => setStep('deposit')} onBack={() => setStep(data.bedspaceId ? 'bed' : 'room')} />}
-            {step === 'deposit' && <DepositStep key="deposit" data={data} setData={setData} onNext={() => setStep('review')} onBack={() => setStep('terms')} />}
-            {step === 'review' && <ReviewStep key="review" data={data} setData={setData} onNext={() => setStep('activating')} onBack={() => setStep('deposit')} />}
+            {step === 'terms' && <TermsStep key="terms" data={data} setData={setData} leaseScope={leaseScope} onNext={() => setStep('deposit')} onBack={() => setStep(data.bedspaceId ? 'bed' : 'room')} />}
+            {step === 'deposit' && <DepositStep key="deposit" data={data} setData={setData} leaseScope={leaseScope} onNext={() => setStep('review')} onBack={() => setStep('terms')} />}
+            {step === 'review' && <ReviewStep key="review" data={data} setData={setData} leaseScope={leaseScope} onNext={() => setStep('activating')} onBack={() => setStep('deposit')} />}
             {step === 'activating' && <ActivatingStep key="activating" data={data} onDone={() => setStep('done')} />}
             {step === 'done' && <DoneStep key="done" onClose={() => { reset(); onClose(); }} />}
           </AnimatePresence>
@@ -206,6 +290,53 @@ export default function CreateLeaseWizard({ open, onClose, campId, prefilledRoom
       </motion.div>
     </AnimatePresence>,
     document.body
+  )
+}
+
+// ============================================================================
+// SCOPE BADGE (Phase 4B.7)
+// ============================================================================
+
+function ScopeBadge({
+  scope,
+  roomNumber,
+  bedNumber,
+  totalBeds,
+}: {
+  scope: 'whole_room' | 'bed_level'
+  roomNumber: string
+  bedNumber?: number | null
+  totalBeds?: number
+}) {
+  if (scope === 'whole_room') {
+    return (
+      <div className="px-3 py-2 rounded-lg bg-teal/10 border border-teal/30 flex items-center gap-2 mb-5">
+        <span className="text-base">🏠</span>
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-teal font-semibold">
+            Whole-room lease
+          </p>
+          <p className="text-xs text-espresso">
+            Room {roomNumber}
+            {totalBeds ? ` · ${totalBeds} beds included` : ''}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-3 py-2 rounded-lg bg-amber/10 border border-amber/30 flex items-center gap-2 mb-5">
+      <span className="text-base">🛏️</span>
+      <div>
+        <p className="text-[11px] uppercase tracking-wider text-amber font-semibold">
+          Bed-level lease
+        </p>
+        <p className="text-xs text-espresso">
+          Room {roomNumber} · Bed {bedNumber} · Other beds independent
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -654,28 +785,27 @@ function RoomStep({ data, setData, campId, onNext, onBack }: any) {
   })
 
   const selectRoom = (room: any) => {
-    // Phase 4B.5: Bed picker logic
+    // Phase 4B.7: Store room metadata for scope routing
+    const propertyTypeName = typeof room.property_type === 'object'
+      ? (room.property_type?.name || '')
+      : String(room.property_type || '')
+
+    setData((prev: any) => ({
+      ...prev,
+      roomId: room.room_id,
+      roomNumber: room.room_number,
+      startDate,
+      bedState: room.bed_state,
+      totalBeds: room.total_beds,
+      propertyType: propertyTypeName,
+      suggestedWholeRoomRent: room.suggested_whole_room_rent || null,
+      suggestedBedLevelRent: room.suggested_bed_level_rent || null,
+    }))
+
+    // Phase 4B.7: Suggest next step (parent will intercept and route to scope if needed)
     const isCompany = data.tenantType === 'company' || data.profileIsCompany
     const needsBedPicker = !isCompany && room.total_beds > 1 && room.available_beds > 0
-
-    if (needsBedPicker) {
-      setData((prev: any) => ({
-        ...prev,
-        roomId: room.room_id,
-        roomNumber: room.room_number,
-        startDate,
-        bedState: room.bed_state
-      }))
-      onNext('bed')
-    } else {
-      setData((prev: any) => ({
-        ...prev,
-        roomId: room.room_id,
-        roomNumber: room.room_number,
-        startDate
-      }))
-      onNext('terms')
-    }
+    onNext(needsBedPicker ? 'bed' : 'terms')
   }
 
   return (
@@ -766,6 +896,121 @@ function RoomStep({ data, setData, campId, onNext, onBack }: any) {
         >
           <Icon icon={ArrowLeft} size={14} className="inline mr-2" />
           Back
+        </button>
+      </div>
+    </motion.div>
+  )
+}
+
+// ============================================================================
+// STEP 3.5: SCOPE SELECTION (Phase 4B.7)
+// ============================================================================
+
+function ScopeStep({
+  leaseScope,
+  setLeaseScope,
+  room,
+  isCompany,
+  onBack,
+  onContinue,
+}: {
+  leaseScope: 'whole_room' | 'bed_level'
+  setLeaseScope: (s: 'whole_room' | 'bed_level') => void
+  room: any
+  isCompany: boolean
+  onBack: () => void
+  onContinue: () => void
+}) {
+  return (
+    <motion.div
+      key="scope"
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      transition={SPRING}
+      className="max-w-3xl mx-auto space-y-6"
+    >
+      <div>
+        <h2 className="text-xl font-display italic text-espresso">Step 4: Lease Scope</h2>
+        <p className="text-sm text-stone mt-1">Choose what to lease in Room {room?.room_number}</p>
+      </div>
+
+      {/* Two-card layout */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Whole Room Card */}
+        <button
+          onClick={() => setLeaseScope('whole_room')}
+          className={`
+            p-6 rounded-xl border-2 transition-all text-left relative
+            ${leaseScope === 'whole_room'
+              ? 'bg-teal/5 ring-2 ring-teal/30 border-teal'
+              : 'bg-white border-dust hover:border-teal/50'
+            }
+          `}
+        >
+          <div className="text-4xl mb-3">🏠</div>
+          <div className="text-lg font-display italic text-espresso mb-2">Whole Room</div>
+          <div className="text-sm text-stone leading-relaxed mb-4">
+            Lease all beds in the room. One rent covers the entire room.
+            Typical for companies housing multiple employees.
+          </div>
+          {leaseScope === 'whole_room' && (
+            <div className="flex items-center gap-2 text-teal text-sm font-medium">
+              <Icon icon={CheckCircle2} size={16} />
+              Selected
+            </div>
+          )}
+        </button>
+
+        {/* Specific Bed Card */}
+        <button
+          onClick={() => setLeaseScope('bed_level')}
+          className={`
+            p-6 rounded-xl border-2 transition-all text-left relative
+            ${leaseScope === 'bed_level'
+              ? 'bg-amber/5 ring-2 ring-amber/30 border-amber'
+              : 'bg-white border-dust hover:border-amber/50'
+            }
+          `}
+        >
+          <div className="text-4xl mb-3">🛏️</div>
+          <div className="text-lg font-display italic text-espresso mb-2">Specific Bed</div>
+          <div className="text-sm text-stone leading-relaxed mb-4">
+            Lease one bed only. Other beds remain independent.
+            Typical for individuals renting their own space.
+          </div>
+          {leaseScope === 'bed_level' && (
+            <div className="flex items-center gap-2 text-amber text-sm font-medium">
+              <Icon icon={CheckCircle2} size={16} />
+              Selected
+            </div>
+          )}
+        </button>
+      </div>
+
+      {/* Defaults hint */}
+      <div className="p-3 bg-sand/30 border border-sand rounded-lg text-xs text-stone">
+        <strong>Default based on tenant type:</strong>{' '}
+        {isCompany
+          ? 'Companies typically rent whole rooms'
+          : 'Individuals typically rent specific beds'}. You can override.
+      </div>
+
+      {/* Navigation buttons */}
+      <div className="flex gap-3 pt-4">
+        <button
+          onClick={onBack}
+          className="px-5 h-11 rounded-full border-2 border-espresso text-espresso text-xs font-medium hover:bg-espresso hover:text-white transition-all"
+        >
+          <Icon icon={ArrowLeft} size={14} className="inline mr-2" />
+          Back
+        </button>
+        <button
+          onClick={onContinue}
+          className="flex-1 px-5 h-11 rounded-full bg-teal text-white text-xs font-medium hover:bg-teal/90 transition-all"
+        >
+          Continue
+          <Icon icon={ArrowRight} size={14} className="inline ml-2" />
         </button>
       </div>
     </motion.div>
@@ -877,12 +1122,13 @@ function BedStep({ data, setData, onNext, onBack }: any) {
 // STEP 4: TERMS
 // ============================================================================
 
-function TermsStep({ data, setData, onNext, onBack }: any) {
+function TermsStep({ data, setData, leaseScope, onNext, onBack }: any) {
   const queryClient = useQueryClient()
   const [startDate, setStartDate] = useState(data.startDate || '')
   const [endDate, setEndDate] = useState(data.endDate || '')
   const [monthlyRent, setMonthlyRent] = useState(data.monthlyRent || '')
   const [depositAmount, setDepositAmount] = useState(data.depositAmount || '')
+  const [activePreset, setActivePreset] = useState<string | null>(null)
 
   // Phase 4B.5: Create draft lease at Terms step (before Deposit step)
   const createLeaseMutation = useMutation({
@@ -938,10 +1184,40 @@ function TermsStep({ data, setData, onNext, onBack }: any) {
         <p className="text-sm text-stone mt-1">Enter lease dates and financial terms</p>
       </div>
 
-      <div className="p-4 bg-wash border border-dust rounded-xl flex items-center gap-3">
-        <Icon icon={MapPin} size={16} className="text-teal" />
-        <div className="text-sm text-espresso">
-          Room <span className="font-medium font-mono">{data.roomNumber}</span>
+      {/* Phase 4B.7: Scope badge */}
+      <ScopeBadge
+        scope={leaseScope}
+        roomNumber={data.roomNumber || ''}
+        bedNumber={data.bedNumber}
+        totalBeds={data.totalBeds}
+      />
+
+      {/* Phase 4B.7: Duration quick-select */}
+      <div className="mb-4">
+        <label className="text-[10px] uppercase tracking-[0.14em] text-stone font-medium">
+          Duration (quick select)
+        </label>
+        <div className="flex flex-wrap gap-2 mt-2">
+          {DURATION_PRESETS.map(p => (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => {
+                setActivePreset(p.label)
+                const result = applyDurationPreset(p, startDate)
+                if (result) {
+                  setEndDate(result.end_date)
+                }
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                activePreset === p.label
+                  ? 'bg-espresso text-sand'
+                  : 'bg-white border border-dust text-stone hover:text-espresso'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -951,7 +1227,10 @@ function TermsStep({ data, setData, onNext, onBack }: any) {
           <input
             type="date"
             value={startDate}
-            onChange={e => setStartDate(e.target.value)}
+            onChange={e => {
+              setStartDate(e.target.value)
+              setActivePreset(null)  // Reset preset on manual change
+            }}
             className="w-full h-11 px-3 bg-white border border-dust rounded-xl text-sm text-espresso focus:border-teal focus:outline-none font-mono"
           />
         </div>
@@ -960,7 +1239,10 @@ function TermsStep({ data, setData, onNext, onBack }: any) {
           <input
             type="date"
             value={endDate}
-            onChange={e => setEndDate(e.target.value)}
+            onChange={e => {
+              setEndDate(e.target.value)
+              setActivePreset(null)  // Reset preset on manual change
+            }}
             className="w-full h-11 px-3 bg-white border border-dust rounded-xl text-sm text-espresso focus:border-teal focus:outline-none font-mono"
           />
         </div>
@@ -976,6 +1258,21 @@ function TermsStep({ data, setData, onNext, onBack }: any) {
             onChange={e => setMonthlyRent(e.target.value)}
             className="w-full h-11 px-3 bg-white border border-dust rounded-xl text-sm text-espresso focus:border-teal focus:outline-none font-mono"
           />
+          {/* Phase 4B.7: Rent suggestion hint */}
+          {(() => {
+            const suggestedRent = leaseScope === 'whole_room'
+              ? data.suggestedWholeRoomRent
+              : data.suggestedBedLevelRent
+
+            if (!suggestedRent) return null
+
+            return (
+              <p className="text-[10px] text-stone mt-1 italic">
+                Typical {leaseScope === 'whole_room' ? 'whole-room' : 'per-bed'} rent
+                for this property type: AED {suggestedRent.toLocaleString()}/month
+              </p>
+            )
+          })()}
         </div>
         <div>
           <label className="text-xs text-stone font-medium mb-1 block">Deposit Amount (SAR) *</label>
@@ -1014,7 +1311,7 @@ function TermsStep({ data, setData, onNext, onBack }: any) {
 // STEP 5: DEPOSIT
 // ============================================================================
 
-function DepositStep({ data, setData, onNext, onBack }: any) {
+function DepositStep({ data, setData, leaseScope, onNext, onBack }: any) {
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [pollingEnabled, setPollingEnabled] = useState(false)
 
@@ -1087,6 +1384,14 @@ function DepositStep({ data, setData, onNext, onBack }: any) {
         <h2 className="text-xl font-display italic text-espresso">Step 5: Collect Deposit</h2>
         <p className="text-sm text-stone mt-1">Record deposit payment before finalizing lease</p>
       </div>
+
+      {/* Phase 4B.7: Scope badge */}
+      <ScopeBadge
+        scope={leaseScope}
+        roomNumber={data.roomNumber || ''}
+        bedNumber={data.bedNumber}
+        totalBeds={data.totalBeds}
+      />
 
       <div className="p-6 bg-amber/10 border-2 border-amber/30 rounded-xl">
         <div className="flex items-start gap-4">
@@ -1161,7 +1466,7 @@ function DepositStep({ data, setData, onNext, onBack }: any) {
 // STEP 6: REVIEW
 // ============================================================================
 
-function ReviewStep({ data, setData, onNext, onBack }: any) {
+function ReviewStep({ data, setData, leaseScope, onNext, onBack }: any) {
   // Phase 4B.5: Draft lease already created at Terms step, just show summary
   return (
     <motion.div
@@ -1177,17 +1482,18 @@ function ReviewStep({ data, setData, onNext, onBack }: any) {
         <p className="text-sm text-stone mt-1">Review details and activate lease</p>
       </div>
 
+      {/* Phase 4B.7: Scope badge */}
+      <ScopeBadge
+        scope={leaseScope}
+        roomNumber={data.roomNumber || ''}
+        bedNumber={data.bedNumber}
+        totalBeds={data.totalBeds}
+      />
+
       <div className="space-y-3">
         <div className="p-4 bg-white border border-dust rounded-xl">
           <div className="text-xs text-stone mb-1">Tenant</div>
           <div className="text-sm font-medium text-espresso">{data.tenantName || data.fullName || data.companyName}</div>
-        </div>
-
-        <div className="p-4 bg-white border border-dust rounded-xl">
-          <div className="text-xs text-stone mb-1">Room {data.bedNumber ? '· Bed' : ''}</div>
-          <div className="text-sm font-medium text-espresso font-mono">
-            {data.roomNumber}{data.bedNumber ? ` · Bed ${data.bedNumber}` : ''}
-          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">

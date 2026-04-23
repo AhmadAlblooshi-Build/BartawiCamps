@@ -26,6 +26,36 @@ function normalizeRoomCode(code: string): string {
   return code
 }
 
+// Phase 4B.7: Tooltip helper for room cards
+function getRoomTooltip(room: any): string {
+  if (!room) return ''
+
+  const activeLease = room.active_lease
+  const bedState = room.bedspaces_state || []
+  const totalBeds = bedState.length
+  const occupiedBedLevel = bedState.filter((b: any) =>
+    b.payment_status && b.payment_status !== 'vacant'
+  ).length
+
+  if (activeLease && room.has_room_level_lease) {
+    const tenantName = activeLease.tenant?.is_company
+      ? activeLease.tenant.company_name
+      : activeLease.tenant?.full_name
+    const endDate = activeLease.end_date
+      ? new Date(activeLease.end_date).toLocaleDateString('en-GB', {
+          day: '2-digit', month: 'short', year: 'numeric'
+        })
+      : 'Open-ended'
+    return `Room ${room.room_number} · Whole-room\n${tenantName || ''}\nEnds: ${endDate}`
+  }
+
+  if (occupiedBedLevel > 0) {
+    return `Room ${room.room_number} · Bed-level\n${occupiedBedLevel} of ${totalBeds} beds occupied`
+  }
+
+  return `Room ${room.room_number} · Vacant\n${totalBeds} beds available`
+}
+
 interface BlockViewProps {
   campCode: string
   blockCode: string
@@ -377,7 +407,9 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   strokeDasharray={status === 'vacant' && paymentStatus !== 'bartawi' ? '4 3' : undefined}
                   rx="3"
                   className="transition-all duration-150"
-                />
+                >
+                  <title>{getRoomTooltip(apiRoom)}</title>
+                </rect>
 
                 {/* Room number */}
                 <text
@@ -552,7 +584,9 @@ export function BlockView({ campCode, blockCode, rooms, onBack, onRoomClick }: B
                   strokeDasharray={status === 'vacant' && paymentStatus !== 'bartawi' ? '4 3' : undefined}
                   rx="3"
                   className="transition-all duration-150"
-                />
+                >
+                  <title>{getRoomTooltip(apiRoom)}</title>
+                </rect>
 
                 <text
                   x="512"

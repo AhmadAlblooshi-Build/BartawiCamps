@@ -249,9 +249,10 @@ export const endpoints = {
     return api.get<{ available: any[]; occupied: any[]; total_available: number; total_occupied: number }>(`/rooms/availability?${qs}`)
   },
 
-  leases: (params?: { status?: string; q?: string; camp_id?: string }) => {
+  leases: (params?: { status?: string; scope?: 'whole_room' | 'bed_level'; q?: string; camp_id?: string }) => {
     const qs = new URLSearchParams()
     if (params?.status) qs.set('status', params.status)
+    if (params?.scope) qs.set('scope', params.scope)
     if (params?.q) qs.set('q', params.q)
     if (params?.camp_id) qs.set('camp_id', params.camp_id)
     return api.get<{ leases: any[]; counts: any }>(`/leases${qs.toString() ? '?' + qs : ''}`)

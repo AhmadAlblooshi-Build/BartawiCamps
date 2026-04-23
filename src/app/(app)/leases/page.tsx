@@ -34,22 +34,40 @@ export default function LeasesPage() {
     return () => clearTimeout(timer)
   }, [query])
 
+  // Phase 4B.7: Handle scope filters
   const { data, isLoading } = useQuery({
     queryKey: ['leases', statusFilter, debouncedQuery],
-    queryFn: () => endpoints.leases({
-      status: statusFilter === 'all' ? undefined : statusFilter,
-      q: debouncedQuery || undefined
-    })
+    queryFn: () => {
+      if (statusFilter === 'whole_room') {
+        return endpoints.leases({
+          scope: 'whole_room' as const,
+          q: debouncedQuery || undefined
+        })
+      }
+      if (statusFilter === 'bed_level') {
+        return endpoints.leases({
+          scope: 'bed_level' as const,
+          q: debouncedQuery || undefined
+        })
+      }
+      return endpoints.leases({
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        q: debouncedQuery || undefined
+      })
+    }
   })
 
   const leases = data?.leases || []
-  const counts = data?.counts || { all: 0, active: 0, draft: 0, notice_given: 0, expired: 0, closed: 0, terminated: 0 }
+  const counts = data?.counts || { all: 0, active: 0, draft: 0, notice_given: 0, whole_room: 0, bed_level: 0, expired: 0, closed: 0, terminated: 0 }
 
+  // Phase 4B.7: Scope filter pills between notice_given and lifecycle end states
   const filters = [
     { key: 'all', label: 'All', count: counts.all },
     { key: 'active', label: 'Active', count: counts.active },
-    { key: 'draft', label: 'Draft', count: counts.draft },
     { key: 'notice_given', label: 'Notice Given', count: counts.notice_given },  // Phase 4C
+    { key: 'whole_room', label: 'Whole-room', count: counts.whole_room },
+    { key: 'bed_level', label: 'Bed-level', count: counts.bed_level },
+    { key: 'draft', label: 'Draft', count: counts.draft },
     { key: 'expired', label: 'Expired', count: counts.expired },
     { key: 'closed', label: 'Closed', count: counts.closed },
     { key: 'terminated', label: 'Terminated', count: counts.terminated },
@@ -200,6 +218,16 @@ export default function LeasesPage() {
                     fontWeight: 600,
                   }}>
                     Co.
+                  </span>
+                )}
+                {/* Phase 4B.7: Inline scope badge */}
+                {lease.is_bed_level ? (
+                  <span className="inline-block px-1.5 py-0.5 text-[9px] uppercase tracking-wider bg-amber/10 text-amber rounded">
+                    Bed-level · Bed {lease.bed_number}
+                  </span>
+                ) : (
+                  <span className="inline-block px-1.5 py-0.5 text-[9px] uppercase tracking-wider bg-teal/10 text-teal rounded">
+                    Whole-room
                   </span>
                 )}
                 {/* Phase 4B.6: Occupant count chip */}

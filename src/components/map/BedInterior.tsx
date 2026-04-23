@@ -54,6 +54,10 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
     (o: Occupant) => o.status === 'archived'
   ) || []
 
+  // Phase 4B.7: Derive scope from lease.bedspace_id
+  const isBedLevel = !!lease?.bedspace_id
+  const isWholeRoom = lease && !lease.bedspace_id
+
   return (
     <AnimatePresence>
       {bedspaceId && (
@@ -103,6 +107,35 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
               </div>
             ) : (
               <div className="p-6 space-y-6">
+                {/* Phase 4B.7: Scope Badge */}
+                {isBedLevel && (
+                  <div className="px-3 py-2 rounded-lg bg-amber/10 border border-amber/30 flex items-center gap-2 mb-4">
+                    <span className="text-base">🛏️</span>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-amber font-semibold">
+                        Bed-level lease
+                      </p>
+                      <p className="text-xs text-espresso">
+                        This bed only · Other beds in this room are independent
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {isWholeRoom && (
+                  <div className="px-3 py-2 rounded-lg bg-teal/10 border border-teal/30 flex items-center gap-2 mb-4">
+                    <span className="text-base">🏠</span>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-teal font-semibold">
+                        Whole-room lease
+                      </p>
+                      <p className="text-xs text-espresso">
+                        This bed is part of a room-wide lease
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Tenant Info */}
                 <div>
                   <div className="text-xs uppercase tracking-wider text-stone mb-2">

@@ -74,6 +74,14 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const hasActiveLease = !!leaseId
   const hasRoomLevelLease = hasActiveLease && room.active_lease?.bedspace_id === null
 
+  // Phase 4B.7: Mixed occupancy derivation
+  const bedspacesState = room?.bedspaces_state || []
+  const bedLevelCount = !hasRoomLevelLease
+    ? bedspacesState.filter((b: any) => b.status === 'occupied').length
+    : 0
+  const totalBeds = bedspacesState.length || room?.total_beds || 0
+  const isMixedOccupancy = !hasRoomLevelLease && bedLevelCount > 0
+
   const { data: paymentsData } = useQuery({
     queryKey: ['lease-payments', leaseId],
     queryFn: () => endpoints.leasePayments(leaseId),
@@ -832,6 +840,35 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
 
         {/* DATA SIDEBAR */}
         <div className="flex flex-col gap-2.5">
+          {/* Phase 4B.7: Scope Badges */}
+          {hasRoomLevelLease && (
+            <div className="px-3 py-2 rounded-lg bg-teal/10 border border-teal/30 flex items-center gap-2">
+              <span className="text-base">🏠</span>
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-teal font-semibold">
+                  Whole-room lease
+                </p>
+                <p className="text-xs text-espresso">
+                  Entire room · All {totalBeds} bed{totalBeds !== 1 ? 's' : ''} included in this lease
+                </p>
+              </div>
+            </div>
+          )}
+
+          {isMixedOccupancy && (
+            <div className="px-3 py-2 rounded-lg bg-amber/10 border border-amber/30 flex items-center gap-2">
+              <span className="text-base">🛏️</span>
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-amber font-semibold">
+                  Mixed occupancy
+                </p>
+                <p className="text-xs text-espresso">
+                  {bedLevelCount} of {totalBeds} bed{totalBeds !== 1 ? 's' : ''} leased independently
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Tenant card */}
           {status === 'occupied' && (
             <motion.div
