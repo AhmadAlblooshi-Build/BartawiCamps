@@ -218,4 +218,63 @@ export const endpoints = {
   // --- Phase 4B.5: Bed-level leasing ---
   bedspace: (bedspaceId: string) =>
     api.get<any>(`/bedspaces/${bedspaceId}`),
+
+  // --- Phase 4C: Checkout & exit flow ---
+  giveNotice: (leaseId: string, payload: {
+    notice_given_date: string
+    scheduled_checkout_date?: string
+    notes?: string
+  }) =>
+    api.post<{ lease: any; already_given: boolean; notice_given_date: string; scheduled_checkout_date: string }>(
+      `/leases/${leaseId}/give-notice`,
+      payload
+    ),
+
+  cancelNotice: (leaseId: string) =>
+    api.post<{ lease: any }>(`/leases/${leaseId}/cancel-notice`),
+
+  checkoutLease: (leaseId: string, payload: {
+    checkout_date: string
+    checkout_type?: 'normal' | 'early_termination' | 'eviction'
+    closure_reason: 'end_of_term' | 'mutual_early' | 'tenant_abandoned' | 'landlord_eviction' | 'legal_action' | 'other'  // Phase 4C
+    inspection_notes?: string
+    condition_rating?: number
+    inspected_by?: string
+    damages: Array<{
+      category: 'wall' | 'plumbing' | 'furniture' | 'cleaning' | 'utility' | 'prorated_rent' | 'other'
+      description: string
+      amount: number
+    }>
+    refund_method?: 'cash' | 'bank_transfer' | 'cheque' | 'online' | 'adjustment'
+    refund_reference?: string
+    process_refund?: boolean
+    checked_out_by_name?: string  // Phase 4C: renamed from processed_by
+    acknowledge_early_checkout?: boolean  // Phase 4C
+  }) =>
+    api.post<{
+      lease: any
+      checkout: any
+      refund_payment: any
+      damages_count: number
+      refund_amount: number
+      additional_charges_owed: number
+      already_closed: boolean
+    }>(`/leases/${leaseId}/checkout`, payload),
+
+  reverseCheckout: (leaseId: string, payload: {
+    reason: string
+    reversed_by?: string
+  }) =>
+    api.post<{ lease: any; reversed_checkout_id: string }>(
+      `/leases/${leaseId}/checkout/reverse`,
+      payload
+    ),
+
+  getLeaseCheckouts: (leaseId: string) =>
+    api.get<{ checkouts: any[] }>(`/leases/${leaseId}/checkout`),
+
+  checkoutPreview: (leaseId: string, checkoutDate?: string) => {
+    const qs = checkoutDate ? `?checkout_date=${checkoutDate}` : ''
+    return api.get<any>(`/leases/${leaseId}/checkout-preview${qs}`)
+  },
 }
