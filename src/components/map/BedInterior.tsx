@@ -5,8 +5,9 @@ import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'motion/react'
 import { endpoints } from '@/lib/api'
 import { Icon } from '@/components/ui/Icon'
-import { X, User, Calendar, DollarSign, FileText } from 'lucide-react'
+import { X, User, Calendar, DollarSign, LogOut } from 'lucide-react'
 import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
+import CheckoutWizard from '@/components/leases/CheckoutWizard'
 
 const SPRING = { type: 'spring' as const, stiffness: 340, damping: 32 }
 
@@ -20,6 +21,7 @@ const monthName = (m: number) =>
 
 export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
   const [payOpen, setPayOpen] = useState(false)
+  const [checkoutOpen, setCheckoutOpen] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['bedspace', bedspaceId],
@@ -65,7 +67,7 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
                 ← Back to room
               </button>
               <h2 className="font-display italic text-3xl text-espresso">
-                {bed ? `Room ${bed.room_number} · Bed ${bed.bed_number}` : 'Loading...'}
+                {bed ? `Room ${bed.room.room_number} · Bed ${bed.bed_number}` : 'Loading...'}
               </h2>
             </div>
 
@@ -89,13 +91,8 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
                     Tenant
                   </div>
                   <div className="font-display italic text-lg text-espresso">
-                    {lease.tenant?.full_name || lease.tenant?.company_name}
+                    {lease.tenant?.display_name}
                   </div>
-                  {lease.tenant?.national_id && (
-                    <div className="text-xs text-stone font-mono mt-1">
-                      ID: {lease.tenant.national_id}
-                    </div>
-                  )}
                 </div>
 
                 {/* Lease Terms */}
@@ -172,13 +169,32 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
                     <Icon icon={DollarSign} size={14} className="inline mr-2" />
                     Log Payment
                   </button>
-                  <button
-                    disabled
-                    className="w-full h-11 rounded-full border border-stone text-stone text-xs font-medium opacity-50 cursor-not-allowed"
-                  >
-                    <Icon icon={FileText} size={14} className="inline mr-2" />
-                    Give Notice (Phase 4C)
-                  </button>
+
+                  {/* Notice badge (if notice given) */}
+                  {lease.notice_given_date && lease.days_until_checkout !== null && (
+                    <div className="p-3 bg-amber/10 border border-amber/30 rounded-xl">
+                      <div className="text-xs text-amber flex items-center gap-2">
+                        <Icon icon={LogOut} size={14} />
+                        <span>
+                          Checkout in {lease.days_until_checkout} day{lease.days_until_checkout !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Checkout button (active/notice_given leases only) */}
+                  {(lease.status === 'active' || lease.status === 'notice_given') && (
+                    <button
+                      onClick={() => setCheckoutOpen(true)}
+                      className="w-full h-11 rounded-full text-white text-xs font-medium transition-all"
+                      style={{
+                        background: lease.status === 'notice_given' ? '#B8883D' : '#1A1816',
+                      }}
+                    >
+                      <Icon icon={LogOut} size={14} className="inline mr-2" />
+                      {lease.status === 'notice_given' ? 'Complete Checkout' : 'Give Notice / Checkout'}
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -199,7 +215,7 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
               onClose={() => setPayOpen(false)}
               room={{
                 id: bed?.room_id,
-                room_number: bed?.room_number,
+                room_number: bed?.room?.room_number,
                 active_lease: {
                   id: lease.id,
                   tenant: lease.tenant,
@@ -208,6 +224,20 @@ export default function BedInterior({ bedspaceId, onClose }: BedInteriorProps) {
                 },
               }}
               paymentType="rent"
+            />
+          )}
+
+          {/* Checkout Wizard */}
+          {lease && (
+            <CheckoutWizard
+              open={checkoutOpen}
+              onClose={() => setCheckoutOpen(false)}
+              lease={{
+                ...lease,
+                room_number: bed?.room?.room_number,
+                bedspace_id: bedspaceId,
+                camp_id: bed?.camp_id,
+              }}
             />
           )}
         </>
