@@ -6,12 +6,14 @@ import { useRouter } from 'next/navigation'
 import { motion } from 'motion/react'
 import { endpoints } from '@/lib/api'
 import { Icon } from '@/components/ui/Icon'
-import { Search, Plus, Building2, User } from 'lucide-react'
+import { Search, Plus, Building2, User, LogOut } from 'lucide-react'
 import CreateLeaseWizard from '@/components/leases/CreateLeaseWizard'
+import CheckoutWizard from '@/components/leases/CheckoutWizard'
 
 const STATUS_COLORS: Record<string, string> = {
   active: '#1E4D52',
   draft: '#B8883D',
+  notice_given: '#B8883D',  // Phase 4C: notice period
   expired: '#8B6420',
   closed: '#6A6159',
   terminated: '#A84A3B'
@@ -22,6 +24,8 @@ export default function LeasesPage() {
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [checkoutWizardOpen, setCheckoutWizardOpen] = useState(false)
+  const [selectedLeaseForCheckout, setSelectedLeaseForCheckout] = useState<any>(null)
   const router = useRouter()
 
   // Debounce search input
@@ -39,12 +43,13 @@ export default function LeasesPage() {
   })
 
   const leases = data?.leases || []
-  const counts = data?.counts || { all: 0, active: 0, draft: 0, expired: 0, closed: 0, terminated: 0 }
+  const counts = data?.counts || { all: 0, active: 0, draft: 0, notice_given: 0, expired: 0, closed: 0, terminated: 0 }
 
   const filters = [
     { key: 'all', label: 'All', count: counts.all },
     { key: 'active', label: 'Active', count: counts.active },
     { key: 'draft', label: 'Draft', count: counts.draft },
+    { key: 'notice_given', label: 'Notice Given', count: counts.notice_given },  // Phase 4C
     { key: 'expired', label: 'Expired', count: counts.expired },
     { key: 'closed', label: 'Closed', count: counts.closed },
     { key: 'terminated', label: 'Terminated', count: counts.terminated },
@@ -225,12 +230,61 @@ export default function LeasesPage() {
                   <span className="font-mono font-bold">{lease.total_outstanding.toLocaleString()} SAR</span>
                 </div>
               )}
+
+              {/* Notice Badge */}
+              {lease.notice_given_date && lease.days_until_checkout !== null && (
+                <div className="mt-3 pt-3" style={{ borderTop: '1px solid #D6CFC5' }}>
+                  <div className="text-[11px] flex items-center gap-2" style={{ color: '#B8883D' }}>
+                    <Icon icon={LogOut} size={14} />
+                    <span style={{ opacity: 0.8 }}>
+                      Checkout in {lease.days_until_checkout} day{lease.days_until_checkout !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Checkout Button (for active/notice_given leases) */}
+              {(lease.status === 'active' || lease.status === 'notice_given') && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setSelectedLeaseForCheckout(lease)
+                    setCheckoutWizardOpen(true)
+                  }}
+                  className="mt-3 w-full h-9 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-2"
+                  style={{
+                    background: lease.status === 'notice_given' ? '#B8883D' : '#1A1816',
+                    color: '#F4EFE7',
+                    border: 'none',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.opacity = '0.9'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.opacity = '1'
+                  }}
+                >
+                  <Icon icon={LogOut} size={14} />
+                  {lease.status === 'notice_given' ? 'Complete Checkout' : 'Give Notice / Checkout'}
+                </button>
+              )}
             </motion.div>
           ))}
         </motion.div>
       )}
 
       <CreateLeaseWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
+
+      {selectedLeaseForCheckout && (
+        <CheckoutWizard
+          open={checkoutWizardOpen}
+          onClose={() => {
+            setCheckoutWizardOpen(false)
+            setSelectedLeaseForCheckout(null)
+          }}
+          lease={selectedLeaseForCheckout}
+        />
+      )}
     </div>
   )
 }

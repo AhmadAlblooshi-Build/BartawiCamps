@@ -1,15 +1,19 @@
 'use client'
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter, useParams } from 'next/navigation'
 import { endpoints } from '@/lib/api'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, LogOut } from 'lucide-react'
 import { formatMethod, formatDateLong } from '@/lib/payment-helpers'
+import CheckoutWizard from '@/components/leases/CheckoutWizard'
 
 export default function TenantDetailPage() {
   const router = useRouter()
   const params = useParams()
   const tenantId = params.id as string
+  const [checkoutWizardOpen, setCheckoutWizardOpen] = useState(false)
+  const [selectedLeaseForCheckout, setSelectedLeaseForCheckout] = useState<any>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['tenant', tenantId],
@@ -302,6 +306,7 @@ export default function TenantDetailPage() {
               // Status badge colors
               const statusColors: Record<string, string> = {
                 active: '#1E4D52',
+                notice_given: '#B8883D',
                 expired: '#B8883D',
                 closed: '#6A6159',
               }
@@ -430,6 +435,65 @@ export default function TenantDetailPage() {
                       </div>
                     )}
                   </div>
+
+                  {/* Notice Badge (if notice given) */}
+                  {lease.notice_given_date && lease.days_until_checkout !== null && (
+                    <div style={{
+                      marginTop: '12px',
+                      paddingTop: '12px',
+                      borderTop: '1px solid #F5F4F2',
+                    }}>
+                      <div style={{
+                        fontFamily: 'Geist, sans-serif',
+                        fontSize: '11px',
+                        color: '#B8883D',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}>
+                        <LogOut size={12} />
+                        <span>Checkout in {lease.days_until_checkout} day{lease.days_until_checkout !== 1 ? 's' : ''}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Checkout Button (active/notice_given leases only) */}
+                  {(lease.status === 'active' || lease.status === 'notice_given') && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelectedLeaseForCheckout(lease)
+                        setCheckoutWizardOpen(true)
+                      }}
+                      style={{
+                        marginTop: '12px',
+                        width: '100%',
+                        padding: '10px 16px',
+                        background: lease.status === 'notice_given' ? '#B8883D' : '#1A1816',
+                        color: '#F4EFE7',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontFamily: 'Geist, sans-serif',
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        transition: 'opacity 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.opacity = '0.9'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.opacity = '1'
+                      }}
+                    >
+                      <LogOut size={14} />
+                      {lease.status === 'notice_given' ? 'Complete Checkout' : 'Give Notice / Checkout'}
+                    </button>
+                  )}
                 </div>
               )
             })}
@@ -596,6 +660,21 @@ export default function TenantDetailPage() {
           </p>
         )}
       </div>
+
+      {/* Checkout Wizard */}
+      {selectedLeaseForCheckout && (
+        <CheckoutWizard
+          open={checkoutWizardOpen}
+          onClose={() => {
+            setCheckoutWizardOpen(false)
+            setSelectedLeaseForCheckout(null)
+          }}
+          lease={{
+            ...selectedLeaseForCheckout,
+            tenant_name: tenant?.display_name,
+          }}
+        />
+      )}
     </div>
   )
 }

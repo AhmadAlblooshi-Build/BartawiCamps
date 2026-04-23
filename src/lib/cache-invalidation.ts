@@ -129,3 +129,72 @@ export function invalidateLeaseCaches(
     queryClient.invalidateQueries({ queryKey: ['bedspace', bedspaceId], ...opts })
   }
 }
+
+/**
+ * Invalidates ALL query keys affected by a checkout operation.
+ * Use this from CheckoutWizard and related components.
+ *
+ * Phase 4C: Checkout affects lease status, room availability, tenant records,
+ * payment history, dashboard stats, and operations queue. This helper ensures
+ * consistent cache invalidation across all checkout flows.
+ */
+export function invalidateCheckoutCaches(
+  queryClient: QueryClient,
+  context: {
+    leaseId: string
+    roomId?: string
+    bedspaceId?: string | null
+    tenantId?: string
+    campId?: string
+  }
+) {
+  const opts = { refetchType: 'all' as const }
+  const { leaseId, roomId, bedspaceId, tenantId, campId } = context
+
+  // ── Leases (status changes) ──
+  queryClient.invalidateQueries({ queryKey: ['leases'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['lease', leaseId], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['lease-checkouts', leaseId], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['lease-payments', leaseId], ...opts })
+
+  // ── Rooms (availability changes) ──
+  queryClient.invalidateQueries({ queryKey: ['rooms'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['rooms-for-map'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['camp-rooms'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['room-availability'], ...opts })
+
+  if (roomId) {
+    queryClient.invalidateQueries({ queryKey: ['room', roomId], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['room-history', roomId], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['room-balance', roomId], ...opts })
+  }
+
+  // ── Bedspaces (bed-level checkout) ──
+  if (bedspaceId) {
+    queryClient.invalidateQueries({ queryKey: ['bedspace', bedspaceId], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['bedspace'], ...opts })
+  }
+
+  // ── Tenants (checkout history) ──
+  if (tenantId) {
+    queryClient.invalidateQueries({ queryKey: ['tenant', tenantId], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['room-tenant', tenantId], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['tenant-payments', tenantId], ...opts })
+  }
+
+  // ── Camps (occupancy stats) ──
+  queryClient.invalidateQueries({ queryKey: ['camps'], ...opts })
+  if (campId) {
+    queryClient.invalidateQueries({ queryKey: ['camp', campId], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['camp-occupancy'], ...opts })
+    queryClient.invalidateQueries({ queryKey: ['camp-summary'], ...opts })
+  }
+
+  // ── Operations queue (notice-given tab) ──
+  queryClient.invalidateQueries({ queryKey: ['operations'], ...opts })
+
+  // ── Dashboard (aggregate stats) ──
+  queryClient.invalidateQueries({ queryKey: ['dashboard'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['all-summaries'], ...opts })
+  queryClient.invalidateQueries({ queryKey: ['outstanding-leaderboard'], ...opts })
+}

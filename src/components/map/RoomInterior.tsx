@@ -26,6 +26,7 @@ import { getContractInfo, formatDateShort } from '@/lib/contract-helpers'
 import { formatMethod, formatDateLong, type PaymentMethod } from '@/lib/payment-helpers'
 import { LogPaymentDialog } from '@/components/payments/LogPaymentDialog'
 import CreateLeaseWizard from '@/components/leases/CreateLeaseWizard'
+import CheckoutWizard from '@/components/leases/CheckoutWizard'
 import BedInterior from '@/components/map/BedInterior'
 import { CaretLeft } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
@@ -129,6 +130,9 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [prefilledBedspaceId, setPrefilledBedspaceId] = useState<string | null>(null)
   const [openedBedspaceId, setOpenedBedspaceId] = useState<string | null>(null)
+
+  // Checkout wizard state
+  const [checkoutOpen, setCheckoutOpen] = useState(false)
 
   // Phase 4B.5: Real bedspace data from API (bedspaces_state)
   const bedspaces = (room?.bedspaces_state || []).slice().sort(
@@ -1129,26 +1133,29 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
                 Log payment
               </button>
               <button
-                disabled
+                disabled={!hasActiveLease || !(room.active_lease?.status === 'active' || room.active_lease?.status === 'notice_given')}
+                onClick={() => setCheckoutOpen(true)}
                 onMouseEnter={() => setHoverGiveNotice(true)}
                 onMouseLeave={() => setHoverGiveNotice(false)}
-                title="Available in Phase 4"
+                title={!hasActiveLease ? 'No active lease' : 'Give notice or checkout'}
                 style={{
                   flex: 1,
                   padding: '11px 14px',
-                  background: hoverGiveNotice ? 'rgba(26, 24, 22, 0.04)' : 'transparent',
-                  color: '#1A1816',
-                  border: hoverGiveNotice ? '0.5px solid #6A6159' : '0.5px solid #D6CFC5',
+                  background: hasActiveLease && (room.active_lease?.status === 'active' || room.active_lease?.status === 'notice_given')
+                    ? (room.active_lease?.status === 'notice_given' ? '#B8883D' : (hoverGiveNotice ? 'rgba(26, 24, 22, 0.04)' : 'transparent'))
+                    : 'transparent',
+                  color: room.active_lease?.status === 'notice_given' ? '#FAF7F2' : '#1A1816',
+                  border: room.active_lease?.status === 'notice_given' ? 'none' : (hoverGiveNotice ? '0.5px solid #6A6159' : '0.5px solid #D6CFC5'),
                   borderRadius: '999px',
                   fontSize: '12px',
                   fontWeight: 500,
                   letterSpacing: '0.02em',
-                  cursor: 'not-allowed',
-                  opacity: 0.85,
+                  cursor: hasActiveLease && (room.active_lease?.status === 'active' || room.active_lease?.status === 'notice_given') ? 'pointer' : 'not-allowed',
+                  opacity: hasActiveLease && (room.active_lease?.status === 'active' || room.active_lease?.status === 'notice_given') ? 1 : 0.5,
                   transition: 'all 0.2s ease',
                 }}
               >
-                Give notice
+                {room.active_lease?.status === 'notice_given' ? 'Complete Checkout' : 'Give notice'}
               </button>
             </motion.div>
           )}
@@ -1276,6 +1283,20 @@ export function RoomInterior({ room, onBack }: RoomInteriorProps) {
         bedspaceId={openedBedspaceId}
         onClose={() => setOpenedBedspaceId(null)}
       />
+
+      {/* Checkout Wizard — Phase 4C */}
+      {room?.active_lease && (
+        <CheckoutWizard
+          open={checkoutOpen}
+          onClose={() => setCheckoutOpen(false)}
+          lease={{
+            ...room.active_lease,
+            room_number: room.room_number,
+            camp_id: room.camp_id,
+            tenant_name: displayTenantName,
+          }}
+        />
+      )}
     </motion.div>
   )
 }
